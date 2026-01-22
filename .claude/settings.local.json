@@ -3,7 +3,9 @@
     "allow": [
       "Bash(flutter pub get:*)",
       "Bash(flutter analyze:*)",
-      "Bash(python3:*)"
+      "Bash(python3:*)",
+      "Bash(ssh:*)",
+      "Bash(scp:*)"
     ]
   }
 }

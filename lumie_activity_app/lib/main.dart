@@ -1,12 +1,21 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:provider/provider.dart';
 import 'core/theme/app_theme.dart';
 import 'core/theme/app_colors.dart';
+import 'features/auth/providers/auth_provider.dart';
+import 'features/auth/screens/welcome_screen.dart';
+import 'features/auth/screens/login_screen.dart';
+import 'features/auth/screens/signup_screen.dart';
+import 'features/auth/screens/account_type_screen.dart';
+import 'features/auth/screens/teen_profile_setup_screen.dart';
+import 'features/auth/screens/parent_profile_setup_screen.dart';
 import 'features/dashboard/screens/dashboard_screen.dart';
 import 'features/activity/screens/activity_history_screen.dart';
 import 'features/manual_entry/screens/manual_entry_screen.dart';
 import 'features/walk_test/screens/walk_test_screen.dart';
 import 'shared/models/activity_models.dart';
+import 'shared/models/user_models.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -24,11 +33,127 @@ class LumieActivityApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'Lumie Activity',
-      debugShowCheckedModeBanner: false,
-      theme: AppTheme.lightTheme,
-      home: const MainNavigationScreen(),
+    return ChangeNotifierProvider(
+      create: (_) => AuthProvider()..init(),
+      child: MaterialApp(
+        title: 'Lumie Activity',
+        debugShowCheckedModeBanner: false,
+        theme: AppTheme.lightTheme,
+        home: const AuthWrapper(),
+        routes: {
+          '/welcome': (context) => const WelcomeScreen(),
+          '/login': (context) => const LoginScreen(),
+          '/signup': (context) => const SignUpScreen(),
+          '/account-type': (context) => const AccountTypeScreen(),
+          '/profile/teen': (context) => const TeenProfileSetupScreen(),
+          '/profile/parent': (context) => const ParentProfileSetupScreen(),
+          '/home': (context) => const MainNavigationScreen(),
+        },
+      ),
+    );
+  }
+}
+
+/// Wrapper that handles auth state navigation
+class AuthWrapper extends StatelessWidget {
+  const AuthWrapper({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return Consumer<AuthProvider>(
+      builder: (context, auth, _) {
+        switch (auth.state) {
+          case AuthState.initial:
+          case AuthState.loading:
+            return const SplashScreen();
+
+          case AuthState.unauthenticated:
+          case AuthState.error:
+            return const WelcomeScreen();
+
+          case AuthState.needsAccountType:
+            return const AccountTypeScreen();
+
+          case AuthState.needsProfile:
+            final role = auth.user?.role;
+            if (role == AccountRole.teen) {
+              return const TeenProfileSetupScreen();
+            } else if (role == AccountRole.parent) {
+              return const ParentProfileSetupScreen();
+            }
+            // Fallback to account type if role is unknown
+            return const AccountTypeScreen();
+
+          case AuthState.authenticated:
+            return const MainNavigationScreen();
+        }
+      },
+    );
+  }
+}
+
+/// Splash screen shown during initialization
+class SplashScreen extends StatelessWidget {
+  const SplashScreen({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: Container(
+        decoration: const BoxDecoration(
+          gradient: AppColors.primaryGradient,
+        ),
+        child: SafeArea(
+          child: Center(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Container(
+                  width: 120,
+                  height: 120,
+                  decoration: BoxDecoration(
+                    gradient: AppColors.warmGradient,
+                    shape: BoxShape.circle,
+                    boxShadow: [
+                      BoxShadow(
+                        color: AppColors.primaryLemon.withValues(alpha: 0.5),
+                        blurRadius: 30,
+                        offset: const Offset(0, 10),
+                      ),
+                    ],
+                  ),
+                  child: const Icon(
+                    Icons.favorite,
+                    size: 60,
+                    color: AppColors.textOnYellow,
+                  ),
+                ),
+                const SizedBox(height: 32),
+                const Text(
+                  'Lumie',
+                  style: TextStyle(
+                    fontSize: 40,
+                    fontWeight: FontWeight.bold,
+                    color: AppColors.textOnYellow,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                const Text(
+                  'Activity Tracking',
+                  style: TextStyle(
+                    fontSize: 18,
+                    color: AppColors.textSecondary,
+                  ),
+                ),
+                const SizedBox(height: 48),
+                const CircularProgressIndicator(
+                  valueColor: AlwaysStoppedAnimation<Color>(AppColors.textOnYellow),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
     );
   }
 }
@@ -43,19 +168,19 @@ class MainNavigationScreen extends StatefulWidget {
 class _MainNavigationScreenState extends State<MainNavigationScreen> {
   int _currentIndex = 0;
 
-  final List<Widget> _screens = [
-    const DashboardScreen(),
-    const ActivityHistoryScreen(),
-    const WalkTestScreen(),
-    const _SettingsPlaceholder(),
-  ];
-
   @override
   Widget build(BuildContext context) {
+    final screens = [
+      const DashboardScreen(),
+      const ActivityHistoryScreen(),
+      const WalkTestScreen(),
+      const SettingsScreen(),
+    ];
+
     return Scaffold(
       body: IndexedStack(
         index: _currentIndex,
-        children: _screens,
+        children: screens,
       ),
       floatingActionButton: FloatingActionButton(
         onPressed: () => _showAddActivitySheet(context),
@@ -336,8 +461,9 @@ class _AddActivityOption extends StatelessWidget {
   }
 }
 
-class _SettingsPlaceholder extends StatelessWidget {
-  const _SettingsPlaceholder();
+/// Settings screen with profile access and logout
+class SettingsScreen extends StatelessWidget {
+  const SettingsScreen({super.key});
 
   @override
   Widget build(BuildContext context) {
@@ -346,43 +472,228 @@ class _SettingsPlaceholder extends StatelessWidget {
         gradient: AppColors.primaryGradient,
       ),
       child: SafeArea(
-        child: Center(
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Container(
-                padding: const EdgeInsets.all(24),
-                decoration: const BoxDecoration(
-                  gradient: AppColors.warmGradient,
-                  shape: BoxShape.circle,
+        child: Column(
+          children: [
+            // Header
+            Padding(
+              padding: const EdgeInsets.all(24),
+              child: Row(
+                children: [
+                  const Text(
+                    'Settings',
+                    style: TextStyle(
+                      fontSize: 28,
+                      fontWeight: FontWeight.bold,
+                      color: AppColors.textPrimary,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+
+            // Profile Card
+            Consumer<AuthProvider>(
+              builder: (context, auth, _) {
+                final profile = auth.profile;
+                return Container(
+                  margin: const EdgeInsets.symmetric(horizontal: 24),
+                  padding: const EdgeInsets.all(20),
+                  decoration: BoxDecoration(
+                    gradient: AppColors.warmGradient,
+                    borderRadius: BorderRadius.circular(20),
+                    boxShadow: [
+                      BoxShadow(
+                        color: AppColors.primaryLemon.withValues(alpha: 0.3),
+                        blurRadius: 15,
+                        offset: const Offset(0, 8),
+                      ),
+                    ],
+                  ),
+                  child: Row(
+                    children: [
+                      Container(
+                        width: 60,
+                        height: 60,
+                        decoration: BoxDecoration(
+                          color: AppColors.backgroundWhite.withValues(alpha: 0.5),
+                          shape: BoxShape.circle,
+                        ),
+                        child: const Icon(
+                          Icons.person,
+                          size: 32,
+                          color: AppColors.textOnYellow,
+                        ),
+                      ),
+                      const SizedBox(width: 16),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              profile?.name ?? 'User',
+                              style: const TextStyle(
+                                fontSize: 20,
+                                fontWeight: FontWeight.bold,
+                                color: AppColors.textOnYellow,
+                              ),
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              auth.user?.email ?? '',
+                              style: TextStyle(
+                                fontSize: 14,
+                                color: AppColors.textOnYellow.withValues(alpha: 0.8),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      IconButton(
+                        onPressed: () {
+                          // Navigate to profile edit
+                        },
+                        icon: const Icon(
+                          Icons.edit_outlined,
+                          color: AppColors.textOnYellow,
+                        ),
+                      ),
+                    ],
+                  ),
+                );
+              },
+            ),
+
+            const SizedBox(height: 24),
+
+            // Settings Options
+            Expanded(
+              child: Container(
+                margin: const EdgeInsets.symmetric(horizontal: 24),
+                decoration: BoxDecoration(
+                  color: AppColors.backgroundWhite,
+                  borderRadius: BorderRadius.circular(20),
                 ),
-                child: const Icon(
-                  Icons.settings,
-                  size: 48,
-                  color: AppColors.textOnYellow,
+                child: ListView(
+                  padding: const EdgeInsets.all(8),
+                  children: [
+                    _SettingsItem(
+                      icon: Icons.person_outline,
+                      title: 'Edit Profile',
+                      onTap: () {
+                        // Navigate to edit profile
+                      },
+                    ),
+                    _SettingsItem(
+                      icon: Icons.watch_outlined,
+                      title: 'Ring Settings',
+                      onTap: () {},
+                    ),
+                    _SettingsItem(
+                      icon: Icons.notifications_outlined,
+                      title: 'Notifications',
+                      onTap: () {},
+                    ),
+                    _SettingsItem(
+                      icon: Icons.lock_outline,
+                      title: 'Privacy',
+                      onTap: () {},
+                    ),
+                    _SettingsItem(
+                      icon: Icons.help_outline,
+                      title: 'Help & Support',
+                      onTap: () {},
+                    ),
+                    const Divider(height: 32),
+                    _SettingsItem(
+                      icon: Icons.logout,
+                      title: 'Log Out',
+                      isDestructive: true,
+                      onTap: () {
+                        _showLogoutDialog(context);
+                      },
+                    ),
+                  ],
                 ),
               ),
-              const SizedBox(height: 24),
-              const Text(
-                'Settings',
-                style: TextStyle(
-                  fontSize: 24,
-                  fontWeight: FontWeight.bold,
-                  color: AppColors.textPrimary,
-                ),
-              ),
-              const SizedBox(height: 8),
-              const Text(
-                'Coming soon...',
-                style: TextStyle(
-                  fontSize: 16,
-                  color: AppColors.textSecondary,
-                ),
-              ),
-            ],
-          ),
+            ),
+
+            const SizedBox(height: 24),
+          ],
         ),
       ),
+    );
+  }
+
+  void _showLogoutDialog(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Log Out'),
+        content: const Text('Are you sure you want to log out?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () {
+              Navigator.of(context).pop();
+              context.read<AuthProvider>().logout();
+            },
+            style: TextButton.styleFrom(
+              foregroundColor: AppColors.error,
+            ),
+            child: const Text('Log Out'),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _SettingsItem extends StatelessWidget {
+  final IconData icon;
+  final String title;
+  final VoidCallback onTap;
+  final bool isDestructive;
+
+  const _SettingsItem({
+    required this.icon,
+    required this.title,
+    required this.onTap,
+    this.isDestructive = false,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return ListTile(
+      leading: Container(
+        padding: const EdgeInsets.all(8),
+        decoration: BoxDecoration(
+          color: isDestructive
+              ? AppColors.error.withValues(alpha: 0.1)
+              : AppColors.primaryLemon.withValues(alpha: 0.3),
+          borderRadius: BorderRadius.circular(10),
+        ),
+        child: Icon(
+          icon,
+          color: isDestructive ? AppColors.error : AppColors.textOnYellow,
+          size: 22,
+        ),
+      ),
+      title: Text(
+        title,
+        style: TextStyle(
+          fontSize: 16,
+          fontWeight: FontWeight.w500,
+          color: isDestructive ? AppColors.error : AppColors.textPrimary,
+        ),
+      ),
+      trailing: Icon(
+        Icons.chevron_right,
+        color: isDestructive ? AppColors.error : AppColors.textSecondary,
+      ),
+      onTap: onTap,
     );
   }
 }

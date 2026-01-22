@@ -3,7 +3,9 @@ class ApiConstants {
   ApiConstants._();
 
   // Base URL - change this for different environments
-  static const String baseUrl = 'http://localhost:8000/api/v1';
+  // For local development: 'http://localhost:8000/api/v1'
+  // For AWS production: 'http://54.193.153.37:8000/api/v1'
+  static const String baseUrl = 'http://54.193.153.37:8000/api/v1';
 
   // Endpoints
   static const String activityTypes = '/activity-types';
