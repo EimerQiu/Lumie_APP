@@ -5,7 +5,17 @@
       "Bash(flutter analyze:*)",
       "Bash(python3:*)",
       "Bash(ssh:*)",
-      "Bash(scp:*)"
+      "Bash(scp:*)",
+      "Bash(command -v:*)",
+      "Bash(system_profiler:*)",
+      "Bash(pip3 install:*)",
+      "Bash(pip3 --version:*)",
+      "Bash(python3.11:*)",
+      "Bash(git clone:*)",
+      "Bash(pip3 search:*)",
+      "Bash(du:*)",
+      "Bash(rsync:*)",
+      "WebFetch(domain:www.twinbru.com)"
     ]
   }
 }
