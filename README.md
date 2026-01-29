@@ -1,6 +1,6 @@
 # Lumie Health - Teen-First Health Platform
 
-**Live Website:** https://yumo.life
+**Live Website:** https://yumo.org (yumo.life redirects here)
 
 A compassionate health platform designed specifically for teens (ages 13-21) living with chronic conditions. Lumie combines a wearable ring with an intuitive app to help teens understand their body's trends, balance activity with recovery, and maintain control over their health journey—without labels, pressure, or social comparison.
 
@@ -63,7 +63,7 @@ Growing up with a chronic condition shouldn't mean growing up with shame, fear, 
 
 ### Production Website
 
-**URL:** https://yumo.life
+**URL:** https://yumo.org
 **Status:** 🟢 Live and fully operational
 **Last Deployed:** January 26, 2026
 
@@ -118,10 +118,11 @@ Growing up with a chronic condition shouldn't mean growing up with shame, fear, 
 
 | Component | Status |
 |-----------|--------|
-| Website | 🟢 Live at https://yumo.life |
-| SSL | 🟢 Active until April 26, 2026 |
+| Primary Domain | 🟢 https://yumo.org (live) |
+| Redirect Domain | 🟢 yumo.life → yumo.org |
+| SSL | 🟢 Active (auto-renewal enabled) |
 | DNS | 🟢 Configured on GoDaddy |
-| Auto-Renewal | 🟢 Enabled |
+| Server | 🟢 AWS EC2 (54.193.153.37) |
 
 ---
 
@@ -196,9 +197,10 @@ Lumie_APP/
 └── README.md                        # This file
 
 Server Deployment:
-/var/www/yumo.life/                  # Production website
-/etc/nginx/sites-available/yumo.life # Nginx config
-/etc/letsencrypt/live/yumo.life/     # SSL certificates
+/home/ubuntu/website/                    # Production website
+/etc/nginx/sites-available/yumo.org      # Primary Nginx config
+/etc/nginx/sites-available/yumo.life     # Redirect Nginx config
+/etc/letsencrypt/live/yumo-bundle/       # SSL certificates (bundled)
 ```
 
 ---
@@ -217,15 +219,16 @@ python3 -m http.server 8000
 **Deploy to Production:**
 ```bash
 # Deploy all files
-scp -i ~/.ssh/Lumie_Key.pem -r ./website/* ubuntu@54.193.153.37:/var/www/yumo.life/
+scp -i ~/.ssh/Lumie_Key.pem -r ./website/* ubuntu@54.193.153.37:/home/ubuntu/website/
 
 # Deploy specific files
-scp -i ~/.ssh/Lumie_Key.pem ./website/index.html ubuntu@54.193.153.37:/var/www/yumo.life/
+scp -i ~/.ssh/Lumie_Key.pem ./website/index.html ubuntu@54.193.153.37:/home/ubuntu/website/
 ```
 
 **Verify Changes:**
-1. Visit https://yumo.life
+1. Visit https://yumo.org (or yumo.life, which redirects)
 2. Hard refresh: `Cmd + Shift + R` (Mac) or `Ctrl + Shift + R` (Windows/Linux)
+3. Changes appear immediately (DEV mode - no cache)
 
 ### App Development
 
@@ -378,12 +381,14 @@ sudo certbot renew            # Manual renewal (auto-renews)
 - ✅ Edge (desktop)
 
 **Test URLs:**
-- https://yumo.life
-- https://www.yumo.life
-- http://yumo.life (should redirect to HTTPS)
+- https://yumo.org (primary)
+- https://www.yumo.org (redirects to apex)
+- http://yumo.org (redirects to HTTPS)
+- https://yumo.life (redirects to yumo.org)
+- http://yumo.life (redirects to yumo.org)
 
 **Tools:**
-- SSL Labs: https://www.ssllabs.com/ssltest/analyze.html?d=yumo.life
+- SSL Labs: https://www.ssllabs.com/ssltest/analyze.html?d=yumo.org
 - PageSpeed: https://pagespeed.web.dev/
 - DNS Checker: https://dnschecker.org
 
@@ -467,13 +472,13 @@ sudo certbot renew            # Manual renewal (auto-renews)
 ## 📝 Documentation
 
 **Website Deployment:**
-- `DEPLOYMENT_README.md` - Complete deployment guide
-- `DEPLOYMENT_GUIDE.md` - Quick setup reference
-- `DEPLOYMENT_STATUS.md` - Current status dashboard
+- `DEPLOYMENT.md` - Complete deployment and management guide
+- `README.md` - This file (project overview)
 
 **Development:**
-- `VIDEO_GENERATION_README.md` - Video generation guide
-- `README.md` - This file (project overview)
+- `VIDEO_GENERATION_README.md` - Video generation guide (if exists)
+
+**Note:** Website is currently in DEV mode (caching disabled) for quick development updates.
 
 ---
 
@@ -529,11 +534,32 @@ Proprietary - © 2026 Yumo.org. All rights reserved.
 
 ## 🌟 Status
 
-**Website:** 🟢 Live at https://yumo.life
-**SSL:** 🟢 Active (expires April 26, 2026)
+**Primary Domain:** 🟢 https://yumo.org (live)
+**Redirect Domain:** 🟢 yumo.life → yumo.org
+**SSL Certificate:** 🟢 Active (auto-renewal enabled)
+**Caching:** ⚠️ Disabled (DEV mode for quick updates)
 **App Demo:** 🟢 Functional (local development)
 
-**Last Updated:** January 26, 2026
+**Last Updated:** January 28, 2026
+
+---
+
+## 🌐 Domain Information
+
+**Primary Domain:** yumo.org
+- Main website accessible at https://yumo.org
+- www.yumo.org redirects to yumo.org
+
+**Secondary Domain:** yumo.life
+- All traffic redirects to yumo.org
+- Maintains backward compatibility
+
+**All Access URLs:**
+- https://yumo.org ← Primary (use this)
+- http://yumo.org → redirects to HTTPS
+- https://www.yumo.org → redirects to apex
+- https://yumo.life → redirects to yumo.org
+- http://yumo.life → redirects to yumo.org
 
 ---
 
