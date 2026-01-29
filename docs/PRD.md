@@ -702,6 +702,12 @@ Advisor may ask:
 
 ## Activity
 
+**Sub-features:**
+- 6MWT
+- Activity time
+- Activity Intensity
+- Can manually set rest days
+
 ### 1. Feature Overview
 
 The Activity feature tracks and summarizes physical movement for teens aged 13–21 with chronic health conditions, using the Lumie Ring as the primary data source. The feature emphasizes balance between activity and rest, not performance or calorie burn. It uses adaptive goals, visual progress indicators, and user confirmation to ensure accuracy without pressure.
@@ -931,6 +937,14 @@ The Lumie Ring enables:
 
 ## Sleep
 
+**Basics:**
+- Total time
+- REM
+- Deep
+- Timing
+- Analyze
+- RHR
+
 ### 1. Feature Overview
 
 The Sleep feature tracks and analyzes ring-measured sleep patterns to help teens aged 13–21 with chronic health conditions understand their rest, recovery, and readiness for daily activity. Sleep data is used to:
@@ -1073,6 +1087,10 @@ Sleep data may be referenced by:
 
 ## Fatigue Index
 
+**Key Metrics:**
+- Resting HR+HRV
+- Higher HR+Low Activity = More Fatigue
+
 ### 1. Feature Overview
 
 The Fatigue Index is a non-clinical, composite wellness signal that estimates a user's physiological and functional fatigue over time. It combines:
@@ -1213,6 +1231,11 @@ The Fatigue Index is a wellness insight intended to support self-awareness. It d
 ---
 
 ## Stress / Anxiety
+
+**Key Metrics:**
+- RHR, Resting HRV
+- Light activity HR
+- Sleep window (optional)
 
 ### 1. Feature Overview
 
@@ -1372,6 +1395,10 @@ Stress insights:
 ---
 
 ## Habit Tracker
+
+**Logged Signals:**
+- Workload: 1-2-3
+- Fatigue rate: 1-2-3
 
 ### 1. Feature Overview
 
@@ -1731,6 +1758,11 @@ A warning is shown before first image share: "Please do not share medical images
 
 ## Advisor
 
+**Capabilities:**
+- AI
+- Advice based on condition
+- Advice based on data (Ring required)
+
 ### 1. Feature Overview
 
 The Advisor feature provides users with an AI-powered advisor chat that references Lumie Ring–derived data and user-approved context to help users:
@@ -1933,3 +1965,8 @@ All Advisor responses must:
 Displayed before first Advisor interaction:
 
 **The Advisor provides educational and informational insights only. It does not provide medical advice, diagnosis, or treatment and should not replace guidance from a qualified healthcare professional.**
+
+---
+
+## Med-Reminder
+Automom
