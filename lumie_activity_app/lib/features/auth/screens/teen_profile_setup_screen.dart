@@ -43,9 +43,7 @@ class _TeenProfileSetupScreenState extends State<TeenProfileSetupScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       body: Container(
-        decoration: const BoxDecoration(
-          gradient: AppColors.primaryGradient,
-        ),
+        decoration: const BoxDecoration(gradient: AppColors.primaryGradient),
         child: SafeArea(
           child: Column(
             children: [
@@ -54,10 +52,7 @@ class _TeenProfileSetupScreenState extends State<TeenProfileSetupScreen> {
               Expanded(
                 child: SingleChildScrollView(
                   padding: const EdgeInsets.symmetric(horizontal: 24),
-                  child: Form(
-                    key: _formKey,
-                    child: _buildCurrentStep(),
-                  ),
+                  child: Form(key: _formKey, child: _buildCurrentStep()),
                 ),
               ),
               _buildBottomButtons(),
@@ -164,10 +159,7 @@ class _TeenProfileSetupScreenState extends State<TeenProfileSetupScreen> {
         const SizedBox(height: 8),
         const Text(
           'Let\'s start with your name and age',
-          style: TextStyle(
-            fontSize: 14,
-            color: AppColors.textSecondary,
-          ),
+          style: TextStyle(fontSize: 14, color: AppColors.textSecondary),
         ),
         const SizedBox(height: 32),
         AuthTextField(
@@ -217,10 +209,7 @@ class _TeenProfileSetupScreenState extends State<TeenProfileSetupScreen> {
               Expanded(
                 child: Text(
                   'You must be 13 years or older to create an account',
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: AppColors.info,
-                  ),
+                  style: TextStyle(fontSize: 12, color: AppColors.info),
                 ),
               ),
             ],
@@ -247,10 +236,7 @@ class _TeenProfileSetupScreenState extends State<TeenProfileSetupScreen> {
         const SizedBox(height: 8),
         const Text(
           'This helps us personalize your activity goals',
-          style: TextStyle(
-            fontSize: 14,
-            color: AppColors.textSecondary,
-          ),
+          style: TextStyle(fontSize: 14, color: AppColors.textSecondary),
         ),
         const SizedBox(height: 32),
 
@@ -263,8 +249,12 @@ class _TeenProfileSetupScreenState extends State<TeenProfileSetupScreen> {
               child: AuthTextField(
                 controller: _heightController,
                 label: 'Height',
-                hint: _heightUnit == HeightUnit.cm ? 'e.g., 165' : 'e.g., 66 (inches)',
-                keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                hint: _heightUnit == HeightUnit.cm
+                    ? 'e.g., 165'
+                    : 'e.g., 66 (inches)',
+                keyboardType: const TextInputType.numberWithOptions(
+                  decimal: true,
+                ),
                 prefixIcon: Icons.height,
                 validator: (value) {
                   if (value == null || value.isEmpty) {
@@ -304,7 +294,9 @@ class _TeenProfileSetupScreenState extends State<TeenProfileSetupScreen> {
                 controller: _weightController,
                 label: 'Weight',
                 hint: _weightUnit == WeightUnit.kg ? 'e.g., 55' : 'e.g., 120',
-                keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                keyboardType: const TextInputType.numberWithOptions(
+                  decimal: true,
+                ),
                 prefixIcon: Icons.monitor_weight_outlined,
                 validator: (value) {
                   if (value == null || value.isEmpty) {
@@ -346,10 +338,7 @@ class _TeenProfileSetupScreenState extends State<TeenProfileSetupScreen> {
               Expanded(
                 child: Text(
                   'Your measurements are private and never shared',
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: AppColors.success,
-                  ),
+                  style: TextStyle(fontSize: 12, color: AppColors.success),
                 ),
               ),
             ],
@@ -376,10 +365,7 @@ class _TeenProfileSetupScreenState extends State<TeenProfileSetupScreen> {
         const SizedBox(height: 8),
         const Text(
           'You can skip these or add them later',
-          style: TextStyle(
-            fontSize: 14,
-            color: AppColors.textSecondary,
-          ),
+          style: TextStyle(fontSize: 14, color: AppColors.textSecondary),
         ),
         const SizedBox(height: 32),
 
@@ -418,7 +404,11 @@ class _TeenProfileSetupScreenState extends State<TeenProfileSetupScreen> {
             children: [
               Row(
                 children: [
-                  Icon(Icons.privacy_tip_outlined, color: AppColors.info, size: 20),
+                  Icon(
+                    Icons.privacy_tip_outlined,
+                    color: AppColors.info,
+                    size: 20,
+                  ),
                   SizedBox(width: 8),
                   Text(
                     'About Medical Conditions',
@@ -482,7 +472,10 @@ class _TeenProfileSetupScreenState extends State<TeenProfileSetupScreen> {
                     ),
                     child: Text(
                       authProvider.errorMessage!,
-                      style: const TextStyle(color: AppColors.error, fontSize: 13),
+                      style: const TextStyle(
+                        color: AppColors.error,
+                        fontSize: 13,
+                      ),
                     ),
                   ),
                 Row(
@@ -528,9 +521,9 @@ class _TeenProfileSetupScreenState extends State<TeenProfileSetupScreen> {
     // Validate current step
     if (_currentStep == 0) {
       if (_nameController.text.isEmpty) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Please enter your name')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('Please enter your name')));
         return;
       }
       final age = int.tryParse(_ageController.text);
@@ -577,7 +570,9 @@ class _TeenProfileSetupScreenState extends State<TeenProfileSetupScreen> {
       height: height,
       weight: weight,
       icd10Code: _selectedIcd10?.code,
-      advisorName: _advisorController.text.isEmpty ? null : _advisorController.text.trim(),
+      advisorName: _advisorController.text.isEmpty
+          ? null
+          : _advisorController.text.trim(),
     );
   }
 }
