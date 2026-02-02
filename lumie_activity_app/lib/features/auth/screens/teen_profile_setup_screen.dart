@@ -447,7 +447,7 @@ class _TeenProfileSetupScreenState extends State<TeenProfileSetupScreen> {
         return Container(
           padding: const EdgeInsets.all(24),
           decoration: BoxDecoration(
-            color: AppColors.backgroundWhite,
+            color: Colors.transparent,
             boxShadow: [
               BoxShadow(
                 color: Colors.black.withValues(alpha: 0.05),
@@ -486,6 +486,7 @@ class _TeenProfileSetupScreenState extends State<TeenProfileSetupScreen> {
                           onPressed: isLoading ? null : _goBack,
                           style: OutlinedButton.styleFrom(
                             padding: const EdgeInsets.symmetric(vertical: 16),
+                            backgroundColor: AppColors.backgroundWhite,
                           ),
                           child: const Text('Back'),
                         ),
@@ -547,6 +548,15 @@ class _TeenProfileSetupScreenState extends State<TeenProfileSetupScreen> {
         _currentStep++;
       });
     } else {
+      // Validate that medical condition is selected
+      if (_selectedIcd10 == null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Please select a medical condition (or choose "None" or "Other")'),
+          ),
+        );
+        return;
+      }
       _submitProfile();
     }
   }

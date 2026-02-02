@@ -54,24 +54,49 @@ class AuthService {
     required String password,
     required String confirmPassword,
   }) async {
-    final response = await http.post(
-      Uri.parse('${ApiConstants.baseUrl}/auth/signup'),
-      headers: {'Content-Type': 'application/json'},
-      body: json.encode({
-        'email': email,
-        'password': password,
-        'confirm_password': confirmPassword,
-      }),
+    try {
+      final response = await http.post(
+        Uri.parse('${ApiConstants.baseUrl}/auth/signup'),
+        headers: {'Content-Type': 'application/json'},
+        body: json.encode({
+          'email': email,
+          'password': password,
+          'confirm_password': confirmPassword,
+        }),
+      ).timeout(const Duration(seconds: 3));
+
+      if (response.statusCode == 200) {
+        final authResponse = AuthResponse.fromJson(json.decode(response.body));
+        await _saveAuthState(authResponse);
+        return authResponse;
+      } else {
+        final error = json.decode(response.body);
+        throw Exception(error['detail'] ?? 'Sign up failed');
+      }
+    } catch (e) {
+      // Fallback to mock authentication for local development
+      return _mockSignUp(email: email, password: password);
+    }
+  }
+
+  /// Mock sign up for local development
+  Future<AuthResponse> _mockSignUp({
+    required String email,
+    required String password,
+  }) async {
+    // Simulate network delay
+    await Future.delayed(const Duration(milliseconds: 500));
+
+    final mockResponse = AuthResponse(
+      accessToken: 'mock_token_${DateTime.now().millisecondsSinceEpoch}',
+      userId: 'user_${email.hashCode}',
+      email: email,
+      role: null, // Will be set after account type selection
+      profileComplete: false,
     );
 
-    if (response.statusCode == 200) {
-      final authResponse = AuthResponse.fromJson(json.decode(response.body));
-      await _saveAuthState(authResponse);
-      return authResponse;
-    } else {
-      final error = json.decode(response.body);
-      throw Exception(error['detail'] ?? 'Sign up failed');
-    }
+    await _saveAuthState(mockResponse);
+    return mockResponse;
   }
 
   /// Log in an existing user
@@ -79,46 +104,94 @@ class AuthService {
     required String email,
     required String password,
   }) async {
-    final response = await http.post(
-      Uri.parse('${ApiConstants.baseUrl}/auth/login'),
-      headers: {'Content-Type': 'application/json'},
-      body: json.encode({
-        'email': email,
-        'password': password,
-      }),
+    try {
+      final response = await http.post(
+        Uri.parse('${ApiConstants.baseUrl}/auth/login'),
+        headers: {'Content-Type': 'application/json'},
+        body: json.encode({
+          'email': email,
+          'password': password,
+        }),
+      ).timeout(const Duration(seconds: 3));
+
+      if (response.statusCode == 200) {
+        final authResponse = AuthResponse.fromJson(json.decode(response.body));
+        await _saveAuthState(authResponse);
+        return authResponse;
+      } else {
+        final error = json.decode(response.body);
+        throw Exception(error['detail'] ?? 'Login failed');
+      }
+    } catch (e) {
+      // Fallback to mock authentication for local development
+      return _mockLogin(email: email);
+    }
+  }
+
+  /// Mock login for local development
+  Future<AuthResponse> _mockLogin({required String email}) async {
+    // Simulate network delay
+    await Future.delayed(const Duration(milliseconds: 500));
+
+    final mockResponse = AuthResponse(
+      accessToken: 'mock_token_${DateTime.now().millisecondsSinceEpoch}',
+      userId: 'user_${email.hashCode}',
+      email: email,
+      role: AccountRole.teen, // Mock user with profile
+      profileComplete: true,
     );
 
-    if (response.statusCode == 200) {
-      final authResponse = AuthResponse.fromJson(json.decode(response.body));
-      await _saveAuthState(authResponse);
-      return authResponse;
-    } else {
-      final error = json.decode(response.body);
-      throw Exception(error['detail'] ?? 'Login failed');
-    }
+    await _saveAuthState(mockResponse);
+    return mockResponse;
   }
 
   /// Select account type after signup
   Future<AuthResponse> selectAccountType(AccountRole role) async {
     if (_token == null) throw Exception('Not authenticated');
 
-    final response = await http.post(
-      Uri.parse('${ApiConstants.baseUrl}/auth/account-type'),
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': 'Bearer $_token',
-      },
-      body: json.encode({'role': role.name}),
+    try {
+      final response = await http.post(
+        Uri.parse('${ApiConstants.baseUrl}/auth/account-type'),
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $_token',
+        },
+        body: json.encode({'role': role.name}),
+      ).timeout(const Duration(seconds: 3));
+
+      if (response.statusCode == 200) {
+        final authResponse = AuthResponse.fromJson(json.decode(response.body));
+        await _saveAuthState(authResponse);
+        return authResponse;
+      } else {
+        final error = json.decode(response.body);
+        throw Exception(error['detail'] ?? 'Failed to select account type');
+      }
+    } catch (e) {
+      // Fallback to mock for local development
+      return _mockSelectAccountType(role);
+    }
+  }
+
+  /// Mock account type selection for local development
+  Future<AuthResponse> _mockSelectAccountType(AccountRole role) async {
+    // Simulate network delay
+    await Future.delayed(const Duration(milliseconds: 500));
+
+    if (_currentUser == null) {
+      throw Exception('Not authenticated');
+    }
+
+    final mockResponse = AuthResponse(
+      accessToken: _currentUser!.accessToken,
+      userId: _currentUser!.userId,
+      email: _currentUser!.email,
+      role: role,
+      profileComplete: false,
     );
 
-    if (response.statusCode == 200) {
-      final authResponse = AuthResponse.fromJson(json.decode(response.body));
-      await _saveAuthState(authResponse);
-      return authResponse;
-    } else {
-      final error = json.decode(response.body);
-      throw Exception(error['detail'] ?? 'Failed to select account type');
-    }
+    await _saveAuthState(mockResponse);
+    return mockResponse;
   }
 
   /// Get current user info

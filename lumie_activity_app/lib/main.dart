@@ -14,6 +14,8 @@ import 'features/dashboard/screens/dashboard_screen.dart';
 import 'features/activity/screens/activity_history_screen.dart';
 import 'features/manual_entry/screens/manual_entry_screen.dart';
 import 'features/walk_test/screens/walk_test_screen.dart';
+import 'features/sleep/screens/sleep_screen.dart';
+import 'features/sleep/screens/sleep_history_screen.dart';
 import 'shared/models/activity_models.dart';
 import 'shared/models/user_models.dart';
 
@@ -48,6 +50,7 @@ class LumieActivityApp extends StatelessWidget {
           '/profile/teen': (context) => const TeenProfileSetupScreen(),
           '/profile/parent': (context) => const ParentProfileSetupScreen(),
           '/home': (context) => const MainNavigationScreen(),
+          '/sleep/history': (context) => const SleepHistoryScreen(),
         },
       ),
     );
@@ -172,7 +175,7 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
   Widget build(BuildContext context) {
     final screens = [
       const DashboardScreen(),
-      const ActivityHistoryScreen(),
+      const SleepScreen(),
       const WalkTestScreen(),
       const SettingsScreen(),
     ];
@@ -221,9 +224,9 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
                 onTap: () => setState(() => _currentIndex = 0),
               ),
               _NavBarItem(
-                icon: Icons.history_outlined,
-                selectedIcon: Icons.history,
-                label: 'History',
+                icon: Icons.bedtime_outlined,
+                selectedIcon: Icons.bedtime,
+                label: 'Sleep',
                 isSelected: _currentIndex == 1,
                 onTap: () => setState(() => _currentIndex = 1),
               ),

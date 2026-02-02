@@ -855,7 +855,7 @@ section {
 
 .pricing-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
     gap: 2rem;
     margin-top: var(--spacing-lg);
 }
@@ -885,6 +885,81 @@ section {
     transform: scale(1.08) translateY(-10px);
 }
 
+/* Monthly Pricing - Soft Teal Theme */
+.pricing-card.pricing-monthly {
+    background: linear-gradient(135deg, #7BA8B0 0%, #5a8a94 100%);
+    color: var(--color-warm-white);
+    border: 3px solid var(--color-soft-teal);
+}
+
+.pricing-card.pricing-monthly h3,
+.pricing-card.pricing-monthly .amount {
+    color: var(--color-warm-white);
+}
+
+.pricing-card.pricing-monthly .period,
+.pricing-card.pricing-monthly .features-list li {
+    color: rgba(255, 255, 255, 0.9);
+}
+
+.pricing-card.pricing-monthly .price-note {
+    color: rgba(255, 255, 255, 0.95);
+}
+
+.pricing-card.pricing-monthly .features-list li::before {
+    color: var(--color-soft-yellow);
+}
+
+/* Yearly Pricing - Golden Yellow Theme (Best Value - Featured) */
+.pricing-card.pricing-yearly {
+    background: linear-gradient(135deg, var(--color-soft-yellow) 0%, var(--color-golden) 100%);
+    color: var(--color-dark-text);
+    border: 3px solid var(--color-golden);
+}
+
+.pricing-card.pricing-yearly h3,
+.pricing-card.pricing-yearly .amount,
+.pricing-card.pricing-yearly .period {
+    color: var(--color-dark-text);
+}
+
+.pricing-card.pricing-yearly .features-list li {
+    color: var(--color-dark-text);
+}
+
+.pricing-card.pricing-yearly .price-note.special {
+    background-color: var(--color-dark-text);
+    color: var(--color-soft-yellow);
+    padding: 0.5rem 1rem;
+    border-radius: 10px;
+    font-weight: 700;
+    margin-bottom: 1rem;
+}
+
+.pricing-card.pricing-yearly .features-list li::before {
+    color: #c98a2a;
+}
+
+/* Family Plan Pricing - Purple/Lavender Theme */
+.pricing-card.pricing-family {
+    background: linear-gradient(135deg, #b8a9c9 0%, #9b87b5 100%);
+    border: 3px solid #8b75a8;
+}
+
+.pricing-card.pricing-family h3,
+.pricing-card.pricing-family .amount {
+    color: var(--color-warm-white);
+}
+
+.pricing-card.pricing-family .period,
+.pricing-card.pricing-family .features-list li {
+    color: rgba(255, 255, 255, 0.95);
+}
+
+.pricing-card.pricing-family .features-list li::before {
+    color: var(--color-soft-yellow);
+}
+
 .badge {
     position: absolute;
     top: -15px;
@@ -896,6 +971,11 @@ section {
     border-radius: 20px;
     font-size: 0.85rem;
     font-weight: 700;
+}
+
+.badge.special-offer {
+    background-color: var(--color-soft-yellow);
+    color: var(--color-dark-text);
 }
 
 .pricing-card h3 {
@@ -939,6 +1019,13 @@ section {
     left: 0;
     color: var(--color-accent);
     font-weight: 700;
+}
+
+.price-note {
+    font-size: 0.95rem;
+    color: var(--color-medium-text);
+    margin-bottom: 1.5rem;
+    font-weight: 500;
 }
 
 .pricing-note {

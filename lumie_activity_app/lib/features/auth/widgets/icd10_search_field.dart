@@ -103,22 +103,122 @@ class _ICD10SearchFieldState extends State<ICD10SearchField> {
     });
   }
 
+  Widget _buildQuickSelectButton(
+    BuildContext context,
+    String code,
+    String description,
+    IconData icon,
+  ) {
+    final isSelected = widget.selectedCode?.code == code;
+
+    return GestureDetector(
+      onTap: () {
+        _selectCode(ICD10Code(
+          code: code,
+          description: description,
+          category: 'Quick Select',
+        ));
+      },
+      child: Container(
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          gradient: isSelected ? AppColors.warmGradient : null,
+          color: isSelected ? null : AppColors.backgroundWhite,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+            color: isSelected
+                ? Colors.transparent
+                : AppColors.surfaceLight,
+            width: 2,
+          ),
+        ),
+        child: Column(
+          children: [
+            Icon(
+              icon,
+              color: isSelected
+                  ? AppColors.textOnYellow
+                  : AppColors.textSecondary,
+              size: 24,
+            ),
+            const SizedBox(height: 4),
+            Text(
+              code,
+              style: TextStyle(
+                fontSize: 14,
+                fontWeight: FontWeight.w600,
+                color: isSelected
+                    ? AppColors.textOnYellow
+                    : AppColors.textPrimary,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const Text(
-          'Medical Condition (Optional)',
-          style: TextStyle(
-            fontSize: 14,
-            fontWeight: FontWeight.w600,
-            color: AppColors.textPrimary,
-          ),
+        const Row(
+          children: [
+            Text(
+              'Medical Condition',
+              style: TextStyle(
+                fontSize: 14,
+                fontWeight: FontWeight.w600,
+                color: AppColors.textPrimary,
+              ),
+            ),
+            SizedBox(width: 4),
+            Text(
+              '*',
+              style: TextStyle(
+                fontSize: 14,
+                fontWeight: FontWeight.w600,
+                color: AppColors.error,
+              ),
+            ),
+          ],
         ),
         const SizedBox(height: 4),
         const Text(
-          'Search by ICD-10 code provided by your healthcare provider',
+          'Select "None" or "Other", or search by ICD-10 code',
+          style: TextStyle(
+            fontSize: 12,
+            color: AppColors.textSecondary,
+          ),
+        ),
+        const SizedBox(height: 12),
+
+        // Quick select options for None and Other
+        Row(
+          children: [
+            Expanded(
+              child: _buildQuickSelectButton(
+                context,
+                'None',
+                'Select if you have no chronic condition',
+                Icons.not_interested_outlined,
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: _buildQuickSelectButton(
+                context,
+                'Other',
+                'Select if your condition is not listed',
+                Icons.help_outline,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 16),
+        const Text(
+          'Or search for a specific condition:',
           style: TextStyle(
             fontSize: 12,
             color: AppColors.textSecondary,
