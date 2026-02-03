@@ -146,7 +146,8 @@ Note: Ages 13–21 represent the primary target demographic, not a technical res
 | Email | Email | Unique, verified |
 | Account Role | Enum | parent |
 | Age | Integer | Optional — required only if the parent pairs a Lumie Ring |
-| Height / Weight | Number | Optional — required only if the parent pairs a Lumie Ring |
+| Height | Number | cm or ft/in |
+| Weight | Number | kg or lb |
 
 **Parent Ring Support**
 - Parent accounts may optionally pair a Lumie Ring
@@ -415,123 +416,339 @@ UserSettings {
 - Teens can revoke access at any time
 - Clear, human-readable explanations (no legal language)
 
+
 ---
 
-## Family System
+## Team System (Family System)
 
 ### 1. Feature Overview
 
-The Family System allows multiple accounts (teens and parents) to join a shared family group in order to view selected health and activity data. Each family:
-- Has a unique join code
-- Contains multiple members
-- Respects individual data-sharing preferences
+The Team System allows teens and parents to form **private teams** for shared support, coordination, and encouragement around health-related routines and daily responsibilities.
+
+Teams are designed to:
+
+* Enable collaboration without public exposure
+* Respect individual privacy and consent
+* Support both parental guidance and teen autonomy
+* Serve as the foundation for task coordination and shared experiences in later features (e.g. Med-Reminder)
+
+> Note: A user may belong to multiple teams over time (e.g. family-based teams, support teams). This capability is supported by the system design, though advanced team types may be introduced in later phases.
+
+---
 
 ### 2. Purpose
 
-The Family feature exists to:
-- Allow parents to monitor progress (with consent)
-- Support teens with coaches/advisors
-- Enable shared accountability without public exposure
+The Team feature is designed to support **shared growth and collaboration between parents and teens**, while preserving teen-first privacy and autonomy.
 
-### 3. Family Creation & Joining
+It enables families to move beyond passive monitoring toward **active, constructive participation** in everyday health and life routines, including:
 
-#### 3.1 Create a Family
+* **Growing together**
+  Parents and teens can work toward healthier routines side by side, reinforcing mutual accountability rather than top-down supervision.
 
-Any user can:
-- Create a family
-- Become the Family Owner
+* **Supportive daily structure**
+  Parents can help teens establish gentle, practical reminders—such as medication schedules or daily check-ins—that support consistency without creating pressure or control.
 
-System generates:
-- A unique family code (e.g. LUMIE-8F2A)
+* **Meaningful incentives and positive reinforcement**
+  Parents may choose to connect allowances or rewards to positive behaviors (e.g. medication adherence, task completion, habit consistency), helping teens associate responsibility with real-world outcomes.
 
-#### 3.2 Join a Family
+* **Shared visibility into healthy habits**
+  With explicit consent, selected activity and sleep data can be shared within a team to:
 
-Users can:
-- Tap "Join a Family"
-- Enter the family code
-- Preview family name & members
-- Confirm join
+  * Encourage healthier routines together
+  * Build awareness of rest, balance, and recovery
+  * Normalize health conversations without judgment or comparison
 
-### 4. Family Roles
+* **A foundation for long-term independence**
+  By framing health management as a shared journey rather than an obligation, the Team feature helps teens gradually build confidence, ownership, and independence in managing their own well-being.
 
-| Role | Permissions |
-|---|---|
-| Family Owner | Manage members, regenerate code |
-| Member | View shared data only |
+Overall, the Team System aims to **strengthen trust, communication, and healthy habits**, while respecting individual boundaries and preserving a teen-first design philosophy.
 
-Note: No role can override another user's privacy settings.
+---
+
+### 3. Team Creation & Membership
+
+#### 3.1 Create a Team
+
+* Any authenticated user can create a team
+* The creator is automatically assigned the role **admin**
+* A user may create multiple teams
+* Team names must be non-empty and human-readable
+* There is **no join code** mechanism
+
+---
+
+#### 3.2 Invite Members
+
+* Only **admins** can invite new members
+* Invitations are sent by email
+* Invited users appear as **pending members** until they accept
+
+**Invitation Rules**
+
+* An invited user has two options:
+
+  * **Accept** the invitation
+  * **Do nothing** (remain pending)
+* There is **no explicit “reject” action**
+* Pending invitations do not grant any data access
+
+---
+
+#### 3.3 Member Roles
+
+| Role   | Description                                            |
+| ------ | ------------------------------------------------------ |
+| admin  | Manages the team and invitations                       |
+| member | Participates in the team after accepting an invitation |
+
+Rules:
+
+* A team has one or more admins
+* All non-admin participants are members
+* Roles are visible within the team
+* Only admins can manage team structure
+
+---
+
+#### 3.4 Member Status Model（Revised）
+
+Member status is intentionally simplified.
+
+| Status  | Meaning                                    |
+| ------- | ------------------------------------------ |
+| pending | Invitation sent, not yet accepted          |
+| member  | Invitation accepted; full team participant |
+
+Key rules:
+
+* **There are no other member states**
+* Once accepted, a user becomes a member immediately
+* Pending users:
+
+  * Do not appear in shared data views
+  * Do not receive tasks or notifications
+  * Have no access to team data
+* Status transitions are one-way: `pending → member`
+
+---
+
+### 4. Team Member Management
+
+Admins can:
+
+* View all team members
+* See member roles (admin / member)
+* See pending invitations
+* Remove members from the team
+
+Members can:
+
+* View team membership
+* Leave a team at any time
+
+Rules:
+
+* Removing a member immediately revokes access to shared data
+* Leaving a team does not affect other teams the user belongs to
+
+---
 
 ### 5. Data Visibility Rules (Critical)
 
-Family members can only see:
-- Data that the user has explicitly allowed in Settings
+All data visibility within a team is governed by **individual user privacy settings**.
 
-If a toggle is OFF:
-- Data is hidden
-- Appears as "Not shared"
+Team members can only see:
 
-### 6. Family Data Views (UI)
+* Data that another user has explicitly chosen to share in **Settings**
+* Only the specific data categories enabled by that user
 
-For each family member:
-- Name
-- Role (Teen / Parent)
-- Shared metrics only
+Rules:
+
+* If a sharing toggle is OFF:
+
+  * Data is hidden
+  * Displayed as “Not shared”
+* **Admins cannot override privacy settings**
+* Team membership alone never implies data access
+
+---
+
+### 6. Team Data Views (UI)
+
+For each team member, the UI may display:
+
+* Name
+* Role (admin / member)
+* Shared data only (based on Settings)
+* Task completion status (when Med-Reminder is enabled)
 
 Example:
-- Steps ✔️
-- 6MWT ❌ (Hidden)
-- HR ❌ (Hidden)
+
+* Activity: ✔️ Shared
+* Sleep: ❌ Not shared
+* Medication tasks: 2 completed, 1 pending
+
+---
 
 ### 7. Functional Requirements
 
 Users must be able to:
-- Join or leave a family at any time
-- Change sharing preferences without rejoining
-- Be in only one family at a time (MVP)
-- See real-time updates when permissions change
 
-### 8. Server Data Models
+* Create teams
+* Invite members by email
+* Accept invitations
+* View all teams they belong to
+* Leave a team at any time
+* Update privacy settings without rejoining teams
+* See team data update immediately when sharing settings change
 
-#### 8.1 Family
+---
 
-```
-Family {
-  familyId: string,
-  familyCode: string,
-  ownerId: string,
-  members: string[],
-  createdAt: timestamp
-}
-```
+### 8. Privacy & Edge Cases
 
-#### 8.2 Family Membership
+* Pending members have **zero access** to team data
+* Leaving or being removed from a team immediately revokes access
+* Deleted accounts are automatically removed from all teams
+* Teams are completely isolated from each other
+* There is no discoverability or public listing of teams
 
-```
-FamilyMember {
-  familyId: string,
-  userId: string,
-  role: "owner" | "member",
-  joinedAt: timestamp
-}
-```
+---
 
-### 9. Privacy & Edge Cases
+### 9. Integration with Med-Reminder (Dependency)
 
-- Leaving a family immediately revokes access
-- Regenerating a family code invalidates old codes
-- Deleted accounts are auto-removed
-- No cross-family visibility
+* Teams provide the structural foundation for:
 
-### 10. Dependency Order
+  * Assigning tasks to members
+  * Viewing task completion status
+  * Coordinating routines within a trusted group
 
-This feature requires:
-- User Profile
-- Settings
+This feature depends on:
+
+* User Profile
+* Settings
 
 This feature must exist before:
-- Parent dashboards
-- Longitudinal family analytics
-- Notifications ("Your child completed a test")
+
+* Med-Reminder coordination
+* Parent dashboards
+* Team-based analytics
+* Notifications related to shared tasks
+
+---
+
+## Ring Integration & Data Synchronization
+
+### 1. Feature Overview
+
+The Ring Integration module defines how the Lumie app pairs with the wearable ring, detects its connection state, synchronizes device data, and safely merges that data with server-side records.
+
+This module acts as the bridge between hardware and software, ensuring that:
+
+- Users can start using the app without a ring
+- Ring data is synchronized reliably when available
+- User-entered profile data is never silently overwritten by hardware data
+- All biometric data follows clear ownership and conflict rules
+
+### 2. Ring Lifecycle States
+
+The Lumie app must explicitly track the ring's connection and binding state.
+
+Supported States (MVP):
+
+- Unpaired – No ring bound to the account
+- Paired (Disconnected) – Ring bound, currently not connected
+- Paired (Connected) – Ring connected via BLE
+- Rebinding – Ring is being unpaired / paired again
+- Ring Changed – A different ring is paired to the same user
+
+These states are surfaced in the UI (status indicators) and drive synchronization behavior.
+
+### 3. Ring Pairing Rules
+
+- A user may create and use a Lumie account without pairing a ring
+- Ring pairing is optional and can occur at any time after signup
+- Pairing a ring:
+  - Creates or updates a ringId binding on the server
+  - Does not modify User Profile fields
+- Unpairing a ring:
+  - Does not delete historical data already synced to the server
+  - Only stops future data ingestion from that ring
+
+### 4. Synchronization Triggers
+
+#### 4.1 Device Data Synchronization (Device Sync)
+
+The app must attempt device data synchronization when any of the following events occur:
+
+- Ring successfully connects after being disconnected (BLE reconnect)
+- Ring pairing is completed
+- App returns to foreground while ring is connected
+- User manually triggers a "Sync Now" action (optional)
+- App detects unsynced local ring data
+
+Device Sync may include:
+
+- Device status (battery level, firmware version, ringId)
+- Time calibration (if required)
+- Biometric data backfill (steps, sleep, heart rate, etc.)
+
+#### 4.2 User Profile Synchronization (Profile Sync)
+
+Ring-related events must not automatically overwrite user profile data.
+
+Specifically:
+
+- Height, weight, age, name, ICD-10 codes, and advisor fields
+- Are owned by the User Profile
+- Are editable only through the App UI
+- Are synchronized only via Profile Sync rules (see Section 9.5)
+
+If ring firmware requires basic user parameters (e.g. height/weight):
+
+- These values are written from profile → ring
+- Ring values are treated as derived, not authoritative
+
+### 5. Data Ownership & Source of Truth
+
+| Data Type | Source of Truth |
+|---|---|
+| User identity & profile | Server (User Profile) |
+| Ring binding (ringId) | Server |
+| Historical biometric data | Server |
+| Unsynced recent measurements | Ring (temporary) |
+| Local cache | Client (non-authoritative) |
+
+### 6. Conflict Resolution (MVP)
+
+- Profile conflicts: Server data always wins
+- Device data conflicts:
+  - Merge by timestamp
+  - Prevent duplicate ingestion
+  - Server rejects overlapping data windows already stored
+  - No destructive overwrite of historical data is allowed
+
+### 7. Privacy & Safety Considerations
+
+- Ring data ingestion respects user privacy settings
+- If data sharing is disabled:
+  - Data may still sync to the user's own account
+  - Data is not exposed to family members
+- Ring data is never shared publicly
+- Ring presence is not visible to peers
+
+### 8. Dependencies
+
+This module depends on:
+
+- User Profile
+- Settings (privacy & permissions)
+
+This module must be completed before:
+
+- Activity analytics
+- Sleep insights
+- Stress and fatigue modeling
+- Family dashboards
 
 ---
 
@@ -1969,4 +2186,501 @@ Displayed before first Advisor interaction:
 ---
 
 ## Med-Reminder
-Automom
+
+**Sub-modules:**
+- Task Management
+- Template Management
+- Family Task Coordination
+
+### 1. Feature Overview
+
+The Med-Reminder module provides intelligent medication reminders and daily task management for teens aged 13–21 with chronic health conditions. It enables:
+- Medication adherence tracking through reminders and confirmations
+- Daily health and wellness task management
+- Family coordination of shared responsibilities
+- Reusable task templates for recurring activities
+- Progress tracking and completion analytics
+
+**Purpose**:
+- Help teens remember and complete medication schedules
+- Support daily health routines and wellness activities
+- Enable family members to coordinate health-related tasks
+- Provide visibility into task completion for parents and guardians
+- Build healthy habit formation through structured task management
+
+**Ring Dependency**:
+| Requirement | Status |
+|---|---|
+| Lumie Ring Required | ❌ No |
+| Hardware-Agnostic | ✅ Yes |
+
+Med-Reminder works independently of the Lumie Ring, though data may integrate with other ring-based features.
+
+**Target Users**:
+- Teens aged 13–21 with chronic health conditions
+- Parents/guardians managing family health routines
+- Healthcare teams coordinating patient care
+
+### 2. Task Management Module
+
+#### 2.1 Task Data Model
+
+**Core Entity**:
+```
+Task {
+  task_id: string (unique identifier),
+  task_name: string (task name/description),
+  task_type: string (Medicine/Life/Study/Exercise/Work/Meditation/Love),
+  open_datetime: string ("yyyy-MM-dd HH:mm", start time),
+  close_datetime: string ("yyyy-MM-dd HH:mm", end time),
+  user_id: string (assigned user, for personal tasks),
+  family_id: string (assigned family, for family tasks),
+  created_by: string (user ID who created task),
+  rpttask_id: string (reference to template, if from template),
+  status: string ("pending" | "completed" | "overdue"),
+  task_info: string (optional additional information),
+  completed_at: timestamp (when marked complete),
+  created_at: timestamp,
+  updated_at: timestamp
+}
+```
+
+**Task Type Categories**:
+- `Medicine` - Medication reminders and health treatments
+- `Life` - Daily living activities and personal care
+- `Study` - Learning and educational activities
+- `Exercise` - Physical activity and fitness
+- `Work` - Work-related tasks and responsibilities
+- `Meditation` - Relaxation and mindfulness activities
+- `Love` - Family care and relationship activities
+
+#### 2.2 Task List Display
+
+**Priority**: P0 (Required)
+
+**Functionality**:
+- Display all pending tasks for current user
+- Show time window (start and end times)
+- Visual progress bar showing task time progress
+- Support pull-to-refresh
+- Automatic background polling every 180 seconds
+
+**UI Design**:
+- Dark theme
+- Task card displays:
+  - Task name (large, white text)
+  - Time window (small, gray text)
+  - Progress bar (gradient color based on task ID hash)
+  - Progress percentage
+- Tasks sorted by start time
+- Swipe interactions (complete/delete)
+
+**Card Design**:
+```
+Progress Bar Colors (6 gradient combinations):
+1. Orange → Red (#FF9500 → #FF3B30)
+2. Blue → Purple (#007AFF → #5856D6)
+3. Green → Yellow (#34C759 → #FFCC00)
+4. Pink → Purple (#FF2D55 → #5856D6)
+5. Teal → Blue (#5AC8FA → #007AFF)
+6. Indigo → Pink (#5856D6 → #FF2D55)
+
+Color selection: Hash of task_id mod 6
+```
+
+**Progress Calculation**:
+```
+If current_time < open_datetime: progress = 0%
+If current_time > close_datetime: progress = 100%
+Otherwise: progress = (current_time - open_datetime) / (close_datetime - open_datetime) × 100%
+```
+
+**Interactions**:
+- Tap task card → Confirm completion dialog
+- Pull down → Refresh task data
+- Swipe left → Show complete and delete buttons
+
+**Data Refresh**:
+- Load automatically on screen enter
+- Background polling every 180 seconds
+- Manual pull-to-refresh
+
+#### 2.3 Task Creation
+
+**Priority**: P0 (Required)
+
+**Functionality**:
+- Create single tasks manually
+- Select target user (personal or family member)
+- Quick creation from templates
+- Set time window for task availability
+
+**Input Fields**:
+- Task name (required, max 100 characters)
+- Task type (optional, 7 predefined types)
+- Start time (required, DateTimePicker)
+- End time (required, must be after start time)
+- Target user (required, single selection)
+- Additional info (optional, multiline text)
+
+**Creation Methods**:
+1. **Manual**: User fills all fields
+2. **Template-based**: Select template, fill time and user
+
+**Validation**:
+- Task name cannot be empty
+- End time must be after start time
+- Must select target user
+- Success → Return to task list
+
+**API Endpoint**:
+```
+POST /add-task
+Request Body:
+{
+    "task_name": string,
+    "task_type": string (optional),
+    "open_datetime": string,
+    "close_datetime": string,
+    "user_id": string (personal task),
+    "family_id": string (family task, mutually exclusive with user_id),
+    "task_info": string (optional),
+    "rpttask_id": string (from template creation)
+}
+```
+
+#### 2.4 Task Completion
+
+**Priority**: P0 (Required)
+
+**Functionality**:
+- Mark task as completed
+- Remove from pending list after completion
+- Record completion timestamp on server
+
+**Workflow**:
+1. Tap task card → Confirm dialog appears
+2. Dialog shows task name and confirmation button
+3. Click "Confirm" → Submit completion request
+4. Success → Remove from UI list
+
+**Confirmation Dialog**:
+- Title: "Complete Task"
+- Message: "Are you sure you want to mark '{task_name}' as completed?"
+- Buttons: "Cancel" / "Confirm"
+
+**API Endpoint**:
+```
+POST /task_complete
+Request Body:
+{
+    "task_id": string,
+    "time_zone": string (user's timezone)
+}
+```
+
+**Error Handling**:
+- Network failure: Show error, keep task in list
+- Server error: Display message
+- Success: Remove from UI immediately
+
+#### 2.5 Task Deletion
+
+**Priority**: P1 (Important)
+
+**Functionality**:
+- Admin can delete any user's task
+- Regular users can delete own tasks
+- Non-reversible (requires confirmation)
+
+**Trigger**:
+- Swipe left on task card
+- Tap red "Delete" button
+- Confirm in dialog
+
+**API Endpoint**:
+```
+DELETE /admin/delete_task/{taskId}
+Query Params:
+    time_zone: string
+```
+
+### 3. Template Management Module
+
+#### 3.1 Template Data Model
+
+**Core Entity**:
+```
+RepeatTaskTemplate {
+  id: string,
+  template_name: string,
+  template_type: string (one of task types),
+  description: string (optional),
+  time_windows: int (number of daily windows),
+  min_interval: int (minutes between tasks),
+  time_window_list: [TimeWindow],
+  created_by: string (creator user_id),
+  created_at: timestamp,
+  updated_at: timestamp
+}
+
+TimeWindow {
+  id: int,
+  name: string ("Morning", "Afternoon", etc.),
+  open_time: string ("HH:mm"),
+  close_time: string ("HH:mm"),
+  is_next_day: boolean (true if crosses midnight)
+}
+```
+
+#### 3.2 Template List Display
+
+**Priority**: P0 (Required)
+
+**Functionality**:
+- Show all user-created templates
+- Sort by creation date (newest first)
+- Support search and filtering
+
+**UI Design**:
+- Card layout
+- Each card shows:
+  - Template name
+  - Task type label with color coding
+  - Number of time windows
+  - Minimum interval
+  - Description (collapsible)
+- Action buttons:
+  - "Edit" - Modify template
+  - "Delete" - Remove template
+  - "Create Tasks" - Batch generate tasks
+
+**API Endpoint**:
+```
+GET /repeat_task/list
+Query Params:
+    user_id: string
+Response:
+[
+    {
+        "rpttask_id": string,
+        "template_name": string,
+        "template_type": string,
+        "description": string (optional),
+        "time_windows": int,
+        "min_interval": int
+    },
+    ...
+]
+```
+
+#### 3.3 Create/Edit Template
+
+**Priority**: P0 (Required)
+
+**Functionality**:
+- Create new task templates
+- Edit existing templates
+- Configure time windows and intervals
+
+**Input Fields**:
+
+1. **Basic Info**:
+   - Template name (required, max 50 characters)
+   - Task type (required, Picker selection)
+   - Description (optional, multiline)
+   - Minimum interval (required, minutes)
+
+2. **Time Windows**:
+   - Window name ("Morning", "Afternoon", etc.)
+   - Start time (time picker)
+   - End time (time picker)
+   - Cross-day flag (toggle for midnight crossing)
+   - Support multiple windows
+
+**UI Interactions**:
+- Time windows in list form
+- "+" button to add window
+- Swipe left to delete window
+- Real-time task count preview
+
+**Validation**:
+- Template name required
+- At least 1 time window
+- Minimum interval > 0
+- Window end time after start (unless cross-day)
+
+**API Endpoints**:
+```
+POST /repeat_task/create
+Request Body:
+{
+    "template_name": string,
+    "template_type": string,
+    "description": string (optional),
+    "min_interval": int,
+    "time_windows": [
+        {
+            "window_name": string,
+            "name": string,
+            "open_time": string ("HH:mm"),
+            "close_time": string ("HH:mm"),
+            "is_next_day": bool
+        },
+        ...
+    ]
+}
+
+GET /repeat_task/detail/{templateId}
+Response: Complete template data for editing
+```
+
+#### 3.4 Batch Task Generation
+
+**Priority**: P0 (Required)
+
+**Functionality**:
+- Generate multiple tasks from single template
+- Configure date range and target user
+- Preview task count before creation
+
+**Input Parameters**:
+- Start date (DatePicker, default today)
+- Duration in days (Stepper, range 1-30)
+- Target user/family (FamilyMemberSelector)
+
+**Generation Logic**:
+```
+Total tasks = Duration × Time windows
+
+Example:
+- Template has 3 windows (morning/afternoon/evening)
+- Select 7 days
+- Generates 21 tasks
+
+Each task:
+- Start = Date + Window start time
+- End = Date + Window end time (accounting for cross-day)
+- Name = Template name + Window name
+- rpttask_id = Template ID
+```
+
+**UI Display**:
+- Real-time calculation: "This will create {X} tasks"
+- Date range display
+- Target user/family name
+- Progress indicator during creation
+
+**Creation Flow**:
+1. User selects parameters
+2. Click "Create" button
+3. System calculates task list
+4. Send creation requests sequentially
+5. Show progress: "Creating X of Y tasks..."
+6. Success message on completion
+7. Return to template list
+
+**API Call**:
+```
+For each generated task: POST /add-task
+(See Task Creation endpoint above)
+```
+
+#### 3.5 Delete Template
+
+**Priority**: P1 (Important)
+
+**Functionality**:
+- Delete unused templates
+- Does not affect already-created tasks
+- Requires confirmation
+
+**Trigger**:
+- Click "Delete" on template card
+- Confirm in dialog: "Are you sure you want to delete this template?"
+
+**API Endpoint**:
+```
+DELETE /repeat-task-template/{templateId}
+```
+
+### 4. Task Completion Analytics
+
+**Priority**: P2 (Nice to Have)
+
+**Functionality**:
+- Track task completion rates over time
+- Identify missed medication doses
+- Provide adherence insights
+- Support family monitoring
+
+**Metrics**:
+- Daily completion rate
+- Weekly medication adherence
+- Most/least completed task types
+- Trend analysis
+
+**Integration with Advisor**:
+- AI Advisor may reference task completion in insights
+- Correlate with activity, fatigue, and stress data
+
+### 5. Privacy & Safety
+
+**Data Access**:
+- Family members only see tasks assigned to them
+- Parents see tasks assigned to their children (if family structure)
+- Privacy settings control visibility
+
+**Task Assignment**:
+- Users can only create tasks for themselves or family members they manage
+- Clear indication of who each task is assigned to
+
+**Completion Recording**:
+- Completion time recorded server-side
+- Completion data included in family sharing if enabled
+
+### 6. Integration Points
+
+**With Family System**:
+- Create tasks for specific family members
+- View family members' task completion
+- Share task templates within families
+- Coordinate routine tasks
+
+**With Activity/Sleep/Fatigue**:
+- Medication tasks may correlate with activity patterns
+- Health routines support overall wellness tracking
+- Integration for holistic health view
+
+**With Settings**:
+- Users control task visibility in family sharing
+- Notification preferences for task reminders
+- Reminder frequency and timing settings
+
+### 7. Functional Requirements
+
+Users must be able to:
+- Create and complete tasks
+- Create and manage reusable templates
+- Batch generate tasks from templates
+- View pending and completed tasks
+- Delete own tasks (or admin can delete any)
+- Control who sees task information
+- Receive task reminders via notifications
+
+Family features:
+- Create family-shared tasks
+- Monitor family members' task completion
+- Share task templates with family
+- Coordinate daily routines
+
+### 8. Dependency Order
+
+This feature requires:
+- User Profile (for user identification)
+- Family System (for family task coordination)
+- Settings (for notification preferences)
+
+This feature should exist before:
+- Advanced analytics based on compliance
+- Integration with wearable data for health insights
