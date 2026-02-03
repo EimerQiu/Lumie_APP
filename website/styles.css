@@ -885,6 +885,33 @@ section {
     transform: scale(1.08) translateY(-10px);
 }
 
+/* FREE Pricing - Dark Theme */
+.pricing-card.pricing-free {
+    background: linear-gradient(135deg, #3a3a3a 0%, #2a2a2a 100%);
+    color: var(--color-warm-white);
+    border: 3px solid #4a4a4a;
+}
+
+.pricing-card.pricing-free h3 {
+    font-size: 2rem;
+    font-weight: 700;
+    color: var(--color-warm-white);
+}
+
+.pricing-card.pricing-free .amount {
+    color: var(--color-warm-white);
+    font-size: 4rem;
+    font-weight: 700;
+}
+
+.pricing-card.pricing-free .features-list li {
+    color: rgba(255, 255, 255, 0.85);
+}
+
+.pricing-card.pricing-free .features-list li::before {
+    color: #888;
+}
+
 /* Monthly Pricing - Soft Teal Theme */
 .pricing-card.pricing-monthly {
     background: linear-gradient(135deg, #7BA8B0 0%, #5a8a94 100%);
@@ -1019,6 +1046,25 @@ section {
     left: 0;
     color: var(--color-accent);
     font-weight: 700;
+}
+
+/* Disabled features styling */
+.features-list li.disabled {
+    opacity: 0.5;
+    text-decoration: line-through;
+}
+
+.features-list li.disabled::before {
+    content: '✗';
+    color: #e74c3c;
+}
+
+.pricing-card.pricing-free .features-list li.disabled::before {
+    color: #c0392b;
+}
+
+.pricing-card.pricing-monthly .features-list li.disabled::before {
+    color: #e74c3c;
 }
 
 .price-note {
