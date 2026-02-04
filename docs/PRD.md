@@ -1,5 +1,82 @@
 # PRD
 
+## Subscription Tiers & Feature Access
+
+### Overview
+
+Lumie offers three subscription tiers with different levels of feature access. All users can create an account and access basic features, while premium features require a paid subscription.
+
+### Subscription Plans
+
+#### Free Plan ($0)
+- **Med Reminders**: Limited to 2 maximum
+- **Habit Tracker**: Limited to 3 days of data
+- **Peer Community**: View-only access (cannot post or message)
+- **Lumie Ring**: Not included
+- **Ring-Based Features**: Not available (Activity Tracking, Sleep Monitoring, Fatigue Index, Stress/Anxiety, AI Advisor, Advanced Analytics)
+- **Family Linking**: Not available
+
+#### Monthly Plan ($16.99/month)
+- **Trial Period**: 14 days free
+- **Med Reminders**: Unlimited
+- **Habit Tracker**: Unlimited
+- **Peer Community**: Full access (post, message, friend requests)
+- **Family Linking**: Available
+- **Lumie Ring**: Must be purchased separately
+- **Ring-Based Features**: Not available without ring purchase
+  - Activity Tracking
+  - Sleep Monitoring
+  - Fatigue Index
+  - Stress/Anxiety Analysis
+  - AI Advisor
+  - Advanced Analytics
+
+#### Annual Plan ($179/year)
+- **Trial Period**: 14 days free
+- **Lumie Ring**: FREE with first-time purchase
+- **Med Reminders**: Unlimited
+- **Habit Tracker**: Unlimited
+- **Peer Community**: Full access
+- **Family Linking**: Available
+- **Ring-Based Features**: All included (requires ring)
+  - Activity Tracking
+  - Sleep Monitoring
+  - Fatigue Index
+  - Stress/Anxiety Analysis
+  - AI Advisor
+  - Advanced Analytics
+- **Savings**: ~12% vs monthly plan
+
+### Feature Gate Requirements
+
+| Feature | Free | Monthly | Annual |
+|---------|------|---------|--------|
+| Med Reminders | 2 max | Unlimited | Unlimited |
+| Habit Tracker | 3 days | Unlimited | Unlimited |
+| Peer Community | View only | Full access | Full access |
+| Family Linking | ❌ | ✅ | ✅ |
+| Lumie Ring | ❌ | Purchase required | FREE |
+| Activity Tracking | ❌ | ❌* | ✅ |
+| Sleep Monitoring | ❌ | ❌* | ✅ |
+| Fatigue Index | ❌ | ❌* | ✅ |
+| Stress/Anxiety | ❌ | ❌* | ✅ |
+| AI Advisor | ❌ | ❌* | ✅ |
+| Advanced Analytics | ❌ | ❌* | ✅ |
+
+*Requires Lumie Ring purchase (sold separately for Monthly plan users)
+
+### Subscription Management
+
+- Users can upgrade/downgrade at any time
+- Changes take effect at the next billing cycle
+- Free trial available for first-time paid subscribers
+- Parental consent required for users under 18
+- 30-day return policy on Lumie Ring purchases
+- Ring replacement: $49 for lost or damaged rings
+- FSA/HSA eligible
+
+---
+
 ## User Profile
 
 ### 1. Feature Overview
