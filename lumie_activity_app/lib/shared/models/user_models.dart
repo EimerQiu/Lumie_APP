@@ -23,6 +23,46 @@ enum AccountRole {
   }
 }
 
+enum SubscriptionTier {
+  free,
+  monthly,
+  annual;
+
+  String get displayName {
+    switch (this) {
+      case SubscriptionTier.free:
+        return 'Free Plan';
+      case SubscriptionTier.monthly:
+        return 'Monthly Plan';
+      case SubscriptionTier.annual:
+        return 'Annual Plan';
+    }
+  }
+
+  String get priceLabel {
+    switch (this) {
+      case SubscriptionTier.free:
+        return '\$0';
+      case SubscriptionTier.monthly:
+        return '\$16.99/month';
+      case SubscriptionTier.annual:
+        return '\$179/year';
+    }
+  }
+
+  bool get hasRingIncluded {
+    return this == SubscriptionTier.annual;
+  }
+
+  bool get hasFamilyLinking {
+    return this != SubscriptionTier.free;
+  }
+
+  bool get hasFullCommunityAccess {
+    return this != SubscriptionTier.free;
+  }
+}
+
 enum HeightUnit {
   cm,
   ftIn;
@@ -113,6 +153,105 @@ class WeightData {
   }
 }
 
+class SubscriptionStatus {
+  final SubscriptionTier tier;
+  final bool isActive;
+  final bool isTrial;
+  final DateTime? trialEndDate;
+  final DateTime? subscriptionStartDate;
+  final DateTime? subscriptionEndDate;
+  final bool ringIncluded;
+  final bool autoRenew;
+
+  const SubscriptionStatus({
+    this.tier = SubscriptionTier.free,
+    this.isActive = true,
+    this.isTrial = false,
+    this.trialEndDate,
+    this.subscriptionStartDate,
+    this.subscriptionEndDate,
+    this.ringIncluded = false,
+    this.autoRenew = false,
+  });
+
+  factory SubscriptionStatus.fromJson(Map<String, dynamic> json) {
+    SubscriptionTier tier = SubscriptionTier.free;
+    if (json['tier'] != null) {
+      final tierStr = json['tier'] as String;
+      tier = SubscriptionTier.values.firstWhere(
+        (e) => e.name == tierStr,
+        orElse: () => SubscriptionTier.free,
+      );
+    }
+
+    return SubscriptionStatus(
+      tier: tier,
+      isActive: json['is_active'] as bool? ?? true,
+      isTrial: json['is_trial'] as bool? ?? false,
+      trialEndDate: json['trial_end_date'] != null
+          ? DateTime.parse(json['trial_end_date'] as String)
+          : null,
+      subscriptionStartDate: json['subscription_start_date'] != null
+          ? DateTime.parse(json['subscription_start_date'] as String)
+          : null,
+      subscriptionEndDate: json['subscription_end_date'] != null
+          ? DateTime.parse(json['subscription_end_date'] as String)
+          : null,
+      ringIncluded: json['ring_included'] as bool? ?? false,
+      autoRenew: json['auto_renew'] as bool? ?? false,
+    );
+  }
+
+  Map<String, dynamic> toJson() {
+    return {
+      'tier': tier.name,
+      'is_active': isActive,
+      'is_trial': isTrial,
+      'trial_end_date': trialEndDate?.toIso8601String(),
+      'subscription_start_date': subscriptionStartDate?.toIso8601String(),
+      'subscription_end_date': subscriptionEndDate?.toIso8601String(),
+      'ring_included': ringIncluded,
+      'auto_renew': autoRenew,
+    };
+  }
+
+  // Helper methods for feature access
+  bool canAccessMedReminders(int currentCount) {
+    if (tier == SubscriptionTier.free) {
+      return currentCount < 2; // Free plan: max 2 reminders
+    }
+    return true; // Paid plans: unlimited
+  }
+
+  bool canAccessHabitTracker(int daysRequested) {
+    if (tier == SubscriptionTier.free) {
+      return daysRequested <= 3; // Free plan: 3 days only
+    }
+    return true; // Paid plans: unlimited
+  }
+
+  bool get canAccessFamilyLinking {
+    return tier != SubscriptionTier.free;
+  }
+
+  bool get canPostInCommunity {
+    return tier != SubscriptionTier.free;
+  }
+
+  bool get hasRingFeatures {
+    return tier != SubscriptionTier.free && ringIncluded;
+  }
+
+  String get statusDescription {
+    if (!isActive) return 'Inactive';
+    if (isTrial && trialEndDate != null) {
+      final daysLeft = trialEndDate!.difference(DateTime.now()).inDays;
+      return 'Trial ($daysLeft days left)';
+    }
+    return tier.displayName;
+  }
+}
+
 class AuthResponse {
   final String accessToken;
   final String tokenType;
@@ -120,6 +259,7 @@ class AuthResponse {
   final String email;
   final AccountRole? role;
   final bool profileComplete;
+  final SubscriptionTier subscriptionTier;
 
   const AuthResponse({
     required this.accessToken,
@@ -128,12 +268,22 @@ class AuthResponse {
     required this.email,
     this.role,
     required this.profileComplete,
+    this.subscriptionTier = SubscriptionTier.free,
   });
 
   factory AuthResponse.fromJson(Map<String, dynamic> json) {
     AccountRole? role;
     if (json['role'] != null) {
       role = json['role'] == 'teen' ? AccountRole.teen : AccountRole.parent;
+    }
+
+    SubscriptionTier subscriptionTier = SubscriptionTier.free;
+    if (json['subscription_tier'] != null) {
+      final tierStr = json['subscription_tier'] as String;
+      subscriptionTier = SubscriptionTier.values.firstWhere(
+        (e) => e.name == tierStr,
+        orElse: () => SubscriptionTier.free,
+      );
     }
 
     return AuthResponse(
@@ -143,6 +293,7 @@ class AuthResponse {
       email: json['email'] as String,
       role: role,
       profileComplete: json['profile_complete'] as bool? ?? false,
+      subscriptionTier: subscriptionTier,
     );
   }
 
@@ -154,6 +305,7 @@ class AuthResponse {
       'email': email,
       'role': role?.name,
       'profile_complete': profileComplete,
+      'subscription_tier': subscriptionTier.name,
     };
   }
 }
@@ -169,6 +321,7 @@ class UserProfile {
   final String? icd10Code;
   final String? advisorName;
   final bool profileComplete;
+  final SubscriptionStatus subscription;
   final DateTime createdAt;
   final DateTime updatedAt;
 
@@ -183,6 +336,7 @@ class UserProfile {
     this.icd10Code,
     this.advisorName,
     required this.profileComplete,
+    required this.subscription,
     required this.createdAt,
     required this.updatedAt,
   });
@@ -199,6 +353,9 @@ class UserProfile {
       icd10Code: json['icd10_code'] as String?,
       advisorName: json['advisor_name'] as String?,
       profileComplete: json['profile_complete'] as bool? ?? true,
+      subscription: json['subscription'] != null
+          ? SubscriptionStatus.fromJson(json['subscription'])
+          : const SubscriptionStatus(),
       createdAt: DateTime.parse(json['created_at'] as String),
       updatedAt: DateTime.parse(json['updated_at'] as String),
     );
@@ -216,6 +373,7 @@ class UserProfile {
       'icd10_code': icd10Code,
       'advisor_name': advisorName,
       'profile_complete': profileComplete,
+      'subscription': subscription.toJson(),
       'created_at': createdAt.toIso8601String(),
       'updated_at': updatedAt.toIso8601String(),
     };

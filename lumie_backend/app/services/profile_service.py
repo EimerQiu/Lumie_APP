@@ -13,6 +13,7 @@ from ..models.user import (
     UserProfile,
     HeightData,
     WeightData,
+    SubscriptionStatus,
 )
 
 
@@ -76,6 +77,10 @@ class ProfileService:
             {"$set": {"profile_complete": True, "updated_at": now}}
         )
 
+        # Get subscription status from user document
+        subscription_data = user.get("subscription", {})
+        subscription = SubscriptionStatus(**subscription_data) if subscription_data else SubscriptionStatus()
+
         return UserProfile(
             user_id=user_id,
             email=user["email"],
@@ -87,6 +92,7 @@ class ProfileService:
             icd10_code=data.icd10_code,
             advisor_name=data.advisor_name,
             profile_complete=True,
+            subscription=subscription,
             created_at=now,
             updated_at=now,
         )
@@ -141,6 +147,10 @@ class ProfileService:
             {"$set": {"profile_complete": True, "updated_at": now}}
         )
 
+        # Get subscription status from user document
+        subscription_data = user.get("subscription", {})
+        subscription = SubscriptionStatus(**subscription_data) if subscription_data else SubscriptionStatus()
+
         return UserProfile(
             user_id=user_id,
             email=user["email"],
@@ -152,6 +162,7 @@ class ProfileService:
             icd10_code=None,
             advisor_name=None,
             profile_complete=True,
+            subscription=subscription,
             created_at=now,
             updated_at=now,
         )
@@ -189,6 +200,10 @@ class ProfileService:
                 unit=profile["weight"]["unit"]
             )
 
+        # Get subscription status from user document
+        subscription_data = user.get("subscription", {})
+        subscription = SubscriptionStatus(**subscription_data) if subscription_data else SubscriptionStatus()
+
         return UserProfile(
             user_id=user_id,
             email=user["email"],
@@ -200,6 +215,7 @@ class ProfileService:
             icd10_code=profile.get("icd10_code"),
             advisor_name=profile.get("advisor_name"),
             profile_complete=True,
+            subscription=subscription,
             created_at=profile["created_at"],
             updated_at=profile["updated_at"],
         )

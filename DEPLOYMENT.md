@@ -7,10 +7,18 @@
 
 ## 🎉 Current Status
 
+### Website
 **Website:** 🟢 Live at https://yumo.org
 **SSL Certificate:** 🟢 Active (auto-renewal enabled)
 **DNS:** 🟢 Configured on GoDaddy
 **Redirect:** 🟢 yumo.life → yumo.org
+
+### Backend API
+**API Endpoint:** 🟢 Live at http://54.193.153.37:8000
+**Service:** 🟢 lumie-api.service (systemd)
+**Workers:** 🟢 4 uvicorn workers running
+**Database:** 🟢 MongoDB 8.0 running
+**Health Check:** 🟢 http://54.193.153.37:8000/api/v1/health
 
 ---
 
@@ -134,6 +142,205 @@ scp -i ~/.ssh/Lumie_Key.pem -r ./website/assets/* ubuntu@54.193.153.37:/home/ubu
    - **Mac:** `Cmd + Shift + R`
    - **Windows/Linux:** `Ctrl + Shift + R`
 3. Check that your changes appear
+
+---
+
+## Backend API Deployment
+
+### API Server Information
+
+**API Endpoint:** http://54.193.153.37:8000
+**API Documentation:** http://54.193.153.37:8000/docs (Swagger UI)
+**Health Check:** http://54.193.153.37:8000/api/v1/health
+
+**Backend Location:**
+- **Code Directory:** `/home/ubuntu/lumie_backend`
+- **Virtual Environment:** `/home/ubuntu/lumie_backend/venv`
+- **Service Config:** `/etc/systemd/system/lumie-api.service`
+- **Environment File:** `/home/ubuntu/lumie_backend/.env`
+
+**Tech Stack:**
+- **Framework:** FastAPI 0.109.0
+- **Server:** Uvicorn with 4 workers
+- **Database:** MongoDB 8.0
+- **Python:** 3.12
+- **Authentication:** JWT with bcrypt
+
+### Quick Backend Deployment
+
+Deploy backend code to production:
+
+```bash
+cd /Users/ciline/Documents/development/projects/Lumie_APP/lumie_backend
+bash deploy.sh
+```
+
+**What the deploy script does:**
+1. Creates tar archive (excludes venv, .git, __pycache__)
+2. Uploads to server via SCP
+3. Extracts files on server
+4. Sets up Python virtual environment
+5. Installs dependencies from requirements.txt
+6. Checks MongoDB status
+
+**After deployment, restart the service:**
+
+```bash
+ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.193.153.37 "sudo systemctl restart lumie-api"
+```
+
+### One-Time Server Setup
+
+**Initial server setup (already completed):**
+
+```bash
+cd /Users/ciline/Documents/development/projects/Lumie_APP/lumie_backend
+scp -i ~/.ssh/Lumie_Key.pem init-server.sh ubuntu@54.193.153.37:/home/ubuntu/lumie_backend/
+ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.193.153.37
+cd /home/ubuntu/lumie_backend
+bash init-server.sh
+```
+
+**What init-server.sh does:**
+1. Installs system dependencies (Python 3, pip, venv)
+2. Installs and configures MongoDB 8.0
+3. Creates .env file with secure SECRET_KEY
+4. Sets up systemd service (lumie-api.service)
+5. Configures auto-start on boot
+
+### Backend Service Management
+
+```bash
+# Check service status
+ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.193.153.37 "sudo systemctl status lumie-api"
+
+# Start service
+ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.193.153.37 "sudo systemctl start lumie-api"
+
+# Stop service
+ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.193.153.37 "sudo systemctl stop lumie-api"
+
+# Restart service (after code changes)
+ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.193.153.37 "sudo systemctl restart lumie-api"
+
+# View service logs (real-time)
+ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.193.153.37 "sudo journalctl -u lumie-api -f"
+
+# View recent logs (last 50 lines)
+ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.193.153.37 "sudo journalctl -u lumie-api -n 50 --no-pager"
+```
+
+### MongoDB Management
+
+```bash
+# Check MongoDB status
+ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.193.153.37 "sudo systemctl status mongod"
+
+# Start MongoDB
+ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.193.153.37 "sudo systemctl start mongod"
+
+# Connect to MongoDB shell
+ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.193.153.37 "mongosh"
+
+# View databases
+ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.193.153.37 "mongosh --eval 'show dbs'"
+```
+
+### Testing the API
+
+```bash
+# Health check
+curl http://54.193.153.37:8000/api/v1/health
+
+# Get activity types
+curl http://54.193.153.37:8000/api/v1/activity-types
+
+# View API documentation
+# Visit: http://54.193.153.37:8000/docs
+```
+
+### Environment Variables
+
+**Production environment file:** `/home/ubuntu/lumie_backend/.env`
+
+```bash
+# View current environment (sensitive info hidden)
+ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.193.153.37 "cat /home/ubuntu/lumie_backend/.env"
+
+# Edit environment variables
+ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.193.153.37 "nano /home/ubuntu/lumie_backend/.env"
+
+# After editing .env, restart service
+ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.193.153.37 "sudo systemctl restart lumie-api"
+```
+
+**Key environment variables:**
+- `MONGODB_URL` - MongoDB connection string
+- `MONGODB_DB_NAME` - Database name (lumie_production)
+- `SECRET_KEY` - JWT signing key (auto-generated)
+- `ACCESS_TOKEN_EXPIRE_MINUTES` - Token expiry (10080 = 7 days)
+- `CORS_ORIGINS` - Allowed origins for API access
+
+### Troubleshooting Backend Issues
+
+**API not responding:**
+
+```bash
+# 1. Check service status
+ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.193.153.37 "sudo systemctl status lumie-api"
+
+# 2. Check logs for errors
+ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.193.153.37 "sudo journalctl -u lumie-api -n 100 --no-pager"
+
+# 3. Check if port 8000 is listening
+ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.193.153.37 "sudo lsof -i :8000"
+
+# 4. Check MongoDB is running
+ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.193.153.37 "sudo systemctl status mongod"
+```
+
+**Port conflict (Address already in use):**
+
+```bash
+# Find process using port 8000
+ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.193.153.37 "sudo lsof -i :8000"
+
+# Kill the process (replace PID)
+ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.193.153.37 "sudo kill -9 <PID>"
+
+# Restart service
+ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.193.153.37 "sudo systemctl restart lumie-api"
+```
+
+**Service keeps restarting:**
+
+```bash
+# View detailed logs
+ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.193.153.37 "sudo journalctl -u lumie-api -n 200 --no-pager | grep -A 10 'ERROR'"
+
+# Check Python errors
+ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.193.153.37 "cd /home/ubuntu/lumie_backend && source venv/bin/activate && python -c 'import app.main'"
+```
+
+### API Endpoints
+
+**Available endpoints:**
+
+```
+GET  /api/v1/health                  - Health check
+GET  /api/v1/activity-types          - Get activity types
+GET  /api/v1/activity/daily          - Daily activity summary
+GET  /api/v1/activity/weekly         - Weekly activity summaries
+POST /api/v1/activity                - Create manual activity
+GET  /api/v1/ring/status             - Ring connection status
+POST /api/v1/auth/signup             - User registration
+POST /api/v1/auth/login              - User login
+GET  /api/v1/profile                 - Get user profile
+POST /api/v1/profile/teen            - Create teen profile
+POST /api/v1/profile/parent          - Create parent profile
+```
+
+**Full API documentation:** http://54.193.153.37:8000/docs
 
 ---
 

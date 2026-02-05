@@ -548,6 +548,15 @@ class SettingsScreen extends StatelessWidget {
                                 color: AppColors.textOnYellow.withValues(alpha: 0.8),
                               ),
                             ),
+                            const SizedBox(height: 4),
+                            Text(
+                              'Subscription: ${profile?.subscription.tier.displayName ?? 'Free Plan'}',
+                              style: TextStyle(
+                                fontSize: 13,
+                                fontWeight: FontWeight.w500,
+                                color: AppColors.textOnYellow.withValues(alpha: 0.9),
+                              ),
+                            ),
                           ],
                         ),
                       ),
@@ -566,7 +575,7 @@ class SettingsScreen extends StatelessWidget {
               },
             ),
 
-            const SizedBox(height: 24),
+            const SizedBox(height: 16),
 
             // Settings Options
             Expanded(

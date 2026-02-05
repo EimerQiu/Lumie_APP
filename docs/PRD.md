@@ -75,6 +75,159 @@ Lumie offers three subscription tiers with different levels of feature access. A
 - Ring replacement: $49 for lost or damaged rings
 - FSA/HSA eligible
 
+### Technical Implementation
+
+#### Subscription Data Models
+
+**Backend (Python/Pydantic):**
+
+```python
+class SubscriptionTier(str, Enum):
+    """User subscription tier."""
+    FREE = "free"
+    MONTHLY = "monthly"
+    ANNUAL = "annual"
+
+class SubscriptionStatus(BaseModel):
+    """User subscription status and details."""
+    tier: SubscriptionTier = SubscriptionTier.FREE
+    is_active: bool = True
+    is_trial: bool = False
+    trial_end_date: Optional[datetime] = None
+    subscription_start_date: Optional[datetime] = None
+    subscription_end_date: Optional[datetime] = None
+    ring_included: bool = False  # Annual plan includes free ring
+    auto_renew: bool = False
+```
+
+**Frontend (Flutter/Dart):**
+
+```dart
+enum SubscriptionTier {
+  free,
+  monthly,
+  annual;
+}
+
+class SubscriptionStatus {
+  final SubscriptionTier tier;
+  final bool isActive;
+  final bool isTrial;
+  final DateTime? trialEndDate;
+  final DateTime? subscriptionStartDate;
+  final DateTime? subscriptionEndDate;
+  final bool ringIncluded;
+  final bool autoRenew;
+}
+```
+
+#### User Profile Integration
+
+The `subscription` field has been added to the User Profile models:
+
+**Backend:**
+- `UserInDB.subscription` - SubscriptionStatus object
+- `UserProfile.subscription` - SubscriptionStatus object
+- `TokenResponse.subscription_tier` - Quick tier access in auth response
+
+**Frontend:**
+- `UserProfile.subscription` - SubscriptionStatus object
+- `AuthResponse.subscriptionTier` - Quick tier access in auth response
+
+#### Feature Access Control
+
+Feature gates are implemented through helper methods on `SubscriptionStatus`:
+
+```dart
+// Example feature access methods
+bool canAccessMedReminders(int currentCount);
+bool canAccessHabitTracker(int daysRequested);
+bool get canAccessFamilyLinking;
+bool get canPostInCommunity;
+bool get hasRingFeatures;
+```
+
+#### Database Schema
+
+**MongoDB `users` collection:**
+```json
+{
+  "user_id": "string",
+  "email": "string",
+  "role": "teen" | "parent",
+  "subscription": {
+    "tier": "free" | "monthly" | "annual",
+    "is_active": true,
+    "is_trial": false,
+    "trial_end_date": "ISO8601 datetime",
+    "subscription_start_date": "ISO8601 datetime",
+    "subscription_end_date": "ISO8601 datetime",
+    "ring_included": false,
+    "auto_renew": false
+  },
+  "created_at": "ISO8601 datetime",
+  "updated_at": "ISO8601 datetime"
+}
+```
+
+#### UI Components
+
+**Subscription Display:**
+- `SubscriptionCard` widget displays current plan with features
+- `SubscriptionBadge` shows tier status throughout the app
+- Settings screen includes subscription management section
+- Upgrade prompts appear when accessing premium features
+
+#### Required API Endpoints (To Be Implemented)
+
+```
+POST /subscription/upgrade
+  - Upgrade to Monthly or Annual plan
+  - Initiate payment flow
+
+POST /subscription/downgrade
+  - Schedule downgrade at next billing cycle
+
+GET /subscription/status
+  - Retrieve current subscription details
+
+POST /subscription/cancel
+  - Cancel auto-renewal
+
+POST /subscription/trial/activate
+  - Start 14-day free trial
+```
+
+#### Feature Gate Implementation
+
+Each feature that requires subscription gating must:
+
+1. Check `UserProfile.subscription.tier` before access
+2. Display appropriate upgrade prompt if access denied
+3. Use helper methods like `canAccessFamilyLinking` for checks
+4. Backend must validate subscription tier in API endpoints
+
+**Example Implementation:**
+
+```dart
+// Frontend feature gate example
+if (!userProfile.subscription.canAccessFamilyLinking) {
+  showUpgradeDialog(context, feature: 'Family Linking');
+  return;
+}
+```
+
+```python
+# Backend API validation example
+@router.post("/family/create")
+async def create_family(user: UserInDB):
+    if user.subscription.tier == SubscriptionTier.FREE:
+        raise HTTPException(
+            status_code=403,
+            detail="Family Linking requires paid subscription"
+        )
+```
+
 ---
 
 ## User Profile
@@ -344,12 +497,26 @@ UserProfile {
   weight: { value: number, unit: "kg" | "lb" } | null,
   icd10Code: string | null,
   advisorName: string | null,
+  subscription: {
+    tier: "free" | "monthly" | "annual",
+    isActive: boolean,
+    isTrial: boolean,
+    trialEndDate: timestamp | null,
+    subscriptionStartDate: timestamp | null,
+    subscriptionEndDate: timestamp | null,
+    ringIncluded: boolean,
+    autoRenew: boolean
+  },
   createdAt: timestamp,
   updatedAt: timestamp
 }
 ```
 
-Note: Height and weight are nullable to support parent accounts that do not use a ring.
+**Notes:**
+- Height and weight are nullable to support parent accounts that do not use a ring
+- Subscription defaults to free tier for all new users
+- Trial period is 14 days for first-time paid subscribers
+- `ringIncluded` tracks if user has received the free Annual plan ring
 
 #### 9.8 Historical Data Handling (Non-MVP Detail)
 

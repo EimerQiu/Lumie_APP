@@ -11,6 +11,13 @@ class AccountRole(str, Enum):
     PARENT = "parent"
 
 
+class SubscriptionTier(str, Enum):
+    """User subscription tier."""
+    FREE = "free"
+    MONTHLY = "monthly"
+    ANNUAL = "annual"
+
+
 class HeightUnit(str, Enum):
     """Height measurement unit."""
     CM = "cm"
@@ -21,6 +28,32 @@ class WeightUnit(str, Enum):
     """Weight measurement unit."""
     KG = "kg"
     LB = "lb"
+
+
+# ============ Shared Models ============
+
+class HeightData(BaseModel):
+    """Height measurement data."""
+    value: float = Field(..., gt=0)
+    unit: HeightUnit
+
+
+class WeightData(BaseModel):
+    """Weight measurement data."""
+    value: float = Field(..., gt=0)
+    unit: WeightUnit
+
+
+class SubscriptionStatus(BaseModel):
+    """User subscription status and details."""
+    tier: SubscriptionTier = SubscriptionTier.FREE
+    is_active: bool = True
+    is_trial: bool = False
+    trial_end_date: Optional[datetime] = None
+    subscription_start_date: Optional[datetime] = None
+    subscription_end_date: Optional[datetime] = None
+    ring_included: bool = False  # Annual plan includes free ring
+    auto_renew: bool = False
 
 
 # ============ Authentication Models ============
@@ -46,6 +79,7 @@ class TokenResponse(BaseModel):
     email: str
     role: Optional[AccountRole] = None
     profile_complete: bool = False
+    subscription_tier: SubscriptionTier = SubscriptionTier.FREE
 
 
 class UserInDB(BaseModel):
@@ -55,23 +89,12 @@ class UserInDB(BaseModel):
     hashed_password: str
     role: Optional[AccountRole] = None
     profile_complete: bool = False
+    subscription: SubscriptionStatus = Field(default_factory=lambda: SubscriptionStatus())
     created_at: datetime
     updated_at: datetime
 
 
 # ============ Profile Models ============
-
-class HeightData(BaseModel):
-    """Height measurement data."""
-    value: float = Field(..., gt=0)
-    unit: HeightUnit
-
-
-class WeightData(BaseModel):
-    """Weight measurement data."""
-    value: float = Field(..., gt=0)
-    unit: WeightUnit
-
 
 class AccountTypeSelection(BaseModel):
     """Request model for selecting account type after signup."""
@@ -118,6 +141,7 @@ class UserProfile(BaseModel):
     icd10_code: Optional[str] = None
     advisor_name: Optional[str] = None
     profile_complete: bool = True
+    subscription: SubscriptionStatus = Field(default_factory=lambda: SubscriptionStatus())
     created_at: datetime
     updated_at: datetime
 
@@ -132,6 +156,7 @@ class ProfileInDB(BaseModel):
     weight: Optional[dict] = None  # {value, unit}
     icd10_code: Optional[str] = None
     advisor_name: Optional[str] = None
+    subscription: Optional[dict] = None  # SubscriptionStatus as dict
     created_at: datetime
     updated_at: datetime
 

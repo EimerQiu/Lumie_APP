@@ -284,6 +284,7 @@ class ProfileService {
       weight: weight,
       icd10Code: icd10Code,
       advisorName: advisorName,
+      subscription: const SubscriptionStatus(), // Default to Free tier
       profileComplete: true,
       createdAt: DateTime.now(),
       updatedAt: DateTime.now(),
@@ -311,6 +312,7 @@ class ProfileService {
       age: age,
       height: height,
       weight: weight,
+      subscription: const SubscriptionStatus(), // Default to Free tier
       profileComplete: true,
       createdAt: DateTime.now(),
       updatedAt: DateTime.now(),

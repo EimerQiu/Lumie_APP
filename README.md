@@ -46,6 +46,34 @@ Growing up with a chronic condition shouldn't mean growing up with shame, fear, 
 | **Personal Advisor** | Contextual tips based on your data |
 | **Peer Chat (Optional)** | Connect safely with strict boundaries |
 
+### Subscription System (NEW ✨)
+
+**Three-Tier Model:**
+
+| Feature | Free | Monthly ($16.99/mo) | Annual ($179/yr) |
+|---------|------|---------------------|------------------|
+| **Med Reminders** | 2 max | Unlimited | Unlimited |
+| **Habit Tracker** | 3 days | Unlimited | Unlimited |
+| **Peer Community** | View only | Full access | Full access |
+| **Family Linking** | ❌ | ✅ | ✅ |
+| **Lumie Ring** | ❌ | Purchase required | **FREE** |
+| **Ring Features** | ❌ | With ring purchase | ✅ |
+
+**Implementation Status:**
+- ✅ Backend models (Python/Pydantic)
+- ✅ Frontend models (Flutter/Dart)
+- ✅ Database schema (MongoDB)
+- ✅ UI components (SubscriptionCard, SubscriptionBadge)
+- ✅ Feature gate helpers
+- 🚧 Payment integration (planned)
+- 🚧 Subscription management API (planned)
+
+**Key Features:**
+- Default to Free tier for all new users
+- 14-day free trial for first-time paid subscribers
+- Feature gates implemented with helper methods
+- Subscription status visible in Settings screen
+
 ### Privacy & Safety (Teen-Focused)
 
 - ✅ No calorie burn tracking
@@ -123,6 +151,9 @@ Growing up with a chronic condition shouldn't mean growing up with shame, fear, 
 | SSL | 🟢 Active (auto-renewal enabled) |
 | DNS | 🟢 Configured on GoDaddy |
 | Server | 🟢 AWS EC2 (54.193.153.37) |
+| **Backend API** | 🟢 http://54.193.153.37:8000 (live) |
+| **API Service** | 🟢 lumie-api.service (4 workers) |
+| **Database** | 🟢 MongoDB 8.0 (running) |
 
 ---
 
@@ -259,6 +290,34 @@ flutter run -d android  # Android Emulator
 flutter run -d chrome   # Web Browser
 ```
 
+### Backend Deployment (Production)
+
+**Deploy backend to AWS:**
+```bash
+cd lumie_backend
+bash deploy.sh
+```
+
+**Restart API service:**
+```bash
+ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.193.153.37 "sudo systemctl restart lumie-api"
+```
+
+**Check service status:**
+```bash
+ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.193.153.37 "sudo systemctl status lumie-api"
+```
+
+**View logs:**
+```bash
+ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.193.153.37 "sudo journalctl -u lumie-api -f"
+```
+
+**Production API:**
+- Endpoint: http://54.193.153.37:8000
+- Health: http://54.193.153.37:8000/api/v1/health
+- Docs: http://54.193.153.37:8000/docs
+
 ---
 
 ## 🔧 API Endpoints
@@ -277,8 +336,15 @@ flutter run -d chrome   # Web Browser
 | `/api/v1/walk-test/best` | GET | Get best walk test result |
 
 **API Documentation:**
-- Swagger UI: http://localhost:8000/docs
+- Local Dev: http://localhost:8000/docs
+- Production: http://54.193.153.37:8000/docs
 - ReDoc: http://localhost:8000/redoc
+
+**Production Health Check:**
+```bash
+curl http://54.193.153.37:8000/api/v1/health
+# Returns: {"status":"healthy","service":"lumie-activity-api","version":"1.0.0"}
+```
 
 ---
 
@@ -454,10 +520,17 @@ sudo certbot renew            # Manual renewal (auto-renews)
 - [x] Activity app demo (Flutter + Python)
 - [x] 6-Minute Walk Test feature
 - [x] Ring integration mockup
+- [x] **Backend API deployment (production)**
+- [x] **MongoDB 8.0 setup**
+- [x] **Systemd service configuration**
+- [x] **Subscription system (3-tier model)**
+- [x] **User profile with subscription tracking**
+- [x] **Feature gate implementation**
 
 ### In Progress 🚧
+- [ ] Payment integration (Stripe/Apple Pay)
+- [ ] Subscription management API
 - [ ] Production app development
-- [ ] Backend API expansion
 - [ ] Analytics integration
 
 ### Planned 📋
@@ -534,13 +607,25 @@ Proprietary - © 2026 Yumo.org. All rights reserved.
 
 ## 🌟 Status
 
+### Website
 **Primary Domain:** 🟢 https://yumo.org (live)
 **Redirect Domain:** 🟢 yumo.life → yumo.org
 **SSL Certificate:** 🟢 Active (auto-renewal enabled)
 **Caching:** ⚠️ Disabled (DEV mode for quick updates)
-**App Demo:** 🟢 Functional (local development)
 
-**Last Updated:** January 28, 2026
+### Backend API
+**API Endpoint:** 🟢 http://54.193.153.37:8000 (production)
+**Service:** 🟢 lumie-api.service (4 uvicorn workers)
+**Database:** 🟢 MongoDB 8.0 (running)
+**Health Check:** 🟢 Operational
+**Documentation:** 🟢 Available at /docs
+
+### App
+**Flutter App:** 🟢 iOS build successful
+**Demo Mode:** 🟢 Functional (local development)
+**Subscription:** 🟢 3-tier system implemented
+
+**Last Updated:** February 5, 2026
 
 ---
 
