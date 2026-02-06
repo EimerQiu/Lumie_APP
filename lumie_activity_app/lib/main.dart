@@ -550,7 +550,7 @@ class SettingsScreen extends StatelessWidget {
                             ),
                             const SizedBox(height: 4),
                             Text(
-                              'Subscription: ${profile?.subscription.tier.displayName ?? 'Free Plan'}',
+                              'Subscription: ${profile?.subscription.tier.fullDisplayName ?? 'Free'}',
                               style: TextStyle(
                                 fontSize: 13,
                                 fontWeight: FontWeight.w500,

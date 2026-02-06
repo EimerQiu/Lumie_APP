@@ -6,17 +6,22 @@
 
 Lumie offers three subscription tiers with different levels of feature access. All users can create an account and access basic features, while premium features require a paid subscription.
 
+**Plan Branding:**
+- Free tier: **"Free"**
+- Monthly plan: **"Pro"** ($16.99/month)
+- Annual plan: **"Pro"** ($179/year, includes FREE Lumie Ring)
+
 ### Subscription Plans
 
-#### Free Plan ($0)
+#### Free ($0)
 - **Med Reminders**: Limited to 2 maximum
 - **Habit Tracker**: Limited to 3 days of data
 - **Peer Community**: View-only access (cannot post or message)
 - **Lumie Ring**: Not included
 - **Ring-Based Features**: Not available (Activity Tracking, Sleep Monitoring, Fatigue Index, Stress/Anxiety, AI Advisor, Advanced Analytics)
-- **Family Linking**: Not available
+- **Family Linking**: Limited to 1 team
 
-#### Monthly Plan ($16.99/month)
+#### Pro - Monthly ($16.99/month)
 - **Trial Period**: 14 days free
 - **Med Reminders**: Unlimited
 - **Habit Tracker**: Unlimited
@@ -31,7 +36,7 @@ Lumie offers three subscription tiers with different levels of feature access. A
   - AI Advisor
   - Advanced Analytics
 
-#### Annual Plan ($179/year)
+#### Pro - Annual ($179/year)
 - **Trial Period**: 14 days free
 - **Lumie Ring**: FREE with first-time purchase
 - **Med Reminders**: Unlimited
@@ -49,12 +54,12 @@ Lumie offers three subscription tiers with different levels of feature access. A
 
 ### Feature Gate Requirements
 
-| Feature | Free | Monthly | Annual |
-|---------|------|---------|--------|
+| Feature | Free | Pro (Monthly) | Pro (Annual) |
+|---------|------|---------------|--------------|
 | Med Reminders | 2 max | Unlimited | Unlimited |
 | Habit Tracker | 3 days | Unlimited | Unlimited |
 | Peer Community | View only | Full access | Full access |
-| Family Linking | ❌ | ✅ | ✅ |
+| Family Linking | 1 team max | Unlimited | Unlimited |
 | Lumie Ring | ❌ | Purchase required | FREE |
 | Activity Tracking | ❌ | ❌* | ✅ |
 | Sleep Monitoring | ❌ | ❌* | ✅ |

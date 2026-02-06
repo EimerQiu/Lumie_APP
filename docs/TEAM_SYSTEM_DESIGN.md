@@ -39,10 +39,21 @@ The Team System allows teens and parents to form **private teams** for shared su
 
 - Users can belong to multiple teams
 - **Free users can create/join 1 team maximum**
-- **Paid users (Monthly/Annual) can create/join unlimited teams**
+- **Pro users (Monthly/Annual) can create/join unlimited teams**
 - Pending members have zero access to team data
 - Admins cannot override privacy settings
 - Team membership alone never implies data access
+
+### 1.4 Subscription Branding
+
+**User-Facing Display Names:**
+- Free tier: **"Free"**
+- Monthly plan: **"Pro"** (displayed as "Pro • $16.99/month")
+- Annual plan: **"Pro"** (displayed as "Pro • $179/year")
+
+**Technical/Internal References:**
+- Code and documentation may refer to "Free users", "Pro users", or "Paid users" for clarity
+- Database tier values remain: `free`, `monthly`, `annual`
 
 ---
 
@@ -373,7 +384,7 @@ async def create_team(user_id: str, data: TeamCreate):
         if current_team_count >= 1:
             raise HTTPException(
                 status_code=403,
-                detail="Free users can create 1 team maximum. Upgrade to create more teams."
+                detail="Free users can create 1 team maximum. Upgrade to Pro for unlimited teams."
             )
 
     # Paid users have no limit
@@ -567,7 +578,7 @@ async def invite_member(team_id: str, inviter_user_id: str, email: str):
         if invited_user_team_count >= 1:
             raise HTTPException(
                 status_code=403,
-                detail=f"{invited_user.name} has reached their team limit (1 team max for Free users). They must upgrade to join more teams."
+                detail=f"{invited_user.name} has reached their team limit (1 team max for Free users). They must upgrade to Pro to join more teams."
             )
 
     # Continue with invitation...
@@ -624,7 +635,7 @@ async def accept_invitation(team_id: str, user_id: str):
         if current_team_count >= 1:
             raise HTTPException(
                 status_code=403,
-                detail="You have reached your team limit (1 team max for Free users). Upgrade to join more teams."
+                detail="You have reached your team limit (1 team max for Free users). Upgrade to Pro for unlimited teams."
             )
 
     # Update status: pending → member
@@ -923,9 +934,9 @@ Settings
 **UI Elements:**
 - **Header:** "My Teams"
 - **Subscription Status Banner:**
-  - If Free tier and has 1 team: Show "Team limit reached (1/1). Upgrade to join more teams"
-  - If Free tier and has 0 teams: Show "Free plan: 1 team available"
-  - If Paid tier: Show "Unlimited teams"
+  - If Free tier and has 1 team: Show "Team limit reached (1/1). Upgrade to Pro for unlimited teams"
+  - If Free tier and has 0 teams: Show "Free: 1 team available"
+  - If Pro tier: Show "Pro: Unlimited teams"
 - **Active Teams Section:**
   - List of teams (card layout)
   - Each card shows:
@@ -1383,7 +1394,7 @@ async def check_team_limit(user: UserInDB, db):
         if current_team_count >= 1:
             raise HTTPException(
                 status_code=403,
-                detail="Team limit reached (1 team max for Free users). Upgrade to join more teams."
+                detail="Team limit reached (1 team max for Free users). Upgrade to Pro for unlimited teams."
             )
 
     # Paid users have no limit

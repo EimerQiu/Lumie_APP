@@ -31,11 +31,23 @@ enum SubscriptionTier {
   String get displayName {
     switch (this) {
       case SubscriptionTier.free:
-        return 'Free Plan';
+        return 'Free';
       case SubscriptionTier.monthly:
-        return 'Monthly Plan';
+        return 'Pro';
       case SubscriptionTier.annual:
-        return 'Annual Plan';
+        return 'Pro';
+    }
+  }
+
+  // Display name with billing context
+  String get fullDisplayName {
+    switch (this) {
+      case SubscriptionTier.free:
+        return 'Free';
+      case SubscriptionTier.monthly:
+        return 'Pro • \$16.99/month';
+      case SubscriptionTier.annual:
+        return 'Pro • \$179/year';
     }
   }
 
