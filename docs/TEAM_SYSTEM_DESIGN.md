@@ -332,6 +332,165 @@ db.team_members.createIndex({ invited_at: 1 })
 
 ## 3. API Endpoints Design
 
+### 3.0 Standardized Subscription Error Response
+
+When a subscription limit is reached, endpoints return a `403 Forbidden` with a structured error payload that includes upgrade information.
+
+**Error Response Structure:**
+```json
+{
+  "error": {
+    "code": "SUBSCRIPTION_LIMIT_REACHED",
+    "message": "You've reached your team limit (1 team maximum)",
+    "detail": "Free users can create/join 1 team. Upgrade to Pro for unlimited teams.",
+    "subscription": {
+      "current_tier": "free",
+      "required_tier": "pro",
+      "upgrade_required": true
+    },
+    "action": {
+      "type": "upgrade",
+      "label": "Upgrade to Pro",
+      "destination": "/subscription/upgrade"
+    }
+  }
+}
+```
+
+**Python Error Model:**
+```python
+from pydantic import BaseModel
+from typing import Optional
+
+class SubscriptionActionInfo(BaseModel):
+    """Action information for subscription errors"""
+    type: str = "upgrade"  # "upgrade" | "downgrade" | "none"
+    label: str = "Upgrade to Pro"
+    destination: str = "/subscription/upgrade"
+
+class SubscriptionInfo(BaseModel):
+    """Subscription details in error response"""
+    current_tier: str  # "free" | "monthly" | "annual"
+    required_tier: str  # "monthly" | "annual"
+    upgrade_required: bool = True
+
+class SubscriptionErrorDetail(BaseModel):
+    """Detailed subscription error information"""
+    code: str  # "SUBSCRIPTION_LIMIT_REACHED" | "FEATURE_REQUIRES_PRO"
+    message: str  # Short user-facing message
+    detail: str  # Detailed explanation
+    subscription: SubscriptionInfo
+    action: SubscriptionActionInfo
+
+class SubscriptionError(BaseModel):
+    """Top-level subscription error response"""
+    error: SubscriptionErrorDetail
+```
+
+**Usage in Endpoints:**
+```python
+from fastapi import HTTPException
+
+def raise_subscription_limit_error(
+    user_tier: str,
+    message: str = "You've reached your team limit",
+    detail: str = "Free users can create/join 1 team. Upgrade to Pro for unlimited teams."
+):
+    """Raise a standardized subscription limit error"""
+    error_response = {
+        "error": {
+            "code": "SUBSCRIPTION_LIMIT_REACHED",
+            "message": message,
+            "detail": detail,
+            "subscription": {
+                "current_tier": user_tier,
+                "required_tier": "pro",
+                "upgrade_required": True
+            },
+            "action": {
+                "type": "upgrade",
+                "label": "Upgrade to Pro",
+                "destination": "/subscription/upgrade"
+            }
+        }
+    }
+    raise HTTPException(status_code=403, detail=error_response)
+```
+
+**Flutter/Dart Error Model:**
+```dart
+class SubscriptionErrorResponse {
+  final String code;
+  final String message;
+  final String detail;
+  final SubscriptionInfo subscription;
+  final SubscriptionAction action;
+
+  const SubscriptionErrorResponse({
+    required this.code,
+    required this.message,
+    required this.detail,
+    required this.subscription,
+    required this.action,
+  });
+
+  factory SubscriptionErrorResponse.fromJson(Map<String, dynamic> json) {
+    final error = json['error'] as Map<String, dynamic>;
+    return SubscriptionErrorResponse(
+      code: error['code'] as String,
+      message: error['message'] as String,
+      detail: error['detail'] as String,
+      subscription: SubscriptionInfo.fromJson(error['subscription']),
+      action: SubscriptionAction.fromJson(error['action']),
+    );
+  }
+
+  bool get isSubscriptionError => code == 'SUBSCRIPTION_LIMIT_REACHED';
+}
+
+class SubscriptionInfo {
+  final String currentTier;
+  final String requiredTier;
+  final bool upgradeRequired;
+
+  const SubscriptionInfo({
+    required this.currentTier,
+    required this.requiredTier,
+    required this.upgradeRequired,
+  });
+
+  factory SubscriptionInfo.fromJson(Map<String, dynamic> json) {
+    return SubscriptionInfo(
+      currentTier: json['current_tier'] as String,
+      requiredTier: json['required_tier'] as String,
+      upgradeRequired: json['upgrade_required'] as bool,
+    );
+  }
+}
+
+class SubscriptionAction {
+  final String type;
+  final String label;
+  final String destination;
+
+  const SubscriptionAction({
+    required this.type,
+    required this.label,
+    required this.destination,
+  });
+
+  factory SubscriptionAction.fromJson(Map<String, dynamic> json) {
+    return SubscriptionAction(
+      type: json['type'] as String,
+      label: json['label'] as String,
+      destination: json['destination'] as String,
+    );
+  }
+}
+```
+
+---
+
 ### 3.1 Team Management Endpoints
 
 #### **POST /api/teams** - Create a new team
@@ -369,8 +528,29 @@ db.team_members.createIndex({ invited_at: 1 })
 
 **Error Responses:**
 - `401 Unauthorized` - Not authenticated
-- `403 Forbidden` - Free user already has 1 team (team limit reached)
+- `403 Forbidden` - Free user already has 1 team (team limit reached) - **Returns standardized subscription error**
 - `400 Bad Request` - Invalid team name
+
+**403 Subscription Limit Error Example:**
+```json
+{
+  "error": {
+    "code": "SUBSCRIPTION_LIMIT_REACHED",
+    "message": "You've reached your team limit (1/1 teams)",
+    "detail": "Free users can create 1 team. Upgrade to Pro for unlimited teams.",
+    "subscription": {
+      "current_tier": "free",
+      "required_tier": "pro",
+      "upgrade_required": true
+    },
+    "action": {
+      "type": "upgrade",
+      "label": "Upgrade to Pro",
+      "destination": "/subscription/upgrade"
+    }
+  }
+}
+```
 
 **Business Logic:**
 ```python
@@ -382,9 +562,10 @@ async def create_team(user_id: str, data: TeamCreate):
 
     if user.subscription.tier == SubscriptionTier.FREE:
         if current_team_count >= 1:
-            raise HTTPException(
-                status_code=403,
-                detail="Free users can create 1 team maximum. Upgrade to Pro for unlimited teams."
+            raise_subscription_limit_error(
+                user_tier="free",
+                message=f"You've reached your team limit ({current_team_count}/1 teams)",
+                detail="Free users can create 1 team. Upgrade to Pro for unlimited teams."
             )
 
     # Paid users have no limit
@@ -527,10 +708,7 @@ async def create_team(user_id: str, data: TeamCreate):
 - ✓ Invited email must be a registered Lumie user
 - ✗ Cannot invite users already in the team
 - ✗ Cannot re-invite pending invitations
-- **Invited user team limit check:**
-  - ✓ If invited user has Free subscription: Check if they already have 1 team
-  - ✓ If invited user has Paid subscription: No limit
-  - ✗ Reject if Free user already has 1 team
+- **No subscription check on invite:** Invitations can be sent to any user regardless of their subscription tier or team count. The subscription check happens when the invitee accepts the invitation.
 
 **Request Body:**
 ```json
@@ -554,9 +732,9 @@ async def create_team(user_id: str, data: TeamCreate):
 ```
 
 **Error Responses:**
-- `403 Forbidden` - Not an admin OR invited user has reached team limit (Free user already has 1 team)
-- `404 Not Found` - Email not registered
-- `409 Conflict` - User already in team or has pending invitation
+- `403 Forbidden` - Not an admin
+- `409 Conflict` - Email already in team or has pending invitation
+- ✅ **No 404 error** - Unregistered users can be invited
 
 **Business Logic:**
 ```python
@@ -566,22 +744,99 @@ async def invite_member(team_id: str, inviter_user_id: str, email: str):
     if inviter_member.role != TeamRole.ADMIN:
         raise HTTPException(status_code=403, detail="Only admins can invite members")
 
-    # Find invited user
+    # Get team and inviter details for email
+    team = await get_team(team_id)
+    inviter = await get_user(inviter_user_id)
+
+    # Check if email is already registered
     invited_user = await get_user_by_email(email)
-    if not invited_user:
-        raise HTTPException(status_code=404, detail="User not found")
 
-    # Check invited user's team limit
-    invited_user_team_count = await get_user_team_count(invited_user.user_id)
+    if invited_user:
+        # User is registered - check if already in team
+        existing_member = await get_team_member(team_id, invited_user.user_id)
+        if existing_member:
+            if existing_member.status == MemberStatus.MEMBER:
+                raise HTTPException(status_code=409, detail="User is already a team member")
+            elif existing_member.status == MemberStatus.PENDING:
+                raise HTTPException(status_code=409, detail="User already has a pending invitation")
 
-    if invited_user.subscription.tier == SubscriptionTier.FREE:
-        if invited_user_team_count >= 1:
-            raise HTTPException(
-                status_code=403,
-                detail=f"{invited_user.name} has reached their team limit (1 team max for Free users). They must upgrade to Pro to join more teams."
-            )
+        # Create pending invitation for registered user
+        await create_team_member(
+            team_id=team_id,
+            user_id=invited_user.user_id,
+            role=TeamRole.MEMBER,
+            status=MemberStatus.PENDING,
+            invited_by=inviter_user_id,
+            invited_at=datetime.utcnow()
+        )
+    else:
+        # User is NOT registered - check if email already invited
+        existing_invitation = await get_pending_invitation_by_email(team_id, email)
+        if existing_invitation:
+            raise HTTPException(status_code=409, detail="Email already has a pending invitation")
 
-    # Continue with invitation...
+        # Create pending invitation with email (no user_id yet)
+        await create_pending_invitation_by_email(
+            team_id=team_id,
+            email=email,
+            invited_by=inviter_user_id,
+            invited_at=datetime.utcnow()
+        )
+
+    # Generate invitation token (JWT with team_id and email)
+    invitation_token = generate_invitation_token(
+        team_id=team_id,
+        email=email,
+        expires_in_days=30
+    )
+
+    # Generate invitation link
+    invitation_link = f"https://lumie.app/invite/{invitation_token}"
+    # Or deep link: lumie://invite/{invitation_token}
+
+    # Send invitation email
+    await send_invitation_email(
+        to_email=email,
+        inviter_name=inviter.name,
+        team_name=team.name,
+        invitation_link=invitation_link,
+        is_registered=invited_user is not None
+    )
+
+    return {
+        "team_id": team_id,
+        "invited_email": email,
+        "is_registered": invited_user is not None,
+        "status": "pending",
+        "invited_at": datetime.utcnow().isoformat(),
+        "invitation_link": invitation_link
+    }
+```
+
+**Invitation Token Structure (JWT):**
+```python
+def generate_invitation_token(team_id: str, email: str, expires_in_days: int = 30) -> str:
+    """Generate a JWT token for team invitation"""
+    payload = {
+        "team_id": team_id,
+        "email": email,
+        "type": "team_invitation",
+        "exp": datetime.utcnow() + timedelta(days=expires_in_days),
+        "iat": datetime.utcnow()
+    }
+    return jwt.encode(payload, SECRET_KEY, algorithm="HS256")
+
+def decode_invitation_token(token: str) -> dict:
+    """Decode and validate invitation token"""
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=["HS256"])
+        if payload.get("type") != "team_invitation":
+            return None
+        return payload
+    except jwt.ExpiredSignatureError:
+        return None
+    except jwt.InvalidTokenError:
+        return None
 ```
 
 ---
@@ -619,9 +874,30 @@ async def invite_member(team_id: str, inviter_user_id: str, email: str):
 ```
 
 **Error Responses:**
-- `403 Forbidden` - No pending invitation OR team limit reached (Free user already has 1 team)
+- `403 Forbidden` - No pending invitation OR team limit reached - **Returns standardized subscription error**
 - `404 Not Found` - Team or invitation doesn't exist
 - `410 Gone` - Invitation expired
+
+**403 Subscription Limit Error Example:**
+```json
+{
+  "error": {
+    "code": "SUBSCRIPTION_LIMIT_REACHED",
+    "message": "You've reached your team limit (1/1 teams)",
+    "detail": "Free users can join 1 team. Upgrade to Pro for unlimited teams.",
+    "subscription": {
+      "current_tier": "free",
+      "required_tier": "pro",
+      "upgrade_required": true
+    },
+    "action": {
+      "type": "upgrade",
+      "label": "Upgrade to Pro",
+      "destination": "/subscription/upgrade"
+    }
+  }
+}
+```
 
 **Business Logic:**
 ```python
@@ -633,9 +909,10 @@ async def accept_invitation(team_id: str, user_id: str):
 
     if user.subscription.tier == SubscriptionTier.FREE:
         if current_team_count >= 1:
-            raise HTTPException(
-                status_code=403,
-                detail="You have reached your team limit (1 team max for Free users). Upgrade to Pro for unlimited teams."
+            raise_subscription_limit_error(
+                user_tier="free",
+                message=f"You've reached your team limit ({current_team_count}/1 teams)",
+                detail="Free users can join 1 team. Upgrade to Pro for unlimited teams."
             )
 
     # Update status: pending → member
@@ -647,6 +924,137 @@ async def accept_invitation(team_id: str, user_id: str):
     )
 
     # Send notification to admins...
+```
+
+---
+
+#### **GET /api/teams/invitations/token/{token}** - Get invitation details by token (Public)
+
+**Purpose:** Allow unregistered users to view invitation details before registering
+
+**Authorization Conditions:**
+- ❌ **No authentication required** - This is a public endpoint
+- ✓ Token must be valid and not expired
+- ✓ Token must not have been accepted yet
+
+**Response:** `200 OK`
+```json
+{
+  "invitation_token": "inv_abc123xyz",
+  "team": {
+    "team_id": "team_123",
+    "name": "Smith Family",
+    "description": "Our family support team",
+    "member_count": 4
+  },
+  "invited_by": {
+    "name": "John Smith",
+    "role": "parent"
+  },
+  "invited_email": "jane@example.com",
+  "invited_at": "2026-02-05T10:00:00Z",
+  "expires_at": "2026-03-07T10:00:00Z",
+  "is_registered": false
+}
+```
+
+**Error Responses:**
+- `404 Not Found` - Token doesn't exist or invitation not found
+- `410 Gone` - Invitation expired or already accepted
+
+**Business Logic:**
+```python
+async def get_invitation_by_token(token: str):
+    # Decode and validate token
+    invitation_data = decode_invitation_token(token)
+    if not invitation_data:
+        raise HTTPException(status_code=404, detail="Invalid invitation token")
+
+    team_id = invitation_data["team_id"]
+    email = invitation_data["email"]
+
+    # Get team member record
+    team_member = await get_pending_invitation_by_email(team_id, email)
+    if not team_member or team_member.status != MemberStatus.PENDING:
+        raise HTTPException(status_code=410, detail="Invitation expired or already accepted")
+
+    # Check if email is registered
+    user = await get_user_by_email(email)
+    is_registered = user is not None
+
+    # Get team and inviter details
+    team = await get_team(team_id)
+    inviter = await get_user(team_member.invited_by)
+
+    return {
+        "invitation_token": token,
+        "team": {
+            "team_id": team.team_id,
+            "name": team.name,
+            "description": team.description,
+            "member_count": await get_team_member_count(team_id)
+        },
+        "invited_by": {
+            "name": inviter.name,
+            "role": inviter.role
+        },
+        "invited_email": email,
+        "invited_at": team_member.invited_at,
+        "expires_at": team_member.invited_at + timedelta(days=30),
+        "is_registered": is_registered
+    }
+```
+
+---
+
+#### **POST /api/teams/invitations/token/{token}/accept** - Accept invitation via token
+
+**Purpose:** Accept invitation using a token (used after registration for unregistered users)
+
+**Authorization Conditions:**
+- ✓ User must be authenticated
+- ✓ User's email must match the invitation email
+- ✓ Token must be valid and not expired
+- ✓ Invitation must still be pending
+
+**Response:** `200 OK`
+```json
+{
+  "team_id": "team_123",
+  "status": "member",
+  "role": "member",
+  "joined_at": "2026-02-05T10:00:00Z",
+  "team": {
+    "name": "Smith Family",
+    "member_count": 5
+  }
+}
+```
+
+**Error Responses:**
+- `401 Unauthorized` - Not authenticated
+- `403 Forbidden` - Email mismatch OR team limit reached
+- `404 Not Found` - Token doesn't exist
+- `410 Gone` - Invitation expired or already accepted
+
+**Business Logic:**
+```python
+async def accept_invitation_by_token(token: str, user_id: str):
+    # Decode token and validate
+    invitation_data = decode_invitation_token(token)
+    if not invitation_data:
+        raise HTTPException(status_code=404, detail="Invalid invitation token")
+
+    team_id = invitation_data["team_id"]
+    invited_email = invitation_data["email"]
+
+    # Verify user's email matches invitation
+    user = await get_user(user_id)
+    if user.email != invited_email:
+        raise HTTPException(status_code=403, detail="Email mismatch")
+
+    # Use existing accept_invitation logic
+    return await accept_invitation(team_id, user_id)
 ```
 
 ---
@@ -911,6 +1319,125 @@ async def accept_invitation(team_id: str, user_id: str):
 
 ## 4. Screen/Page Design
 
+### 4.0 Error Handling Strategy
+
+**Exception Types:**
+
+The Flutter app uses custom exceptions to handle subscription-related errors:
+
+```dart
+/// Base exception for subscription-related errors
+class SubscriptionException implements Exception {
+  final SubscriptionErrorResponse errorResponse;
+
+  SubscriptionException(this.errorResponse);
+
+  @override
+  String toString() => errorResponse.message;
+}
+
+/// Thrown when user has reached their team limit
+/// This applies to:
+/// - Creating a new team (when at limit)
+/// - Accepting an invitation (when at limit)
+class SubscriptionLimitException extends SubscriptionException {
+  SubscriptionLimitException(super.errorResponse);
+}
+```
+
+**Service Layer Error Parsing:**
+
+The TeamService should parse error responses and throw appropriate exceptions:
+
+```dart
+class TeamService {
+  Future<Team> createTeam({required String name, String? description}) async {
+    try {
+      final response = await _apiClient.post(
+        '/api/teams',
+        body: {'name': name, 'description': description},
+      );
+      return Team.fromJson(response.data);
+    } on ApiException catch (e) {
+      if (e.statusCode == 403) {
+        final errorResponse = _parseSubscriptionError(e.data);
+        if (errorResponse != null) {
+          if (errorResponse.code == 'SUBSCRIPTION_LIMIT_REACHED') {
+            throw SubscriptionLimitException(errorResponse);
+          }
+        }
+      }
+      rethrow;
+    }
+  }
+
+  Future<void> acceptInvitation(String teamId) async {
+    try {
+      await _apiClient.post('/api/teams/$teamId/accept');
+    } on ApiException catch (e) {
+      if (e.statusCode == 403) {
+        final errorResponse = _parseSubscriptionError(e.data);
+        if (errorResponse != null) {
+          if (errorResponse.code == 'SUBSCRIPTION_LIMIT_REACHED') {
+            throw SubscriptionLimitException(errorResponse);
+          }
+        }
+      }
+      rethrow;
+    }
+  }
+
+  Future<void> inviteMember({required String teamId, required String email}) async {
+    // No subscription error handling needed here
+    // Subscription check happens when invitee accepts
+    await _apiClient.post(
+      '/api/teams/$teamId/invite',
+      body: {'email': email},
+    );
+  }
+
+  SubscriptionErrorResponse? _parseSubscriptionError(dynamic data) {
+    try {
+      if (data is Map<String, dynamic> && data.containsKey('error')) {
+        return SubscriptionErrorResponse.fromJson(data);
+      }
+    } catch (e) {
+      // Failed to parse subscription error
+      return null;
+    }
+    return null;
+  }
+}
+```
+
+**UI Error Handling Pattern:**
+
+All screens that may encounter subscription limits should follow this pattern:
+
+1. Catch `SubscriptionLimitException` → Show upgrade prompt with button
+2. Catch other exceptions → Show generic error message
+
+**Subscription check locations:**
+- ✅ **Create Team Screen** - Check when user creates a new team
+- ✅ **Accept Invitation Dialog** - Check when user accepts an invitation
+- ❌ **Invite Member Screen** - NO subscription check (invitations sent freely, check on accept)
+
+**Example:**
+```dart
+try {
+  // Call service method (createTeam or acceptInvitation)
+  await teamService.createTeam(name: name);
+} on SubscriptionLimitException catch (e) {
+  // User's own limit - show upgrade prompt with button
+  _showUpgradePrompt(error: e.errorResponse);
+} catch (e) {
+  // Generic error (not found, already exists, etc.)
+  _showErrorSnackbar(message: e.toString());
+}
+```
+
+---
+
 ### 4.1 Navigation Structure
 
 ```
@@ -952,6 +1479,9 @@ Settings
     - Inviter name
     - "Accept" and "Ignore" buttons
 - **Floating Action Button:** "+" to Create Team
+  - **Behavior:**
+    - If Free user and already has 1 team: Show upgrade prompt immediately (don't navigate to create screen)
+    - Otherwise: Navigate to Create Team Screen
 
 **API Calls:**
 - `GET /api/teams` (on load)
@@ -962,6 +1492,7 @@ class TeamsProvider extends ChangeNotifier {
   List<Team> _teams = [];
   List<TeamInvitation> _pendingInvitations = [];
   bool _isLoading = false;
+  SubscriptionTier _userTier = SubscriptionTier.FREE;
 
   Future<void> loadTeams() async {
     _isLoading = true;
@@ -979,6 +1510,55 @@ class TeamsProvider extends ChangeNotifier {
     await teamService.acceptInvitation(teamId);
     await loadTeams();
   }
+
+  bool get canCreateTeam {
+    if (_userTier == SubscriptionTier.FREE) {
+      return _teams.length < 1;
+    }
+    return true; // Pro users can create unlimited
+  }
+
+  bool get hasReachedTeamLimit {
+    if (_userTier == SubscriptionTier.FREE) {
+      return _teams.length >= 1;
+    }
+    return false;
+  }
+}
+```
+
+**FAB Click Handler:**
+```dart
+void _onCreateTeamPressed() {
+  final provider = context.read<TeamsProvider>();
+
+  if (provider.hasReachedTeamLimit) {
+    // Show upgrade prompt immediately
+    _showUpgradePrompt(
+      message: "You've reached your team limit (1/1 teams)",
+      detail: "Free users can create 1 team. Upgrade to Pro for unlimited teams.",
+    );
+  } else {
+    // Navigate to create team screen
+    Navigator.of(context).pushNamed('/teams/create');
+  }
+}
+
+void _showUpgradePrompt({required String message, required String detail}) {
+  showModalBottomSheet(
+    context: context,
+    isScrollControlled: true,
+    builder: (context) => UpgradePromptBottomSheet(
+      title: 'Upgrade to Pro',
+      message: message,
+      detail: detail,
+      actionLabel: 'Upgrade to Pro',
+      onUpgrade: () {
+        Navigator.of(context).pop();
+        Navigator.of(context).pushNamed('/subscription/upgrade');
+      },
+    ),
+  );
 }
 ```
 
@@ -1009,7 +1589,93 @@ class TeamsProvider extends ChangeNotifier {
 2. Tap "Create Team"
 3. Show loading indicator
 4. On success: Navigate to Team Detail Screen for new team
-5. On error: Show error message (subscription check, etc.)
+5. On error: Handle based on error type
+
+**Error Handling:**
+
+**Subscription Limit Error (403 with SUBSCRIPTION_LIMIT_REACHED):**
+- Show modal/bottom sheet with:
+  - Icon: Lock or Crown
+  - Title: "Upgrade to Pro"
+  - Message: Error message from API (`error.message`)
+  - Detail: Error detail from API (`error.detail`)
+  - Primary button: "Upgrade to Pro" → Navigate to `/subscription/upgrade`
+  - Secondary button: "Not Now" → Dismiss and return to Team List
+
+**Other Errors:**
+- Show standard error snackbar/toast
+
+**Flutter Implementation:**
+```dart
+class CreateTeamScreen extends StatefulWidget {
+  // ...
+}
+
+class _CreateTeamScreenState extends State<CreateTeamScreen> {
+  final _formKey = GlobalKey<FormState>();
+  final _nameController = TextEditingController();
+  final _descriptionController = TextEditingController();
+  bool _isLoading = false;
+
+  Future<void> _createTeam() async {
+    if (!_formKey.currentState!.validate()) return;
+
+    setState(() => _isLoading = true);
+
+    try {
+      final team = await teamService.createTeam(
+        name: _nameController.text,
+        description: _descriptionController.text,
+      );
+
+      // Success: Navigate to team detail
+      Navigator.of(context).pushReplacement(
+        MaterialPageRoute(
+          builder: (_) => TeamDetailScreen(teamId: team.teamId),
+        ),
+      );
+    } on SubscriptionLimitException catch (e) {
+      // Show upgrade dialog
+      _showUpgradeDialog(
+        context: context,
+        error: e.errorResponse,
+      );
+    } catch (e) {
+      // Show generic error
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed to create team: $e')),
+      );
+    } finally {
+      setState(() => _isLoading = false);
+    }
+  }
+
+  void _showUpgradeDialog({
+    required BuildContext context,
+    required SubscriptionErrorResponse error,
+  }) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      builder: (context) => UpgradePromptBottomSheet(
+        title: 'Upgrade to Pro',
+        message: error.message,
+        detail: error.detail,
+        actionLabel: error.action.label,
+        onUpgrade: () {
+          Navigator.of(context).pop();
+          Navigator.of(context).pushNamed('/subscription/upgrade');
+        },
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    // ... UI implementation
+  }
+}
+```
 
 ---
 
@@ -1082,11 +1748,65 @@ class TeamsProvider extends ChangeNotifier {
 - `POST /api/teams/{team_id}/invite`
 - `GET /api/teams/{team_id}/invitations`
 
+**Error Handling:**
+
+**No subscription check on invite side:**
+- Invitations can be sent to any user regardless of their subscription status
+- If the invited user has reached their team limit, they will see an upgrade prompt when they try to accept the invitation
+- This provides a better UX - the invitee can make their own decision to upgrade
+
 **Validation:**
 - Check valid email format
 - Show error if user not found
-- Show error if user has Free subscription
-- Show error if already in team
+- Show error if already in team or has pending invitation
+
+**Flutter Implementation:**
+```dart
+Future<void> _inviteMember(String email) async {
+  if (!_isValidEmail(email)) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('Please enter a valid email address')),
+    );
+    return;
+  }
+
+  setState(() => _isLoading = true);
+
+  try {
+    await teamService.inviteMember(
+      teamId: widget.teamId,
+      email: email,
+    );
+
+    // Success
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('Invitation sent to $email')),
+    );
+    _emailController.clear();
+    _loadInvitations();
+  } catch (e) {
+    // Handle generic errors (user not found, already in team, etc.)
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('Failed to invite: ${_getErrorMessage(e)}')),
+    );
+  } finally {
+    setState(() => _isLoading = false);
+  }
+}
+
+bool _isValidEmail(String email) {
+  return RegExp(r'^[\w-\.]+@([\w-]+\.)+[\w-]{2,4}$').hasMatch(email);
+}
+
+String _getErrorMessage(dynamic error) {
+  if (error.toString().contains('404')) {
+    return 'User not found. Make sure they have a Lumie account.';
+  } else if (error.toString().contains('409')) {
+    return 'User is already a member or has a pending invitation.';
+  }
+  return error.toString();
+}
+```
 
 ---
 
@@ -1153,7 +1873,808 @@ class TeamsProvider extends ChangeNotifier {
    - Show success message
    - Navigate to Team Detail Screen
    - Refresh Team List
-4. On error: Show error message
+4. On error: Handle based on error type
+
+**Error Handling:**
+
+**Subscription Limit Error (403 with SUBSCRIPTION_LIMIT_REACHED):**
+- Dismiss invitation dialog
+- Show upgrade modal/bottom sheet with:
+  - Icon: Lock or Crown
+  - Title: "Upgrade to Pro"
+  - Message: Error message from API (`error.message`)
+  - Detail: Error detail from API (`error.detail`)
+  - Primary button: "Upgrade to Pro" → Navigate to `/subscription/upgrade`
+  - Secondary button: "Maybe Later" → Dismiss and return to Team List
+
+**Other Errors:**
+- Show error snackbar/toast
+
+**Flutter Implementation:**
+```dart
+class AcceptInvitationDialog extends StatefulWidget {
+  final TeamInvitation invitation;
+
+  // ...
+}
+
+class _AcceptInvitationDialogState extends State<AcceptInvitationDialog> {
+  bool _isLoading = false;
+
+  Future<void> _acceptInvitation() async {
+    setState(() => _isLoading = true);
+
+    try {
+      await teamService.acceptInvitation(widget.invitation.teamId);
+
+      // Success
+      Navigator.of(context).pop(); // Close invitation dialog
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Successfully joined ${widget.invitation.teamName}')),
+      );
+
+      // Navigate to team detail
+      Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (_) => TeamDetailScreen(teamId: widget.invitation.teamId),
+        ),
+      );
+    } on SubscriptionLimitException catch (e) {
+      // Close invitation dialog first
+      Navigator.of(context).pop();
+
+      // Show upgrade dialog
+      _showUpgradeDialog(
+        context: context,
+        error: e.errorResponse,
+      );
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed to accept invitation: $e')),
+      );
+    } finally {
+      if (mounted) {
+        setState(() => _isLoading = false);
+      }
+    }
+  }
+
+  void _showUpgradeDialog({
+    required BuildContext context,
+    required SubscriptionErrorResponse error,
+  }) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      isDismissible: true,
+      builder: (context) => UpgradePromptBottomSheet(
+        title: 'Upgrade to Pro',
+        message: error.message,
+        detail: error.detail,
+        actionLabel: error.action.label,
+        onUpgrade: () {
+          Navigator.of(context).pop();
+          Navigator.of(context).pushNamed('/subscription/upgrade');
+        },
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    // ... UI implementation
+  }
+}
+```
+
+---
+
+### 4.8 Upgrade Prompt Bottom Sheet (Reusable Component)
+
+**Purpose:** Reusable component to prompt users to upgrade when subscription limits are reached
+
+**UI Elements:**
+- **Bottom Sheet (Modal)**
+  - Rounded top corners
+  - Padding: 24px all sides
+  - Max height: 60% of screen
+
+- **Icon Section:**
+  - Crown or Lock icon (configurable)
+  - Size: 64px
+  - Color: Primary/Gold color
+  - Centered
+
+- **Title:**
+  - Text: "Upgrade to Pro"
+  - Font: Headline, Bold
+  - Centered
+
+- **Message:**
+  - Text: Error message (from API)
+  - Font: Body, Medium weight
+  - Color: Primary text color
+  - Centered
+  - Example: "You've reached your team limit (1/1 teams)"
+
+- **Detail:**
+  - Text: Error detail (from API)
+  - Font: Body, Regular
+  - Color: Secondary text color
+  - Centered
+  - Example: "Free users can create 1 team. Upgrade to Pro for unlimited teams."
+
+- **Benefits List (Optional):**
+  - Show key Pro features:
+    - "✓ Unlimited teams"
+    - "✓ Advanced family sharing"
+    - "✓ Priority support"
+
+- **Primary Button:**
+  - Text: "Upgrade to Pro"
+  - Style: Filled, Primary color
+  - Full width
+  - Action: Navigate to `/subscription/upgrade`
+
+- **Secondary Button:**
+  - Text: "Not Now" or "Maybe Later"
+  - Style: Text button
+  - Full width
+  - Action: Dismiss bottom sheet
+
+**Flutter Implementation:**
+```dart
+class UpgradePromptBottomSheet extends StatelessWidget {
+  final String title;
+  final String message;
+  final String detail;
+  final String actionLabel;
+  final VoidCallback onUpgrade;
+  final VoidCallback? onDismiss;
+  final bool showBenefits;
+
+  const UpgradePromptBottomSheet({
+    Key? key,
+    required this.title,
+    required this.message,
+    required this.detail,
+    required this.actionLabel,
+    required this.onUpgrade,
+    this.onDismiss,
+    this.showBenefits = true,
+  }) : super(key: key);
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: EdgeInsets.all(24),
+      decoration: BoxDecoration(
+        color: Theme.of(context).scaffoldBackgroundColor,
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          // Drag handle
+          Container(
+            width: 40,
+            height: 4,
+            margin: EdgeInsets.only(bottom: 20),
+            decoration: BoxDecoration(
+              color: Colors.grey[300],
+              borderRadius: BorderRadius.circular(2),
+            ),
+          ),
+
+          // Crown icon
+          Icon(
+            Icons.workspace_premium,
+            size: 64,
+            color: Theme.of(context).colorScheme.primary,
+          ),
+          SizedBox(height: 16),
+
+          // Title
+          Text(
+            title,
+            style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+              fontWeight: FontWeight.bold,
+            ),
+            textAlign: TextAlign.center,
+          ),
+          SizedBox(height: 12),
+
+          // Message
+          Text(
+            message,
+            style: Theme.of(context).textTheme.bodyLarge?.copyWith(
+              fontWeight: FontWeight.w500,
+            ),
+            textAlign: TextAlign.center,
+          ),
+          SizedBox(height: 8),
+
+          // Detail
+          Text(
+            detail,
+            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+              color: Theme.of(context).textTheme.bodySmall?.color,
+            ),
+            textAlign: TextAlign.center,
+          ),
+          SizedBox(height: 24),
+
+          // Benefits (if enabled)
+          if (showBenefits) ...[
+            Container(
+              padding: EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: Theme.of(context).colorScheme.primaryContainer,
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  _buildBenefit(context, 'Unlimited teams'),
+                  SizedBox(height: 8),
+                  _buildBenefit(context, 'Advanced family sharing'),
+                  SizedBox(height: 8),
+                  _buildBenefit(context, 'Priority support'),
+                ],
+              ),
+            ),
+            SizedBox(height: 24),
+          ],
+
+          // Primary button
+          SizedBox(
+            width: double.infinity,
+            child: ElevatedButton(
+              onPressed: onUpgrade,
+              style: ElevatedButton.styleFrom(
+                padding: EdgeInsets.symmetric(vertical: 16),
+              ),
+              child: Text(actionLabel),
+            ),
+          ),
+          SizedBox(height: 12),
+
+          // Secondary button
+          SizedBox(
+            width: double.infinity,
+            child: TextButton(
+              onPressed: onDismiss ?? () => Navigator.of(context).pop(),
+              child: Text('Not Now'),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildBenefit(BuildContext context, String text) {
+    return Row(
+      children: [
+        Icon(
+          Icons.check_circle,
+          size: 20,
+          color: Theme.of(context).colorScheme.primary,
+        ),
+        SizedBox(width: 8),
+        Text(
+          text,
+          style: Theme.of(context).textTheme.bodyMedium,
+        ),
+      ],
+    );
+  }
+}
+```
+
+**Usage Example:**
+```dart
+// In any screen that needs to show upgrade prompt
+void _showUpgradePrompt(SubscriptionErrorResponse error) {
+  showModalBottomSheet(
+    context: context,
+    isScrollControlled: true,
+    isDismissible: true,
+    builder: (context) => UpgradePromptBottomSheet(
+      title: 'Upgrade to Pro',
+      message: error.message,
+      detail: error.detail,
+      actionLabel: error.action.label,
+      onUpgrade: () {
+        Navigator.of(context).pop();
+        Navigator.of(context).pushNamed(error.action.destination);
+      },
+    ),
+  );
+}
+```
+
+---
+
+### 4.9 Invitation Landing Page (Web & App Deep Link)
+
+**Purpose:** Handle invitation links for both registered and unregistered users
+
+**Entry Points:**
+- **Web:** `https://lumie.app/invite/{token}`
+- **Deep Link:** `lumie://invite/{token}`
+
+**Flow:**
+1. User clicks invitation link (from email or message)
+2. System detects if app is installed:
+   - **App installed:** Deep link opens app → Navigate to invitation preview
+   - **App not installed:** Web page opens → Show invitation preview on web
+
+**Web Page UI Elements:**
+- **Header:** Lumie logo
+- **Invitation Card:**
+  - Team name and description
+  - "You've been invited by [Inviter Name]"
+  - Member count: "Join 4 other members"
+  - Team icon/avatar
+
+- **Call-to-Action:**
+  - If user is logged in (web session):
+    - Button: "Accept Invitation" → Opens app or web app
+  - If user is not logged in:
+    - Primary button: "Download Lumie App"
+    - Secondary button: "Sign Up on Web"
+    - Link: "Already have an account? Sign In"
+
+**API Calls:**
+- `GET /api/teams/invitations/token/{token}` (public endpoint)
+
+**Implementation:**
+```dart
+// Deep link handler in Flutter app
+class DeepLinkHandler {
+  static Future<void> handleDeepLink(Uri uri) async {
+    if (uri.pathSegments.first == 'invite' && uri.pathSegments.length == 2) {
+      final token = uri.pathSegments[1];
+
+      // Check if user is logged in
+      final authService = GetIt.I<AuthService>();
+      if (await authService.isAuthenticated()) {
+        // User is logged in - navigate to invitation preview
+        navigatorKey.currentState?.pushNamed(
+          '/invitation/preview',
+          arguments: {'token': token},
+        );
+      } else {
+        // User is not logged in - navigate to login with invitation context
+        navigatorKey.currentState?.pushNamed(
+          '/login',
+          arguments: {'invitation_token': token},
+        );
+      }
+    }
+  }
+}
+```
+
+**Web Implementation (React/Next.js example):**
+```typescript
+// pages/invite/[token].tsx
+export default function InvitationPage({ invitation }) {
+  const isAppInstalled = detectMobileApp();
+
+  if (isAppInstalled) {
+    // Redirect to deep link
+    window.location.href = `lumie://invite/${invitation.token}`;
+  }
+
+  return (
+    <div className="invitation-page">
+      <h1>You've been invited to {invitation.team.name}</h1>
+      <p>By {invitation.invited_by.name}</p>
+
+      {invitation.is_registered ? (
+        <button onClick={() => openApp(invitation.token)}>
+          Accept Invitation
+        </button>
+      ) : (
+        <>
+          <button onClick={downloadApp}>Download Lumie App</button>
+          <button onClick={() => router.push(`/signup?token=${invitation.token}`)}>
+            Sign Up on Web
+          </button>
+          <a href={`/login?token=${invitation.token}`}>
+            Already have an account? Sign In
+          </a>
+        </>
+      )}
+    </div>
+  );
+}
+```
+
+---
+
+### 4.10 Registration/Login with Invitation Context
+
+**Purpose:** Allow unregistered users to sign up while preserving invitation context
+
+**UI Elements:**
+
+**Registration Screen (Enhanced):**
+- Standard registration form (email, password, name, etc.)
+- **Invitation banner at top:**
+  - "You're joining [Team Name]"
+  - Inviter avatar and name
+  - Dismissible (but invitation context preserved)
+
+- After successful registration:
+  - Auto-redirect to invitation preview screen
+  - Show welcome message: "Welcome! You have a pending team invitation"
+
+**Login Screen (Enhanced):**
+- Standard login form
+- **Invitation banner at top:**
+  - "Sign in to accept your invitation to [Team Name]"
+
+- After successful login:
+  - Auto-redirect to invitation preview screen
+
+**API Calls:**
+- `POST /api/auth/register?invitation_token={token}` (modified to include token)
+- `POST /api/auth/login?invitation_token={token}` (modified to include token)
+
+**Flutter Implementation:**
+```dart
+class RegistrationScreen extends StatefulWidget {
+  final String? invitationToken;
+
+  const RegistrationScreen({this.invitationToken});
+
+  @override
+  State<RegistrationScreen> createState() => _RegistrationScreenState();
+}
+
+class _RegistrationScreenState extends State<RegistrationScreen> {
+  InvitationPreview? _invitation;
+  bool _isLoadingInvitation = false;
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.invitationToken != null) {
+      _loadInvitationDetails();
+    }
+  }
+
+  Future<void> _loadInvitationDetails() async {
+    setState(() => _isLoadingInvitation = true);
+
+    try {
+      final invitation = await teamService.getInvitationByToken(
+        widget.invitationToken!
+      );
+      setState(() {
+        _invitation = invitation;
+        _isLoadingInvitation = false;
+      });
+    } catch (e) {
+      // Token invalid or expired - continue with normal registration
+      setState(() => _isLoadingInvitation = false);
+    }
+  }
+
+  Future<void> _register() async {
+    // ... registration logic
+
+    final success = await authService.register(
+      email: _emailController.text,
+      password: _passwordController.text,
+      name: _nameController.text,
+      invitationToken: widget.invitationToken,
+    );
+
+    if (success) {
+      if (widget.invitationToken != null) {
+        // Redirect to invitation preview
+        Navigator.of(context).pushReplacement(
+          MaterialPageRoute(
+            builder: (_) => InvitationPreviewScreen(
+              token: widget.invitationToken!,
+            ),
+          ),
+        );
+      } else {
+        // Normal registration flow
+        Navigator.of(context).pushReplacementNamed('/home');
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: Text('Create Account')),
+      body: Column(
+        children: [
+          // Invitation banner
+          if (_invitation != null)
+            _buildInvitationBanner(_invitation!),
+
+          // Registration form
+          _buildRegistrationForm(),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildInvitationBanner(InvitationPreview invitation) {
+    return Container(
+      padding: EdgeInsets.all(16),
+      color: Theme.of(context).colorScheme.primaryContainer,
+      child: Row(
+        children: [
+          Icon(Icons.group, size: 32),
+          SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  "You're joining ${invitation.team.name}",
+                  style: TextStyle(fontWeight: FontWeight.bold),
+                ),
+                Text(
+                  "Invited by ${invitation.invitedBy.name}",
+                  style: TextStyle(fontSize: 12),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+```
+
+---
+
+### 4.11 Invitation Preview Screen (Post-Registration)
+
+**Purpose:** Show invitation details after user registers/logs in with invitation context
+
+**Path:** `/invitation/preview?token={token}`
+
+**UI Elements:**
+- **Header:** "Team Invitation"
+- **Team Card:**
+  - Team name and description
+  - Team avatar/icon
+  - Member count: "4 members"
+  - Created date
+
+- **Inviter Section:**
+  - "Invited by [Name]"
+  - Inviter avatar
+  - Inviter role badge
+
+- **Invitation Details:**
+  - Invited date: "Invited on Feb 5, 2026"
+  - Expiration: "Expires in 28 days"
+
+- **Actions:**
+  - Primary button: "Accept Invitation"
+  - Secondary button: "Decline"
+
+- **Info Message:**
+  - "By accepting, you'll be able to share health data with team members based on your privacy settings."
+  - Link: "Review Privacy Settings"
+
+**API Calls:**
+- `GET /api/teams/invitations/token/{token}` (on load)
+- `POST /api/teams/invitations/token/{token}/accept` (on accept)
+
+**Flow:**
+1. User lands on screen (after registration or from deep link)
+2. Load invitation details by token
+3. User taps "Accept Invitation"
+4. Show loading
+5. On success:
+   - Show success message: "You've joined [Team Name]!"
+   - Navigate to Team Detail Screen
+6. On error (subscription limit):
+   - Show upgrade prompt
+
+**Flutter Implementation:**
+```dart
+class InvitationPreviewScreen extends StatefulWidget {
+  final String token;
+
+  const InvitationPreviewScreen({required this.token});
+
+  @override
+  State<InvitationPreviewScreen> createState() => _InvitationPreviewScreenState();
+}
+
+class _InvitationPreviewScreenState extends State<InvitationPreviewScreen> {
+  InvitationPreview? _invitation;
+  bool _isLoading = true;
+  bool _isAccepting = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadInvitation();
+  }
+
+  Future<void> _loadInvitation() async {
+    try {
+      final invitation = await teamService.getInvitationByToken(widget.token);
+      setState(() {
+        _invitation = invitation;
+        _isLoading = false;
+      });
+    } catch (e) {
+      // Handle error
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed to load invitation: $e')),
+      );
+      Navigator.of(context).pop();
+    }
+  }
+
+  Future<void> _acceptInvitation() async {
+    setState(() => _isAccepting = true);
+
+    try {
+      final result = await teamService.acceptInvitationByToken(widget.token);
+
+      // Success
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('You\'ve joined ${_invitation!.team.name}!')),
+      );
+
+      // Navigate to team detail
+      Navigator.of(context).pushReplacement(
+        MaterialPageRoute(
+          builder: (_) => TeamDetailScreen(teamId: result.teamId),
+        ),
+      );
+    } on SubscriptionLimitException catch (e) {
+      // Show upgrade prompt
+      _showUpgradePrompt(e.errorResponse);
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed to accept invitation: $e')),
+      );
+    } finally {
+      setState(() => _isAccepting = false);
+    }
+  }
+
+  void _showUpgradePrompt(SubscriptionErrorResponse error) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      builder: (context) => UpgradePromptBottomSheet(
+        title: 'Upgrade to Pro',
+        message: error.message,
+        detail: error.detail,
+        actionLabel: error.action.label,
+        onUpgrade: () {
+          Navigator.of(context).pop();
+          Navigator.of(context).pushNamed(error.action.destination);
+        },
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_isLoading) {
+      return Scaffold(
+        body: Center(child: CircularProgressIndicator()),
+      );
+    }
+
+    return Scaffold(
+      appBar: AppBar(title: Text('Team Invitation')),
+      body: SingleChildScrollView(
+        padding: EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            // Team card
+            Card(
+              child: Padding(
+                padding: EdgeInsets.all(16),
+                child: Column(
+                  children: [
+                    Icon(Icons.group, size: 64, color: Theme.of(context).colorScheme.primary),
+                    SizedBox(height: 12),
+                    Text(
+                      _invitation!.team.name,
+                      style: Theme.of(context).textTheme.headlineSmall,
+                      textAlign: TextAlign.center,
+                    ),
+                    if (_invitation!.team.description != null) ...[
+                      SizedBox(height: 8),
+                      Text(
+                        _invitation!.team.description!,
+                        style: Theme.of(context).textTheme.bodyMedium,
+                        textAlign: TextAlign.center,
+                      ),
+                    ],
+                    SizedBox(height: 12),
+                    Text(
+                      '${_invitation!.team.memberCount} members',
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
+                  ],
+                ),
+              ),
+            ),
+
+            SizedBox(height: 16),
+
+            // Inviter section
+            Card(
+              child: ListTile(
+                leading: CircleAvatar(
+                  child: Text(_invitation!.invitedBy.name[0]),
+                ),
+                title: Text('Invited by ${_invitation!.invitedBy.name}'),
+                subtitle: Text('Invited on ${_formatDate(_invitation!.invitedAt)}'),
+              ),
+            ),
+
+            SizedBox(height: 16),
+
+            // Info message
+            Container(
+              padding: EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Theme.of(context).colorScheme.surfaceVariant,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Text(
+                'By accepting, you\'ll be able to share health data with team members based on your privacy settings.',
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            ),
+
+            SizedBox(height: 24),
+
+            // Accept button
+            ElevatedButton(
+              onPressed: _isAccepting ? null : _acceptInvitation,
+              style: ElevatedButton.styleFrom(
+                padding: EdgeInsets.symmetric(vertical: 16),
+              ),
+              child: _isAccepting
+                  ? CircularProgressIndicator()
+                  : Text('Accept Invitation'),
+            ),
+
+            SizedBox(height: 12),
+
+            // Decline button
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: Text('Decline'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  String _formatDate(DateTime date) {
+    return '${date.month}/${date.day}/${date.year}';
+  }
+}
+```
 
 ---
 
@@ -1780,7 +3301,11 @@ db.team_members.createIndex({ invited_at: 1 })
 
 ---
 
-**Document Version:** 1.0
-**Last Updated:** 2026-02-05
+**Document Version:** 1.2
+**Last Updated:** 2026-02-06
 **Author:** Claude Code Assistant
 **Status:** Ready for Implementation
+**Changelog:**
+- v1.2 (2026-02-06): Added unregistered user invitation flow with deep linking, invitation tokens, and landing pages
+- v1.1 (2026-02-06): Added standardized subscription error response format and upgrade flow UI
+- v1.0 (2026-02-05): Initial version
