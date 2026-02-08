@@ -19,3 +19,9 @@ python-multipart==0.0.6
 
 # Email validation
 email-validator==2.1.0
+
+# Gmail API for sending emails
+google-api-python-client==2.116.0
+google-auth==2.27.0
+google-auth-httplib2==0.2.0
+google-auth-oauthlib==1.2.0
