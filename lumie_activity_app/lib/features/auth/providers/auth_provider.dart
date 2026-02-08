@@ -69,6 +69,7 @@ class AuthProvider extends ChangeNotifier {
     required String email,
     required String password,
     required String confirmPassword,
+    required AccountRole role,
   }) async {
     _state = AuthState.loading;
     _errorMessage = null;
@@ -79,8 +80,10 @@ class AuthProvider extends ChangeNotifier {
         email: email,
         password: password,
         confirmPassword: confirmPassword,
+        role: role,
       );
-      _state = AuthState.needsAccountType;
+      // After signup, user needs to verify email before they can complete profile
+      _state = AuthState.unauthenticated;
       notifyListeners();
       return true;
     } catch (e) {

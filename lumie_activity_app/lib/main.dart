@@ -6,7 +6,6 @@ import 'core/theme/app_colors.dart';
 import 'features/auth/providers/auth_provider.dart';
 import 'features/auth/screens/welcome_screen.dart';
 import 'features/auth/screens/login_screen.dart';
-import 'features/auth/screens/signup_screen.dart';
 import 'features/auth/screens/account_type_screen.dart';
 import 'features/auth/screens/teen_profile_setup_screen.dart';
 import 'features/auth/screens/parent_profile_setup_screen.dart';
@@ -45,7 +44,6 @@ class LumieActivityApp extends StatelessWidget {
         routes: {
           '/welcome': (context) => const WelcomeScreen(),
           '/login': (context) => const LoginScreen(),
-          '/signup': (context) => const SignUpScreen(),
           '/account-type': (context) => const AccountTypeScreen(),
           '/profile/teen': (context) => const TeenProfileSetupScreen(),
           '/profile/parent': (context) => const ParentProfileSetupScreen(),

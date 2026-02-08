@@ -63,12 +63,23 @@ class UserSignUp(BaseModel):
     email: EmailStr
     password: str = Field(..., min_length=8)
     confirm_password: str = Field(..., min_length=8)
+    role: AccountRole
 
 
 class UserLogin(BaseModel):
     """Request model for user login."""
     email: EmailStr
     password: str
+
+
+class EmailVerification(BaseModel):
+    """Request model for email verification."""
+    token: str
+
+
+class ResendVerification(BaseModel):
+    """Request model for resending verification email."""
+    email: EmailStr
 
 
 class TokenResponse(BaseModel):
@@ -79,6 +90,7 @@ class TokenResponse(BaseModel):
     email: str
     role: Optional[AccountRole] = None
     profile_complete: bool = False
+    email_verified: bool = False
     subscription_tier: SubscriptionTier = SubscriptionTier.FREE
 
 
@@ -89,6 +101,9 @@ class UserInDB(BaseModel):
     hashed_password: str
     role: Optional[AccountRole] = None
     profile_complete: bool = False
+    email_verified: bool = False
+    verification_token: Optional[str] = None
+    verification_token_expires: Optional[datetime] = None
     subscription: SubscriptionStatus = Field(default_factory=lambda: SubscriptionStatus())
     created_at: datetime
     updated_at: datetime

@@ -1,9 +1,8 @@
 import 'package:flutter/material.dart';
-import 'package:provider/provider.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../shared/models/user_models.dart';
 import '../../../shared/widgets/gradient_card.dart';
-import '../providers/auth_provider.dart';
+import 'signup_screen.dart';
 
 class AccountTypeScreen extends StatefulWidget {
   const AccountTypeScreen({super.key});
@@ -28,18 +27,34 @@ class _AccountTypeScreenState extends State<AccountTypeScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const SizedBox(height: 48),
+                const SizedBox(height: 16),
+                _buildBackButton(context),
+                const SizedBox(height: 32),
                 _buildHeader(),
                 const SizedBox(height: 48),
                 _buildOptions(),
                 const Spacer(),
-                _buildContinueButton(),
+                _buildContinueButton(context),
                 const SizedBox(height: 32),
               ],
             ),
           ),
         ),
       ),
+    );
+  }
+
+  Widget _buildBackButton(BuildContext context) {
+    return IconButton(
+      icon: Container(
+        padding: const EdgeInsets.all(8),
+        decoration: BoxDecoration(
+          color: AppColors.backgroundWhite.withValues(alpha: 0.8),
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: const Icon(Icons.arrow_back, color: AppColors.textPrimary),
+      ),
+      onPressed: () => Navigator.of(context).pop(),
     );
   }
 
@@ -61,7 +76,7 @@ class _AccountTypeScreenState extends State<AccountTypeScreen> {
         ),
         const SizedBox(height: 24),
         const Text(
-          'Who is using Lumie?',
+          'Choose Account Type',
           style: TextStyle(
             fontSize: 28,
             fontWeight: FontWeight.bold,
@@ -70,7 +85,7 @@ class _AccountTypeScreenState extends State<AccountTypeScreen> {
         ),
         const SizedBox(height: 8),
         const Text(
-          'This helps us personalize your experience.\nThis choice cannot be changed later.',
+          'This helps us personalize your experience.',
           style: TextStyle(
             fontSize: 16,
             color: AppColors.textSecondary,
@@ -101,48 +116,26 @@ class _AccountTypeScreenState extends State<AccountTypeScreen> {
     );
   }
 
-  Widget _buildContinueButton() {
-    return Consumer<AuthProvider>(
-      builder: (context, authProvider, _) {
-        final isLoading = authProvider.state == AuthState.loading;
-
-        return Column(
-          children: [
-            if (authProvider.errorMessage != null)
-              Container(
-                width: double.infinity,
-                margin: const EdgeInsets.only(bottom: 16),
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: AppColors.error.withValues(alpha: 0.1),
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: Text(
-                  authProvider.errorMessage!,
-                  style: const TextStyle(color: AppColors.error),
-                ),
-              ),
-            SizedBox(
-              width: double.infinity,
-              child: GradientButton(
-                text: 'Continue',
-                isLoading: isLoading,
-                onPressed: _selectedRole == null || isLoading
-                    ? null
-                    : () => _handleContinue(authProvider),
-              ),
-            ),
-          ],
-        );
-      },
+  Widget _buildContinueButton(BuildContext context) {
+    return SizedBox(
+      width: double.infinity,
+      child: GradientButton(
+        text: 'Continue',
+        onPressed: _selectedRole == null
+            ? null
+            : () => _handleContinue(context),
+      ),
     );
   }
 
-  Future<void> _handleContinue(AuthProvider authProvider) async {
+  void _handleContinue(BuildContext context) {
     if (_selectedRole == null) return;
 
-    await authProvider.selectAccountType(_selectedRole!);
-    // Navigation handled by main app
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => SignUpScreen(role: _selectedRole!),
+      ),
+    );
   }
 }
 

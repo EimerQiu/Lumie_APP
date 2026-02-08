@@ -271,6 +271,7 @@ class AuthResponse {
   final String email;
   final AccountRole? role;
   final bool profileComplete;
+  final bool emailVerified;
   final SubscriptionTier subscriptionTier;
 
   const AuthResponse({
@@ -280,6 +281,7 @@ class AuthResponse {
     required this.email,
     this.role,
     required this.profileComplete,
+    this.emailVerified = false,
     this.subscriptionTier = SubscriptionTier.free,
   });
 
@@ -305,6 +307,7 @@ class AuthResponse {
       email: json['email'] as String,
       role: role,
       profileComplete: json['profile_complete'] as bool? ?? false,
+      emailVerified: json['email_verified'] as bool? ?? false,
       subscriptionTier: subscriptionTier,
     );
   }
@@ -317,6 +320,7 @@ class AuthResponse {
       'email': email,
       'role': role?.name,
       'profile_complete': profileComplete,
+      'email_verified': emailVerified,
       'subscription_tier': subscriptionTier.name,
     };
   }

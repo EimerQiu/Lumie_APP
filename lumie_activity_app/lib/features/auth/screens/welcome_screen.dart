@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../shared/widgets/gradient_card.dart';
 import 'login_screen.dart';
-import 'signup_screen.dart';
+import 'account_type_screen.dart';
 
 class WelcomeScreen extends StatelessWidget {
   const WelcomeScreen({super.key});
@@ -131,7 +131,7 @@ class WelcomeScreen extends StatelessWidget {
             icon: Icons.arrow_forward,
             onPressed: () {
               Navigator.of(context).push(
-                MaterialPageRoute(builder: (_) => const SignUpScreen()),
+                MaterialPageRoute(builder: (_) => const AccountTypeScreen()),
               );
             },
             gradient: AppColors.activityRingGradient,

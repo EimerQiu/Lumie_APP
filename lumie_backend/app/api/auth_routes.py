@@ -6,6 +6,8 @@ from ..models.user import (
     UserLogin,
     TokenResponse,
     AccountTypeSelection,
+    EmailVerification,
+    ResendVerification,
 )
 from ..services.auth_service import auth_service, get_current_user_id
 
@@ -21,8 +23,10 @@ async def signup(data: UserSignUp):
     - **email**: Valid email address (must be unique)
     - **password**: Minimum 8 characters
     - **confirm_password**: Must match password
+    - **role**: Account type (teen or parent)
 
-    Returns JWT token for authentication.
+    Sends verification email and returns JWT token.
+    User must verify email before logging in.
     """
     return await auth_service.signup(data)
 
@@ -71,4 +75,29 @@ async def get_current_user_info(user_id: str = Depends(get_current_user_id)):
         email=user.email,
         role=user.role,
         profile_complete=user.profile_complete,
+        email_verified=user.email_verified,
     )
+
+
+@router.post("/verify-email")
+async def verify_email(data: EmailVerification):
+    """
+    Verify user email with verification token.
+
+    - **token**: Verification token sent to user's email
+
+    Marks the email as verified and allows user to log in.
+    """
+    return await auth_service.verify_email(data)
+
+
+@router.post("/resend-verification")
+async def resend_verification(data: ResendVerification):
+    """
+    Resend verification email to user.
+
+    - **email**: Email address to resend verification to
+
+    Generates a new verification token and sends a new email.
+    """
+    return await auth_service.resend_verification_email(data.email)

@@ -1,12 +1,15 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../../core/theme/app_colors.dart';
+import '../../../shared/models/user_models.dart';
 import '../../../shared/widgets/gradient_card.dart';
 import '../providers/auth_provider.dart';
 import '../widgets/auth_text_field.dart';
 
 class SignUpScreen extends StatefulWidget {
-  const SignUpScreen({super.key});
+  final AccountRole role;
+
+  const SignUpScreen({super.key, required this.role});
 
   @override
   State<SignUpScreen> createState() => _SignUpScreenState();
@@ -70,19 +73,21 @@ class _SignUpScreenState extends State<SignUpScreen> {
   }
 
   Widget _buildHeader() {
+    final roleDisplay = widget.role == AccountRole.teen ? 'Teen' : 'Parent';
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const Text(
-          'Create Account',
-          style: TextStyle(
+        Text(
+          'Create $roleDisplay Account',
+          style: const TextStyle(
             fontSize: 32,
             fontWeight: FontWeight.bold,
             color: AppColors.textPrimary,
           ),
         ),
         const SizedBox(height: 8),
-        Text(
+        const Text(
           'Start your wellness journey with Lumie',
           style: TextStyle(
             fontSize: 16,
@@ -265,11 +270,85 @@ class _SignUpScreenState extends State<SignUpScreen> {
       email: _emailController.text.trim(),
       password: _passwordController.text,
       confirmPassword: _confirmPasswordController.text,
+      role: widget.role,
     );
 
     if (success && context.mounted) {
-      // Navigation will be handled by main app based on auth state
-      Navigator.of(context).popUntil((route) => route.isFirst);
+      // Show email verification message
+      _showEmailVerificationDialog(context);
     }
+  }
+
+  void _showEmailVerificationDialog(BuildContext context) {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (BuildContext dialogContext) {
+        return AlertDialog(
+          title: const Row(
+            children: [
+              Icon(Icons.email_outlined, color: AppColors.primaryLemonDark),
+              SizedBox(width: 12),
+              Text('Verify Your Email'),
+            ],
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'We\'ve sent a verification email to:',
+                style: TextStyle(color: AppColors.textSecondary),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                _emailController.text.trim(),
+                style: const TextStyle(
+                  fontWeight: FontWeight.bold,
+                  color: AppColors.textPrimary,
+                ),
+              ),
+              const SizedBox(height: 16),
+              const Text(
+                'Please check your inbox and click the verification link to activate your account.',
+                style: TextStyle(color: AppColors.textSecondary),
+              ),
+              const SizedBox(height: 16),
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: AppColors.primaryLemon.withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: const Row(
+                  children: [
+                    Icon(Icons.info_outline, size: 20, color: AppColors.primaryLemonDark),
+                    SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        'You won\'t be able to log in until your email is verified.',
+                        style: TextStyle(
+                          fontSize: 13,
+                          color: AppColors.textSecondary,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () {
+                Navigator.of(dialogContext).pop();
+                Navigator.of(context).popUntil((route) => route.isFirst);
+              },
+              child: const Text('OK'),
+            ),
+          ],
+        );
+      },
+    );
   }
 }

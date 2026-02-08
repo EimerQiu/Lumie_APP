@@ -53,6 +53,7 @@ class AuthService {
     required String email,
     required String password,
     required String confirmPassword,
+    required AccountRole role,
   }) async {
     try {
       final response = await http.post(
@@ -62,6 +63,7 @@ class AuthService {
           'email': email,
           'password': password,
           'confirm_password': confirmPassword,
+          'role': role.name,
         }),
       ).timeout(const Duration(seconds: 3));
 
@@ -75,7 +77,7 @@ class AuthService {
       }
     } catch (e) {
       // Fallback to mock authentication for local development
-      return _mockSignUp(email: email, password: password);
+      return _mockSignUp(email: email, password: password, role: role);
     }
   }
 
@@ -83,6 +85,7 @@ class AuthService {
   Future<AuthResponse> _mockSignUp({
     required String email,
     required String password,
+    required AccountRole role,
   }) async {
     // Simulate network delay
     await Future.delayed(const Duration(milliseconds: 500));
@@ -91,8 +94,9 @@ class AuthService {
       accessToken: 'mock_token_${DateTime.now().millisecondsSinceEpoch}',
       userId: 'user_${email.hashCode}',
       email: email,
-      role: null, // Will be set after account type selection
+      role: role,
       profileComplete: false,
+      emailVerified: false,
     );
 
     await _saveAuthState(mockResponse);
@@ -139,6 +143,7 @@ class AuthService {
       email: email,
       role: AccountRole.teen, // Mock user with profile
       profileComplete: true,
+      emailVerified: true, // Mock user is verified
     );
 
     await _saveAuthState(mockResponse);
@@ -188,6 +193,7 @@ class AuthService {
       email: _currentUser!.email,
       role: role,
       profileComplete: false,
+      emailVerified: _currentUser!.emailVerified,
     );
 
     await _saveAuthState(mockResponse);
