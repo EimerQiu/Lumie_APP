@@ -4,12 +4,15 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from pathlib import Path
 
 from .core.config import settings
 from .core.database import connect_to_mongo, close_mongo_connection
 from .api.routes import router as activity_router
 from .api.auth_routes import router as auth_router
 from .api.profile_routes import router as profile_router
+from .api.team_routes import router as team_router
 
 # Configure logging
 logging.basicConfig(
@@ -89,6 +92,7 @@ app.add_middleware(
 app.include_router(auth_router, prefix="/api/v1")
 app.include_router(profile_router, prefix="/api/v1")
 app.include_router(activity_router, prefix="/api/v1", tags=["activity"])
+app.include_router(team_router, prefix="/api/v1")
 
 
 @app.get("/")
@@ -103,6 +107,7 @@ async def root():
             "auth": "/api/v1/auth",
             "profile": "/api/v1/profile",
             "activity": "/api/v1/activity",
+            "teams": "/api/v1/teams",
             "health": "/api/v1/health",
         }
     }
@@ -116,6 +121,30 @@ async def health_check():
         "service": settings.APP_NAME,
         "version": settings.APP_VERSION,
     }
+
+
+@app.get("/invite/{token}")
+async def invitation_page(token: str):
+    """Serve the web invitation page."""
+    static_dir = Path(__file__).parent / "static"
+    invite_html = static_dir / "invite.html"
+
+    if not invite_html.exists():
+        return {"error": "Invitation page not found"}
+
+    return FileResponse(invite_html)
+
+
+@app.get("/verify")
+async def verification_page():
+    """Serve the email verification page."""
+    static_dir = Path(__file__).parent / "static"
+    verify_html = static_dir / "verify.html"
+
+    if not verify_html.exists():
+        return {"error": "Verification page not found"}
+
+    return FileResponse(verify_html)
 
 
 if __name__ == "__main__":

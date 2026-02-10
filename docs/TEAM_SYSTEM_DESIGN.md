@@ -39,7 +39,7 @@ The Team System allows teens and parents to form **private teams** for shared su
 
 - Users can belong to multiple teams
 - **Free users can create/join 1 team maximum**
-- **Pro users (Monthly/Annual) can create/join unlimited teams**
+- **Pro users (Monthly/Annual) can create/join 100 teams maximum**
 - Pending members have zero access to team data
 - Admins cannot override privacy settings
 - Team membership alone never implies data access
@@ -52,8 +52,24 @@ The Team System allows teens and parents to form **private teams** for shared su
 - Annual plan: **"Pro"** (displayed as "Pro • $179/year")
 
 **Technical/Internal References:**
-- Code and documentation may refer to "Free users", "Pro users", or "Paid users" for clarity
+- Code and documentation may refer to "Free users", "Pro users" for clarity
 - Database tier values remain: `free`, `monthly`, `annual`
+
+### 1.5 Team Limits (Constants)
+
+**Subscription-Based Team Limits:**
+```python
+# Team creation/join limits by subscription tier
+TEAM_LIMIT_FREE = 1      # Free users: 1 team maximum
+TEAM_LIMIT_PRO = 100     # Pro users (Monthly/Annual): 100 teams maximum
+```
+
+**Implementation Notes:**
+- These limits apply to both creating new teams and accepting invitations
+- Limits count teams where user status is `MEMBER` (not `PENDING`)
+- Pro tier includes both `monthly` and `annual` subscription types
+- Backend validation must enforce these limits on team creation and invitation acceptance
+- Frontend should check limits before allowing UI actions (create team button, accept invitation)
 
 ---
 
@@ -342,7 +358,7 @@ When a subscription limit is reached, endpoints return a `403 Forbidden` with a 
   "error": {
     "code": "SUBSCRIPTION_LIMIT_REACHED",
     "message": "You've reached your team limit (1 team maximum)",
-    "detail": "Free users can create/join 1 team. Upgrade to Pro for unlimited teams.",
+    "detail": "Free users can create/join 1 team. Upgrade to Pro for up to 100 teams.",
     "subscription": {
       "current_tier": "free",
       "required_tier": "pro",
@@ -394,7 +410,7 @@ from fastapi import HTTPException
 def raise_subscription_limit_error(
     user_tier: str,
     message: str = "You've reached your team limit",
-    detail: str = "Free users can create/join 1 team. Upgrade to Pro for unlimited teams."
+    detail: str = "Free users can create/join 1 team. Upgrade to Pro for up to 100 teams."
 ):
     """Raise a standardized subscription limit error"""
     error_response = {
@@ -501,7 +517,7 @@ class SubscriptionAction {
 - ✓ Team name must be non-empty (1-100 chars)
 - **Subscription-based limits:**
   - ✓ Free users: Can create 1 team maximum (check current team count)
-  - ✓ Paid users: Can create unlimited teams
+  - ✓ Pro users: Can create up to 100 teams
   - ✗ Reject if Free user already has 1 team
 
 **Request Body:**
@@ -537,7 +553,7 @@ class SubscriptionAction {
   "error": {
     "code": "SUBSCRIPTION_LIMIT_REACHED",
     "message": "You've reached your team limit (1/1 teams)",
-    "detail": "Free users can create 1 team. Upgrade to Pro for unlimited teams.",
+    "detail": "Free users can create 1 team. Upgrade to Pro for up to 100 teams.",
     "subscription": {
       "current_tier": "free",
       "required_tier": "pro",
@@ -565,10 +581,16 @@ async def create_team(user_id: str, data: TeamCreate):
             raise_subscription_limit_error(
                 user_tier="free",
                 message=f"You've reached your team limit ({current_team_count}/1 teams)",
-                detail="Free users can create 1 team. Upgrade to Pro for unlimited teams."
+                detail="Free users can create 1 team. Upgrade to Pro for up to 100 teams."
+            )
+    else:
+        # Pro users can create up to 100 teams
+        if current_team_count >= 100:
+            raise HTTPException(
+                status_code=403,
+                detail=f"You've reached your team limit ({current_team_count}/100 teams)"
             )
 
-    # Paid users have no limit
     # Continue with team creation...
 ```
 
@@ -578,7 +600,7 @@ async def create_team(user_id: str, data: TeamCreate):
 
 **Authorization Conditions:**
 - ✓ User must be authenticated
-- ✓ All subscription tiers can access (Free users see their 1 team, Paid users see all)
+- ✓ All subscription tiers can access (Free users see their 1 team, Pro users see all)
 
 **Query Parameters:**
 - `?status=member|pending` - Optional: filter by member status
@@ -850,7 +872,7 @@ def decode_invitation_token(token: str) -> dict:
 - ✗ Cannot accept if already a member
 - **Team limit check:**
   - ✓ Free users: Can accept only if current team count < 1
-  - ✓ Paid users: Can accept unlimited invitations
+  - ✓ Pro users: Can accept up to 100 invitations
   - ✗ Reject if Free user already has 1 team
 
 **Business Logic:**
@@ -884,7 +906,7 @@ def decode_invitation_token(token: str) -> dict:
   "error": {
     "code": "SUBSCRIPTION_LIMIT_REACHED",
     "message": "You've reached your team limit (1/1 teams)",
-    "detail": "Free users can join 1 team. Upgrade to Pro for unlimited teams.",
+    "detail": "Free users can join 1 team. Upgrade to Pro for up to 100 teams.",
     "subscription": {
       "current_tier": "free",
       "required_tier": "pro",
@@ -912,7 +934,14 @@ async def accept_invitation(team_id: str, user_id: str):
             raise_subscription_limit_error(
                 user_tier="free",
                 message=f"You've reached your team limit ({current_team_count}/1 teams)",
-                detail="Free users can join 1 team. Upgrade to Pro for unlimited teams."
+                detail="Free users can join 1 team. Upgrade to Pro for up to 100 teams."
+            )
+    else:
+        # Pro users can join up to 100 teams
+        if current_team_count >= 100:
+            raise HTTPException(
+                status_code=403,
+                detail=f"You've reached your team limit ({current_team_count}/100 teams)"
             )
 
     # Update status: pending → member
@@ -1461,9 +1490,9 @@ Settings
 **UI Elements:**
 - **Header:** "My Teams"
 - **Subscription Status Banner:**
-  - If Free tier and has 1 team: Show "Team limit reached (1/1). Upgrade to Pro for unlimited teams"
+  - If Free tier and has 1 team: Show "Team limit reached (1/1). Upgrade to Pro for up to 100 teams"
   - If Free tier and has 0 teams: Show "Free: 1 team available"
-  - If Pro tier: Show "Pro: Unlimited teams"
+  - If Pro tier: Show "Pro: Up to 100 teams"
 - **Active Teams Section:**
   - List of teams (card layout)
   - Each card shows:
@@ -1515,14 +1544,16 @@ class TeamsProvider extends ChangeNotifier {
     if (_userTier == SubscriptionTier.FREE) {
       return _teams.length < 1;
     }
-    return true; // Pro users can create unlimited
+    // Pro users can create up to 100 teams
+    return _teams.length < 100;
   }
 
   bool get hasReachedTeamLimit {
     if (_userTier == SubscriptionTier.FREE) {
       return _teams.length >= 1;
     }
-    return false;
+    // Pro users: check against 100 team limit
+    return _teams.length >= 100;
   }
 }
 ```
@@ -1536,7 +1567,7 @@ void _onCreateTeamPressed() {
     // Show upgrade prompt immediately
     _showUpgradePrompt(
       message: "You've reached your team limit (1/1 teams)",
-      detail: "Free users can create 1 team. Upgrade to Pro for unlimited teams.",
+      detail: "Free users can create 1 team. Upgrade to Pro for up to 100 teams.",
     );
   } else {
     // Navigate to create team screen
@@ -2003,11 +2034,11 @@ class _AcceptInvitationDialogState extends State<AcceptInvitationDialog> {
   - Font: Body, Regular
   - Color: Secondary text color
   - Centered
-  - Example: "Free users can create 1 team. Upgrade to Pro for unlimited teams."
+  - Example: "Free users can create 1 team. Upgrade to Pro for up to 100 teams."
 
 - **Benefits List (Optional):**
   - Show key Pro features:
-    - "✓ Unlimited teams"
+    - "✓ Up to 100 teams"
     - "✓ Advanced family sharing"
     - "✓ Priority support"
 
@@ -2116,7 +2147,7 @@ class UpgradePromptBottomSheet extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  _buildBenefit(context, 'Unlimited teams'),
+                  _buildBenefit(context, 'Up to 100 teams'),
                   SizedBox(height: 8),
                   _buildBenefit(context, 'Advanced family sharing'),
                   SizedBox(height: 8),
@@ -2899,7 +2930,7 @@ class Task(BaseModel):
 
 Team operations have tier-based limits:
 - **Free users:** Can create/join 1 team maximum
-- **Paid users:** Can create/join unlimited teams
+- **Pro users:** Can create/join up to 100 teams
 
 ```python
 # Helper function to check team limit
@@ -2915,10 +2946,21 @@ async def check_team_limit(user: UserInDB, db):
         if current_team_count >= 1:
             raise HTTPException(
                 status_code=403,
-                detail="Team limit reached (1 team max for Free users). Upgrade to Pro for unlimited teams."
+                detail="Team limit reached (1 team max for Free users). Upgrade to Pro for up to 100 teams."
+            )
+    else:
+        # Pro users can create up to 100 teams
+        current_team_count = await db.team_members.count_documents({
+            "user_id": user.user_id,
+            "status": MemberStatus.MEMBER.value
+        })
+
+        if current_team_count >= 100:
+            raise HTTPException(
+                status_code=403,
+                detail=f"You've reached your team limit ({current_team_count}/100 teams)"
             )
 
-    # Paid users have no limit
     return True
 ```
 

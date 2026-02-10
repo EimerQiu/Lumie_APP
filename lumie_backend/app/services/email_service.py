@@ -114,6 +114,7 @@ class EmailService:
 
     def send_verification_email(self, to_email: str, verification_token: str) -> bool:
         """Send email verification email"""
+        # Use production domain for verification link
         verification_link = f"https://yumo.org/verify?token={verification_token}"
 
         html_body = f"""

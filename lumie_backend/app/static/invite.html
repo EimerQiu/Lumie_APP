@@ -1,0 +1,424 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Join Lumie - Team Invitation</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background: linear-gradient(135deg, #FEF9C3 0%, #FDE68A 50%, #FCA5A5 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+
+        .container {
+            background: white;
+            border-radius: 24px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.15);
+            max-width: 480px;
+            width: 100%;
+            overflow: hidden;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #FDE68A 0%, #FCA5A5 100%);
+            padding: 40px 32px;
+            text-align: center;
+        }
+
+        .logo {
+            font-size: 48px;
+            margin-bottom: 16px;
+        }
+
+        h1 {
+            color: #78350F;
+            font-size: 28px;
+            margin-bottom: 8px;
+        }
+
+        .subtitle {
+            color: #78350F;
+            opacity: 0.8;
+            font-size: 16px;
+        }
+
+        .content {
+            padding: 32px;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 40px;
+            color: #6B7280;
+        }
+
+        .spinner {
+            border: 3px solid #E5E7EB;
+            border-top: 3px solid #F59E0B;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 16px;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .team-card {
+            background: linear-gradient(135deg, #D1FAE5 0%, #A7F3D0 100%);
+            border-radius: 16px;
+            padding: 24px;
+            margin-bottom: 24px;
+        }
+
+        .team-name {
+            font-size: 24px;
+            font-weight: bold;
+            color: #065F46;
+            margin-bottom: 8px;
+        }
+
+        .team-description {
+            color: #065F46;
+            opacity: 0.8;
+            margin-bottom: 16px;
+            line-height: 1.5;
+        }
+
+        .inviter {
+            display: flex;
+            align-items: center;
+            color: #065F46;
+            font-size: 14px;
+        }
+
+        .inviter-icon {
+            margin-right: 8px;
+        }
+
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        label {
+            display: block;
+            margin-bottom: 8px;
+            color: #374151;
+            font-weight: 500;
+            font-size: 14px;
+        }
+
+        input, select {
+            width: 100%;
+            padding: 12px 16px;
+            border: 2px solid #E5E7EB;
+            border-radius: 12px;
+            font-size: 16px;
+            transition: border-color 0.2s;
+        }
+
+        input:focus, select:focus {
+            outline: none;
+            border-color: #F59E0B;
+        }
+
+        input:disabled {
+            background: #F3F4F6;
+            cursor: not-allowed;
+        }
+
+        .password-hint {
+            font-size: 12px;
+            color: #6B7280;
+            margin-top: 4px;
+        }
+
+        .button {
+            width: 100%;
+            padding: 14px;
+            background: linear-gradient(135deg, #F59E0B 0%, #EF4444 100%);
+            color: white;
+            border: none;
+            border-radius: 12px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+
+        .button:hover:not(:disabled) {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 20px rgba(245, 158, 11, 0.4);
+        }
+
+        .button:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+
+        .error {
+            background: #FEE2E2;
+            border: 2px solid #EF4444;
+            border-radius: 12px;
+            padding: 16px;
+            color: #991B1B;
+            margin-bottom: 20px;
+            display: none;
+        }
+
+        .success {
+            background: #D1FAE5;
+            border: 2px solid #10B981;
+            border-radius: 12px;
+            padding: 24px;
+            text-align: center;
+        }
+
+        .success-icon {
+            font-size: 48px;
+            margin-bottom: 16px;
+        }
+
+        .success h2 {
+            color: #065F46;
+            margin-bottom: 8px;
+        }
+
+        .success p {
+            color: #065F46;
+            opacity: 0.8;
+            margin-bottom: 16px;
+        }
+
+        .download-buttons {
+            display: flex;
+            gap: 12px;
+            justify-content: center;
+            margin-top: 20px;
+        }
+
+        .app-button {
+            flex: 1;
+            padding: 12px;
+            background: #065F46;
+            color: white;
+            text-decoration: none;
+            border-radius: 8px;
+            font-weight: 600;
+            text-align: center;
+            transition: background 0.2s;
+        }
+
+        .app-button:hover {
+            background: #047857;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <div class="logo">💙</div>
+            <h1>Join Lumie</h1>
+            <p class="subtitle">You've been invited to join a team!</p>
+        </div>
+
+        <div class="content">
+            <!-- Loading state -->
+            <div id="loading" class="loading">
+                <div class="spinner"></div>
+                <p>Loading invitation...</p>
+            </div>
+
+            <!-- Error state -->
+            <div id="error-container" style="display: none;">
+                <div class="error" id="error-message"></div>
+            </div>
+
+            <!-- Invitation form -->
+            <div id="invitation-form" style="display: none;">
+                <div class="team-card">
+                    <div class="team-name" id="team-name"></div>
+                    <div class="team-description" id="team-description"></div>
+                    <div class="inviter">
+                        <span class="inviter-icon">👤</span>
+                        <span>Invited by <strong id="inviter-name"></strong></span>
+                    </div>
+                </div>
+
+                <form id="signup-form">
+                    <div class="form-group">
+                        <label for="email">Email</label>
+                        <input type="email" id="email" name="email" required disabled>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="password">Password</label>
+                        <input type="password" id="password" name="password" required minlength="8">
+                        <div class="password-hint">At least 8 characters</div>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="confirm-password">Confirm Password</label>
+                        <input type="password" id="confirm-password" name="confirm-password" required minlength="8">
+                    </div>
+
+                    <div class="form-group">
+                        <label for="role">I am a...</label>
+                        <select id="role" name="role" required>
+                            <option value="">Select your role</option>
+                            <option value="teen">Teen</option>
+                            <option value="parent">Parent</option>
+                        </select>
+                    </div>
+
+                    <div class="error" id="form-error"></div>
+
+                    <button type="submit" class="button" id="submit-btn">Create Account & Join Team</button>
+                </form>
+            </div>
+
+            <!-- Success state -->
+            <div id="success-container" style="display: none;">
+                <div class="success">
+                    <div class="success-icon">✅</div>
+                    <h2>Account Created!</h2>
+                    <p>You've successfully signed up for Lumie. Download the app to complete your profile and join your team.</p>
+                    <div class="download-buttons">
+                        <a href="#" class="app-button">📱 iOS App</a>
+                        <a href="#" class="app-button">🤖 Android App</a>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE = window.location.origin + '/api/v1';
+        const urlParams = new URLSearchParams(window.location.search);
+        const token = urlParams.get('token') || window.location.pathname.split('/').pop();
+
+        let invitationData = null;
+
+        // Load invitation details
+        async function loadInvitation() {
+            try {
+                const response = await fetch(`${API_BASE}/teams/invitations/token/${token}`);
+
+                if (!response.ok) {
+                    const error = await response.json();
+                    throw new Error(error.detail || 'Failed to load invitation');
+                }
+
+                invitationData = await response.json();
+
+                // Check status
+                if (invitationData.status === 'already_member') {
+                    showError('You are already a member of this team. Please open the Lumie app to view your teams.');
+                    return;
+                }
+
+                if (invitationData.status === 'pending') {
+                    showError('You already have an account. Please open the Lumie app and log in to accept this invitation.');
+                    return;
+                }
+
+                // Show invitation form
+                document.getElementById('loading').style.display = 'none';
+                document.getElementById('invitation-form').style.display = 'block';
+
+                document.getElementById('team-name').textContent = invitationData.team_name;
+                document.getElementById('team-description').textContent = invitationData.team_description || '';
+                document.getElementById('inviter-name').textContent = invitationData.invited_by;
+                document.getElementById('email').value = invitationData.email;
+
+            } catch (error) {
+                document.getElementById('loading').style.display = 'none';
+                showError(error.message);
+            }
+        }
+
+        // Handle form submission
+        document.getElementById('signup-form').addEventListener('submit', async (e) => {
+            e.preventDefault();
+
+            const password = document.getElementById('password').value;
+            const confirmPassword = document.getElementById('confirm-password').value;
+            const role = document.getElementById('role').value;
+
+            // Validate passwords match
+            if (password !== confirmPassword) {
+                showFormError('Passwords do not match');
+                return;
+            }
+
+            // Disable submit button
+            const submitBtn = document.getElementById('submit-btn');
+            submitBtn.disabled = true;
+            submitBtn.textContent = 'Creating account...';
+
+            try {
+                // Sign up
+                const response = await fetch(`${API_BASE}/auth/signup`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        email: invitationData.email,
+                        password: password,
+                        confirm_password: confirmPassword,
+                        role: role
+                    })
+                });
+
+                if (!response.ok) {
+                    const error = await response.json();
+                    throw new Error(error.detail || 'Failed to create account');
+                }
+
+                // Success!
+                document.getElementById('invitation-form').style.display = 'none';
+                document.getElementById('success-container').style.display = 'block';
+
+            } catch (error) {
+                showFormError(error.message);
+                submitBtn.disabled = false;
+                submitBtn.textContent = 'Create Account & Join Team';
+            }
+        });
+
+        function showError(message) {
+            document.getElementById('error-container').style.display = 'block';
+            document.getElementById('error-message').textContent = message;
+            document.getElementById('error-message').style.display = 'block';
+        }
+
+        function showFormError(message) {
+            const errorDiv = document.getElementById('form-error');
+            errorDiv.textContent = message;
+            errorDiv.style.display = 'block';
+
+            setTimeout(() => {
+                errorDiv.style.display = 'none';
+            }, 5000);
+        }
+
+        // Load invitation on page load
+        loadInvitation();
+    </script>
+</body>
+</html>

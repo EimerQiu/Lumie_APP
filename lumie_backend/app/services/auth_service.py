@@ -1,6 +1,7 @@
 """Authentication service for user management."""
 import uuid
 import secrets
+import logging
 from datetime import datetime, timedelta
 from typing import Optional
 
@@ -25,6 +26,11 @@ from ..models.user import (
     EmailVerification,
 )
 from .email_service import email_service
+
+logger = logging.getLogger(__name__)
+
+# Import team service for processing pending invitations
+# Avoid circular import by importing inside methods when needed
 
 
 security = HTTPBearer()
@@ -75,14 +81,28 @@ class AuthService:
 
         await db.users.insert_one(user_doc)
 
+        # Process any pending team invitations for this email
+        try:
+            from .team_service import team_service
+            invitations_count = await team_service.process_pending_invitations(user_id, data.email.lower())
+            if invitations_count > 0:
+                logger.info(f"✅ Processed {invitations_count} pending team invitation(s) for {data.email.lower()}")
+        except Exception as e:
+            logger.error(f"❌ Failed to process pending invitations: {str(e)}", exc_info=True)
+            # Don't fail signup if invitation processing fails
+
         # Send verification email
         try:
-            email_service.send_verification_email(
+            result = email_service.send_verification_email(
                 to_email=data.email.lower(),
                 verification_token=verification_token
             )
+            if result:
+                logger.info(f"✅ Verification email sent to {data.email.lower()}")
+            else:
+                logger.error(f"❌ Failed to send verification email to {data.email.lower()} - email service returned False")
         except Exception as e:
-            print(f"Failed to send verification email: {e}")
+            logger.error(f"❌ Exception sending verification email to {data.email.lower()}: {str(e)}", exc_info=True)
             # Don't fail signup if email sending fails
 
         # Generate token

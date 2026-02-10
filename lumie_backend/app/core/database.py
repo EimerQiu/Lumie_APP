@@ -50,6 +50,22 @@ async def create_indexes():
     await db.db.walk_tests.create_index("user_id")
     await db.db.walk_tests.create_index([("user_id", 1), ("date", -1)])
 
+    # Team collection indexes
+    await db.db.teams.create_index("team_id", unique=True)
+    await db.db.teams.create_index("created_by")
+    await db.db.teams.create_index("is_deleted")
+
+    # Team members collection indexes
+    await db.db.team_members.create_index([("team_id", 1), ("user_id", 1)], unique=True)
+    await db.db.team_members.create_index([("user_id", 1), ("status", 1)])
+    await db.db.team_members.create_index([("team_id", 1), ("status", 1)])
+    await db.db.team_members.create_index("invited_at")
+
+    # Pending invitations collection indexes (email-based invitations)
+    await db.db.pending_invitations.create_index([("team_id", 1), ("email", 1)], unique=True)
+    await db.db.pending_invitations.create_index("email")
+    await db.db.pending_invitations.create_index("expires_at")
+
 
 def get_database() -> AsyncIOMotorDatabase:
     """Get database instance."""

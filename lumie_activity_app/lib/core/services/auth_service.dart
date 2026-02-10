@@ -65,7 +65,7 @@ class AuthService {
           'confirm_password': confirmPassword,
           'role': role.name,
         }),
-      ).timeout(const Duration(seconds: 3));
+      ).timeout(const Duration(seconds: 15));
 
       if (response.statusCode == 200) {
         final authResponse = AuthResponse.fromJson(json.decode(response.body));
@@ -76,8 +76,8 @@ class AuthService {
         throw Exception(error['detail'] ?? 'Sign up failed');
       }
     } catch (e) {
-      // Fallback to mock authentication for local development
-      return _mockSignUp(email: email, password: password, role: role);
+      print('⚠️ Sign up error: ${e.toString()}');
+      rethrow; // Don't fall back to mock - show the real error
     }
   }
 
@@ -116,7 +116,7 @@ class AuthService {
           'email': email,
           'password': password,
         }),
-      ).timeout(const Duration(seconds: 3));
+      ).timeout(const Duration(seconds: 15));
 
       if (response.statusCode == 200) {
         final authResponse = AuthResponse.fromJson(json.decode(response.body));
@@ -127,8 +127,8 @@ class AuthService {
         throw Exception(error['detail'] ?? 'Login failed');
       }
     } catch (e) {
-      // Fallback to mock authentication for local development
-      return _mockLogin(email: email);
+      print('⚠️ Login error: ${e.toString()}');
+      rethrow; // Don't fall back to mock - show the real error
     }
   }
 
@@ -162,7 +162,7 @@ class AuthService {
           'Authorization': 'Bearer $_token',
         },
         body: json.encode({'role': role.name}),
-      ).timeout(const Duration(seconds: 3));
+      ).timeout(const Duration(seconds: 15));
 
       if (response.statusCode == 200) {
         final authResponse = AuthResponse.fromJson(json.decode(response.body));
@@ -173,8 +173,8 @@ class AuthService {
         throw Exception(error['detail'] ?? 'Failed to select account type');
       }
     } catch (e) {
-      // Fallback to mock for local development
-      return _mockSelectAccountType(role);
+      print('⚠️ Select account type error: ${e.toString()}');
+      rethrow; // Don't fall back to mock - show the real error
     }
   }
 
@@ -240,6 +240,7 @@ class AuthService {
   Future<void> updateUserState({
     AccountRole? role,
     bool? profileComplete,
+    bool? emailVerified,
   }) async {
     if (_currentUser == null) return;
 
@@ -249,6 +250,8 @@ class AuthService {
       email: _currentUser!.email,
       role: role ?? _currentUser!.role,
       profileComplete: profileComplete ?? _currentUser!.profileComplete,
+      emailVerified: emailVerified ?? _currentUser!.emailVerified,
+      subscriptionTier: _currentUser!.subscriptionTier,
     );
 
     await _saveAuthState(updated);

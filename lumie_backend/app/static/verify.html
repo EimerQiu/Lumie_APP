@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Verify Email - Lumie</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background: linear-gradient(135deg, #FEF9C3 0%, #FDE68A 50%, #FCA5A5 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+
+        .container {
+            background: white;
+            border-radius: 24px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.15);
+            max-width: 480px;
+            width: 100%;
+            overflow: hidden;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #FDE68A 0%, #FCA5A5 100%);
+            padding: 40px 32px;
+            text-align: center;
+        }
+
+        .logo {
+            font-size: 48px;
+            margin-bottom: 16px;
+        }
+
+        h1 {
+            color: #78350F;
+            font-size: 28px;
+            margin-bottom: 8px;
+        }
+
+        .subtitle {
+            color: #78350F;
+            opacity: 0.8;
+            font-size: 16px;
+        }
+
+        .content {
+            padding: 32px;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 40px;
+            color: #6B7280;
+        }
+
+        .spinner {
+            border: 3px solid #E5E7EB;
+            border-top: 3px solid #F59E0B;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 16px;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .success {
+            text-align: center;
+            padding: 40px 0;
+        }
+
+        .success-icon {
+            font-size: 64px;
+            margin-bottom: 24px;
+        }
+
+        .success h2 {
+            color: #065F46;
+            font-size: 24px;
+            margin-bottom: 12px;
+        }
+
+        .success p {
+            color: #6B7280;
+            font-size: 16px;
+            line-height: 1.5;
+            margin-bottom: 32px;
+        }
+
+        .error {
+            text-align: center;
+            padding: 40px 0;
+        }
+
+        .error-icon {
+            font-size: 64px;
+            margin-bottom: 24px;
+        }
+
+        .error h2 {
+            color: #991B1B;
+            font-size: 24px;
+            margin-bottom: 12px;
+        }
+
+        .error p {
+            color: #6B7280;
+            font-size: 16px;
+            line-height: 1.5;
+            margin-bottom: 32px;
+        }
+
+        .button {
+            width: 100%;
+            padding: 14px;
+            background: linear-gradient(135deg, #F59E0B 0%, #EF4444 100%);
+            color: white;
+            border: none;
+            border-radius: 12px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: transform 0.2s, box-shadow 0.2s;
+            text-decoration: none;
+            display: inline-block;
+            text-align: center;
+        }
+
+        .button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 20px rgba(245, 158, 11, 0.4);
+        }
+
+        .download-buttons {
+            display: flex;
+            gap: 12px;
+            margin-top: 24px;
+        }
+
+        .app-button {
+            flex: 1;
+            padding: 12px;
+            background: #065F46;
+            color: white;
+            text-decoration: none;
+            border-radius: 8px;
+            font-weight: 600;
+            text-align: center;
+            transition: background 0.2s;
+        }
+
+        .app-button:hover {
+            background: #047857;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <div class="logo">💙</div>
+            <h1>Email Verification</h1>
+            <p class="subtitle">Verifying your email address...</p>
+        </div>
+
+        <div class="content">
+            <!-- Loading state -->
+            <div id="loading" class="loading">
+                <div class="spinner"></div>
+                <p>Please wait while we verify your email...</p>
+            </div>
+
+            <!-- Success state -->
+            <div id="success" style="display: none;">
+                <div class="success">
+                    <div class="success-icon">✅</div>
+                    <h2>Email Verified!</h2>
+                    <p>Your email has been successfully verified. You can now log in to the Lumie app.</p>
+                    <div class="download-buttons">
+                        <a href="#" class="app-button">📱 iOS App</a>
+                        <a href="#" class="app-button">🤖 Android App</a>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Error state -->
+            <div id="error" style="display: none;">
+                <div class="error">
+                    <div class="error-icon">❌</div>
+                    <h2>Verification Failed</h2>
+                    <p id="error-message">The verification link is invalid or has expired.</p>
+                    <a href="mailto:support@yumo.org" class="button">Contact Support</a>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE = window.location.origin + '/api/v1';
+        const urlParams = new URLSearchParams(window.location.search);
+        const token = urlParams.get('token');
+
+        async function verifyEmail() {
+            if (!token) {
+                showError('No verification token provided.');
+                return;
+            }
+
+            try {
+                const response = await fetch(`${API_BASE}/auth/verify-email`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        token: token
+                    })
+                });
+
+                const data = await response.json();
+
+                if (response.ok) {
+                    // Success!
+                    document.getElementById('loading').style.display = 'none';
+                    document.getElementById('success').style.display = 'block';
+                } else {
+                    // Error
+                    showError(data.detail || 'Verification failed. Please try again.');
+                }
+            } catch (error) {
+                showError('Network error. Please check your connection and try again.');
+            }
+        }
+
+        function showError(message) {
+            document.getElementById('loading').style.display = 'none';
+            document.getElementById('error').style.display = 'block';
+            document.getElementById('error-message').textContent = message;
+        }
+
+        // Auto-verify on page load
+        verifyEmail();
+    </script>
+</body>
+</html>

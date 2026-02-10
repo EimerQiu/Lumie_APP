@@ -7,6 +7,7 @@ import 'features/auth/providers/auth_provider.dart';
 import 'features/auth/screens/welcome_screen.dart';
 import 'features/auth/screens/login_screen.dart';
 import 'features/auth/screens/account_type_screen.dart';
+import 'features/auth/screens/select_account_type_screen.dart';
 import 'features/auth/screens/teen_profile_setup_screen.dart';
 import 'features/auth/screens/parent_profile_setup_screen.dart';
 import 'features/dashboard/screens/dashboard_screen.dart';
@@ -15,6 +16,13 @@ import 'features/manual_entry/screens/manual_entry_screen.dart';
 import 'features/walk_test/screens/walk_test_screen.dart';
 import 'features/sleep/screens/sleep_screen.dart';
 import 'features/sleep/screens/sleep_history_screen.dart';
+import 'features/teams/providers/teams_provider.dart';
+import 'features/teams/screens/teams_list_screen.dart';
+import 'features/teams/screens/create_team_screen.dart';
+import 'features/teams/screens/team_detail_screen.dart';
+import 'features/teams/screens/invite_member_screen.dart';
+import 'features/teams/screens/member_data_screen.dart';
+import 'features/teams/screens/accept_invitation_screen.dart';
 import 'shared/models/activity_models.dart';
 import 'shared/models/user_models.dart';
 
@@ -34,8 +42,11 @@ class LumieActivityApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return ChangeNotifierProvider(
-      create: (_) => AuthProvider()..init(),
+    return MultiProvider(
+      providers: [
+        ChangeNotifierProvider(create: (_) => AuthProvider()..init()),
+        ChangeNotifierProvider(create: (_) => TeamsProvider()),
+      ],
       child: MaterialApp(
         title: 'Lumie Activity',
         debugShowCheckedModeBanner: false,
@@ -49,6 +60,43 @@ class LumieActivityApp extends StatelessWidget {
           '/profile/parent': (context) => const ParentProfileSetupScreen(),
           '/home': (context) => const MainNavigationScreen(),
           '/sleep/history': (context) => const SleepHistoryScreen(),
+          '/teams': (context) => const TeamsListScreen(),
+          '/teams/create': (context) => const CreateTeamScreen(),
+        },
+        onGenerateRoute: (settings) {
+          // Handle routes with arguments
+          if (settings.name == '/teams/detail') {
+            final teamId = settings.arguments as String;
+            return MaterialPageRoute(
+              builder: (context) => TeamDetailScreen(teamId: teamId),
+            );
+          } else if (settings.name == '/teams/invite') {
+            final teamId = settings.arguments as String;
+            return MaterialPageRoute(
+              builder: (context) => InviteMemberScreen(teamId: teamId),
+            );
+          } else if (settings.name == '/teams/member-data') {
+            final args = settings.arguments as Map<String, dynamic>;
+            return MaterialPageRoute(
+              builder: (context) => MemberDataScreen(
+                teamId: args['teamId'] as String,
+                userId: args['userId'] as String,
+                userName: args['userName'] as String,
+              ),
+            );
+          } else if (settings.name == '/subscription/upgrade') {
+            // Placeholder for subscription upgrade screen
+            return MaterialPageRoute(
+              builder: (context) => const SubscriptionUpgradeScreen(),
+            );
+          } else if (settings.name?.startsWith('/invite/') == true) {
+            // Handle invitation link: /invite/{token}
+            final token = settings.name!.substring('/invite/'.length);
+            return MaterialPageRoute(
+              builder: (context) => AcceptInvitationScreen(token: token),
+            );
+          }
+          return null;
         },
       ),
     );
@@ -73,7 +121,7 @@ class AuthWrapper extends StatelessWidget {
             return const WelcomeScreen();
 
           case AuthState.needsAccountType:
-            return const AccountTypeScreen();
+            return const SelectAccountTypeScreen();
 
           case AuthState.needsProfile:
             final role = auth.user?.role;
@@ -83,7 +131,7 @@ class AuthWrapper extends StatelessWidget {
               return const ParentProfileSetupScreen();
             }
             // Fallback to account type if role is unknown
-            return const AccountTypeScreen();
+            return const SelectAccountTypeScreen();
 
           case AuthState.authenticated:
             return const MainNavigationScreen();
@@ -170,10 +218,25 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
   int _currentIndex = 0;
 
   @override
+  void initState() {
+    super.initState();
+    // Initialize TeamsProvider with user's subscription tier
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final authProvider = context.read<AuthProvider>();
+      final teamsProvider = context.read<TeamsProvider>();
+
+      if (authProvider.profile?.subscription.tier != null) {
+        teamsProvider.setUserTier(authProvider.profile!.subscription.tier);
+      }
+    });
+  }
+
+  @override
   Widget build(BuildContext context) {
     final screens = [
       const DashboardScreen(),
       const SleepScreen(),
+      const TeamsListScreen(),
       const WalkTestScreen(),
       const SettingsScreen(),
     ];
@@ -210,7 +273,7 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
       ),
       child: SafeArea(
         child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 8),
           child: Row(
             mainAxisAlignment: MainAxisAlignment.spaceAround,
             children: [
@@ -228,20 +291,27 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
                 isSelected: _currentIndex == 1,
                 onTap: () => setState(() => _currentIndex = 1),
               ),
-              const SizedBox(width: 56), // Space for FAB
+              _NavBarItem(
+                icon: Icons.groups_outlined,
+                selectedIcon: Icons.groups,
+                label: 'Teams',
+                isSelected: _currentIndex == 2,
+                onTap: () => setState(() => _currentIndex = 2),
+              ),
+              const SizedBox(width: 48), // Space for FAB
               _NavBarItem(
                 icon: Icons.directions_walk_outlined,
                 selectedIcon: Icons.directions_walk,
                 label: '6MWT',
-                isSelected: _currentIndex == 2,
-                onTap: () => setState(() => _currentIndex = 2),
+                isSelected: _currentIndex == 3,
+                onTap: () => setState(() => _currentIndex = 3),
               ),
               _NavBarItem(
                 icon: Icons.settings_outlined,
                 selectedIcon: Icons.settings,
                 label: 'Settings',
-                isSelected: _currentIndex == 3,
-                onTap: () => setState(() => _currentIndex = 3),
+                isSelected: _currentIndex == 4,
+                onTap: () => setState(() => _currentIndex = 4),
               ),
             ],
           ),
@@ -594,6 +664,13 @@ class SettingsScreen extends StatelessWidget {
                       },
                     ),
                     _SettingsItem(
+                      icon: Icons.groups_outlined,
+                      title: 'Teams',
+                      onTap: () {
+                        Navigator.pushNamed(context, '/teams');
+                      },
+                    ),
+                    _SettingsItem(
                       icon: Icons.watch_outlined,
                       title: 'Ring Settings',
                       onTap: () {},
@@ -704,6 +781,60 @@ class _SettingsItem extends StatelessWidget {
         color: isDestructive ? AppColors.error : AppColors.textSecondary,
       ),
       onTap: onTap,
+    );
+  }
+}
+
+/// Placeholder screen for subscription upgrade
+class SubscriptionUpgradeScreen extends StatelessWidget {
+  const SubscriptionUpgradeScreen({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Upgrade to Pro'),
+      ),
+      body: Center(
+        child: Padding(
+          padding: const EdgeInsets.all(32),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(
+                Icons.workspace_premium,
+                size: 96,
+                color: Colors.amber[600],
+              ),
+              const SizedBox(height: 24),
+              Text(
+                'Upgrade to Pro',
+                style: Theme.of(context).textTheme.headlineMedium?.copyWith(
+                      fontWeight: FontWeight.bold,
+                    ),
+              ),
+              const SizedBox(height: 16),
+              Text(
+                'Get access to up to 100 teams and unlock premium features.',
+                style: TextStyle(
+                  fontSize: 16,
+                  color: Colors.grey[600],
+                ),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 32),
+              Text(
+                'Subscription upgrade screen\ncoming soon!',
+                style: TextStyle(
+                  fontSize: 14,
+                  color: Colors.grey[500],
+                ),
+                textAlign: TextAlign.center,
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }

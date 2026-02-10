@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart';
 import '../../../core/services/auth_service.dart';
 import '../../../core/services/profile_service.dart';
+import '../../../core/services/team_service.dart';
 import '../../../shared/models/user_models.dart';
 
 enum AuthState {
@@ -16,6 +17,7 @@ enum AuthState {
 class AuthProvider extends ChangeNotifier {
   final AuthService _authService = AuthService();
   final ProfileService _profileService = ProfileService();
+  final TeamService _teamService = TeamService();
 
   AuthState _state = AuthState.initial;
   String? _errorMessage;
@@ -28,6 +30,18 @@ class AuthProvider extends ChangeNotifier {
   UserProfile? get profile => _profile;
   bool get isAuthenticated => _state == AuthState.authenticated;
 
+  /// Set authentication token in team service
+  void _setTeamServiceToken() {
+    final token = _authService.token;
+    print('🔐 AuthProvider: Attempting to set TeamService token - ${token == null ? 'NULL' : 'Token available (${token.substring(0, 20)}...)'}');
+    if (token != null) {
+      _teamService.setToken(token);
+      print('🔐 AuthProvider: TeamService token set successfully');
+    } else {
+      print('⚠️ AuthProvider: No token available to set in TeamService');
+    }
+  }
+
   /// Initialize auth state from local storage
   Future<void> init() async {
     _state = AuthState.loading;
@@ -38,6 +52,7 @@ class AuthProvider extends ChangeNotifier {
 
       if (_authService.isAuthenticated) {
         _user = _authService.currentUser;
+        _setTeamServiceToken(); // Set token for team service
 
         // Determine next state based on user status
         if (_user!.role == null) {
@@ -109,6 +124,8 @@ class AuthProvider extends ChangeNotifier {
         password: password,
       );
 
+      _setTeamServiceToken(); // Set token for team service
+
       // Determine next state
       if (_user!.role == null) {
         _state = AuthState.needsAccountType;
@@ -174,6 +191,11 @@ class AuthProvider extends ChangeNotifier {
         icd10Code: icd10Code,
         advisorName: advisorName,
       );
+
+      // Update saved user state to mark profile as complete
+      await _authService.updateUserState(profileComplete: true);
+
+      _setTeamServiceToken(); // Set token for team service
       _state = AuthState.authenticated;
       notifyListeners();
       return true;
@@ -203,6 +225,11 @@ class AuthProvider extends ChangeNotifier {
         height: height,
         weight: weight,
       );
+
+      // Update saved user state to mark profile as complete
+      await _authService.updateUserState(profileComplete: true);
+
+      _setTeamServiceToken(); // Set token for team service
       _state = AuthState.authenticated;
       notifyListeners();
       return true;
@@ -244,6 +271,7 @@ class AuthProvider extends ChangeNotifier {
   /// Log out
   Future<void> logout() async {
     await _authService.logout();
+    _teamService.clearToken(); // Clear token from team service
     _user = null;
     _profile = null;
     _state = AuthState.unauthenticated;
