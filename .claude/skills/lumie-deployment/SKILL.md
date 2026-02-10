@@ -279,15 +279,24 @@ ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.193.153.37 "sudo systemctl status mongod"
 
 ### Error 3: Address Already in Use
 ```bash
-# Find process using port 8000
+# 1. Find process using port 8000
 ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.193.153.37 "sudo lsof -i :8000"
 
-# Kill process (replace <PID>)
+# 2. Check for duplicate services (IMPORTANT!)
+ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.193.153.37 "sudo systemctl list-units --type=service | grep lumie"
+
+# 3. If lumie-backend.service exists, disable it (it's a duplicate)
+ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.193.153.37 "sudo systemctl stop lumie-backend.service"
+ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.193.153.37 "sudo systemctl disable lumie-backend.service"
+
+# 4. Kill rogue processes (if needed, replace <PID>)
 ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.193.153.37 "sudo kill -9 <PID>"
 
-# Restart service
+# 5. Restart the correct service
 ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.193.153.37 "sudo systemctl restart lumie-api"
 ```
+
+**Note:** Only `lumie-api.service` should be running. If you find `lumie-backend.service`, it's a duplicate that must be stopped and disabled.
 
 ### Error 4: Changes Not Applied
 **Solution 1:** Hard refresh browser (Cmd+Shift+R or Ctrl+Shift+R)
