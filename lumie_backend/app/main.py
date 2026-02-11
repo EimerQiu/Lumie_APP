@@ -13,6 +13,7 @@ from .api.routes import router as activity_router
 from .api.auth_routes import router as auth_router
 from .api.profile_routes import router as profile_router
 from .api.team_routes import router as team_router
+from .api.rest_days_routes import router as rest_days_router
 
 # Configure logging
 logging.basicConfig(
@@ -93,6 +94,7 @@ app.include_router(auth_router, prefix="/api/v1")
 app.include_router(profile_router, prefix="/api/v1")
 app.include_router(activity_router, prefix="/api/v1", tags=["activity"])
 app.include_router(team_router, prefix="/api/v1")
+app.include_router(rest_days_router, prefix="/api/v1")
 
 
 @app.get("/")
@@ -108,6 +110,7 @@ async def root():
             "profile": "/api/v1/profile",
             "activity": "/api/v1/activity",
             "teams": "/api/v1/teams",
+            "rest-days": "/api/v1/rest-days",
             "health": "/api/v1/health",
         }
     }

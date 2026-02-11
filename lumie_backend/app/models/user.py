@@ -56,6 +56,38 @@ class SubscriptionStatus(BaseModel):
     auto_renew: bool = False
 
 
+class RestDaySettings(BaseModel):
+    """Rest days configuration for user."""
+    weekly_rest_days: list[int] = Field(
+        default_factory=list,
+        description="Days of week (0=Monday, 6=Sunday) that are recurring rest days"
+    )
+    specific_dates: list[str] = Field(
+        default_factory=list,
+        description="ISO date strings (YYYY-MM-DD) for one-time rest days"
+    )
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+
+    @classmethod
+    def validate_weekly_days(cls, v):
+        """Validate weekly rest days are in valid range."""
+        if any(day < 0 or day > 6 for day in v):
+            raise ValueError('Weekly rest days must be 0-6')
+        return sorted(list(set(v)))  # Remove duplicates and sort
+
+    @classmethod
+    def validate_dates(cls, v):
+        """Validate and normalize specific dates."""
+        validated = []
+        for date_str in v:
+            try:
+                date_obj = datetime.fromisoformat(date_str)
+                validated.append(date_obj.date().isoformat())
+            except ValueError:
+                raise ValueError(f'Invalid date format: {date_str}')
+        return sorted(list(set(validated)))  # Remove duplicates and sort
+
+
 # ============ Authentication Models ============
 
 class UserSignUp(BaseModel):
@@ -142,6 +174,7 @@ class ProfileUpdate(BaseModel):
     weight: Optional[WeightData] = None
     icd10_code: Optional[str] = None
     advisor_name: Optional[str] = None
+    rest_days: Optional[RestDaySettings] = None
 
 
 class UserProfile(BaseModel):
@@ -155,6 +188,7 @@ class UserProfile(BaseModel):
     weight: Optional[WeightData] = None
     icd10_code: Optional[str] = None
     advisor_name: Optional[str] = None
+    rest_days: Optional[RestDaySettings] = None
     profile_complete: bool = True
     subscription: SubscriptionStatus = Field(default_factory=lambda: SubscriptionStatus())
     created_at: datetime

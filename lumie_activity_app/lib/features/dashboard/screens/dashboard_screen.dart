@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../../../core/theme/app_colors.dart';
+import '../../../core/services/rest_days_service.dart';
 import '../../../shared/models/activity_models.dart';
 import '../../../shared/widgets/circular_progress_indicator.dart';
 import '../../../shared/widgets/gradient_card.dart';
@@ -8,6 +9,7 @@ import '../../../shared/widgets/ring_status_indicator.dart';
 import '../widgets/activity_summary_card.dart';
 import '../widgets/quick_actions_section.dart';
 import '../widgets/adaptive_goal_card.dart';
+import '../widgets/rest_day_suggestion_sheet.dart';
 
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key});
@@ -23,6 +25,34 @@ class _DashboardScreenState extends State<DashboardScreen> {
   final int _currentMinutes = 42;
   final int _goalMinutes = 60;
   final ActivityIntensity _dominantIntensity = ActivityIntensity.moderate;
+
+  @override
+  void initState() {
+    super.initState();
+    _checkRestDaySuggestion();
+  }
+
+  /// Check if a rest day should be suggested based on sleep quality.
+  Future<void> _checkRestDaySuggestion() async {
+    // Wait a bit for UI to settle
+    await Future.delayed(const Duration(milliseconds: 500));
+
+    if (!mounted) return;
+
+    try {
+      final suggestion = await RestDaysService().getRestDaySuggestion();
+
+      if (mounted && suggestion.shouldSuggest) {
+        RestDaySuggestionSheet.show(
+          context: context,
+          suggestion: suggestion,
+        );
+      }
+    } catch (e) {
+      // Silently fail - rest day suggestion is not critical
+      print('⚠️ Failed to check rest day suggestion: $e');
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -98,8 +128,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   Text(
                     'Good Morning!',
                     style: TextStyle(
-                      fontSize: 18,
-                      fontWeight: FontWeight.w600,
+                      fontSize: 22,
+                      fontWeight: FontWeight.bold,
                       color: AppColors.textPrimary,
                     ),
                   ),
@@ -151,8 +181,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
           const Text(
             'Today\'s Activity',
             style: TextStyle(
-              fontSize: 18,
-              fontWeight: FontWeight.w600,
+              fontSize: 28,
+              fontWeight: FontWeight.bold,
               color: AppColors.textPrimary,
             ),
           ),
@@ -237,8 +267,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
               const Text(
                 'Recent Activities',
                 style: TextStyle(
-                  fontSize: 16,
-                  fontWeight: FontWeight.w600,
+                  fontSize: 22,
+                  fontWeight: FontWeight.bold,
                   color: AppColors.textPrimary,
                 ),
               ),

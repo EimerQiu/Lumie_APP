@@ -51,22 +51,32 @@ class AuthProvider extends ChangeNotifier {
       await _authService.init();
 
       if (_authService.isAuthenticated) {
-        _user = _authService.currentUser;
-        _setTeamServiceToken(); // Set token for team service
+        // Validate token by fetching current user from server
+        try {
+          _user = await _authService.getCurrentUser();
+          _setTeamServiceToken(); // Set token for team service
 
-        // Determine next state based on user status
-        if (_user!.role == null) {
-          _state = AuthState.needsAccountType;
-        } else if (!_user!.profileComplete) {
-          _state = AuthState.needsProfile;
-        } else {
-          // Try to load profile
-          try {
-            _profile = await _profileService.getProfile();
-            _state = AuthState.authenticated;
-          } catch (_) {
+          // Determine next state based on user status
+          if (_user!.role == null) {
+            _state = AuthState.needsAccountType;
+          } else if (!_user!.profileComplete) {
             _state = AuthState.needsProfile;
+          } else {
+            // Try to load profile
+            try {
+              _profile = await _profileService.getProfile();
+              _state = AuthState.authenticated;
+            } catch (_) {
+              _state = AuthState.needsProfile;
+            }
           }
+        } catch (e) {
+          // Token is invalid or expired - clear auth state
+          print('⚠️ Token validation failed: $e');
+          await _authService.logout();
+          _user = null;
+          _profile = null;
+          _state = AuthState.unauthenticated;
         }
       } else {
         _state = AuthState.unauthenticated;

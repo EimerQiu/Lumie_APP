@@ -23,6 +23,7 @@ import 'features/teams/screens/team_detail_screen.dart';
 import 'features/teams/screens/invite_member_screen.dart';
 import 'features/teams/screens/member_data_screen.dart';
 import 'features/teams/screens/accept_invitation_screen.dart';
+import 'features/settings/screens/rest_days_settings_screen.dart';
 import 'shared/models/activity_models.dart';
 import 'shared/models/user_models.dart';
 
@@ -181,16 +182,17 @@ class SplashScreen extends StatelessWidget {
                 const Text(
                   'Lumie',
                   style: TextStyle(
-                    fontSize: 40,
+                    fontSize: 52,
                     fontWeight: FontWeight.bold,
                     color: AppColors.textOnYellow,
+                    letterSpacing: 1.2,
                   ),
                 ),
                 const SizedBox(height: 8),
                 const Text(
                   'Activity Tracking',
                   style: TextStyle(
-                    fontSize: 18,
+                    fontSize: 20,
                     color: AppColors.textSecondary,
                   ),
                 ),
@@ -233,12 +235,12 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
 
   @override
   Widget build(BuildContext context) {
+    // New 4-tab structure following UX best practices
     final screens = [
-      const DashboardScreen(),
-      const SleepScreen(),
-      const TeamsListScreen(),
-      const WalkTestScreen(),
-      const SettingsScreen(),
+      const DashboardScreen(),        // Today - Daily dashboard
+      const ManualEntryScreen(),      // Track - Core daily action
+      const SleepScreen(),            // Insights - Ring vitals & trends (TODO: expand)
+      const SettingsScreen(),         // Me - Profile, settings, teams
     ];
 
     return Scaffold(
@@ -246,15 +248,6 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
         index: _currentIndex,
         children: screens,
       ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: () => _showAddActivitySheet(context),
-        backgroundColor: AppColors.primaryLemonDark,
-        child: const Icon(
-          Icons.add,
-          color: AppColors.textOnYellow,
-        ),
-      ),
-      floatingActionButtonLocation: FloatingActionButtonLocation.centerDocked,
       bottomNavigationBar: _buildBottomNavBar(),
     );
   }
@@ -278,40 +271,32 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
             mainAxisAlignment: MainAxisAlignment.spaceAround,
             children: [
               _NavBarItem(
-                icon: Icons.home_outlined,
-                selectedIcon: Icons.home,
-                label: 'Home',
+                icon: Icons.wb_sunny_outlined,
+                selectedIcon: Icons.wb_sunny,
+                label: 'Today',
                 isSelected: _currentIndex == 0,
                 onTap: () => setState(() => _currentIndex = 0),
               ),
               _NavBarItem(
-                icon: Icons.bedtime_outlined,
-                selectedIcon: Icons.bedtime,
-                label: 'Sleep',
+                icon: Icons.add_circle_outline,
+                selectedIcon: Icons.add_circle,
+                label: 'Track',
                 isSelected: _currentIndex == 1,
                 onTap: () => setState(() => _currentIndex = 1),
               ),
               _NavBarItem(
-                icon: Icons.groups_outlined,
-                selectedIcon: Icons.groups,
-                label: 'Teams',
+                icon: Icons.insights_outlined,
+                selectedIcon: Icons.insights,
+                label: 'Insights',
                 isSelected: _currentIndex == 2,
                 onTap: () => setState(() => _currentIndex = 2),
               ),
-              const SizedBox(width: 48), // Space for FAB
               _NavBarItem(
-                icon: Icons.directions_walk_outlined,
-                selectedIcon: Icons.directions_walk,
-                label: '6MWT',
+                icon: Icons.person_outline,
+                selectedIcon: Icons.person,
+                label: 'Me',
                 isSelected: _currentIndex == 3,
                 onTap: () => setState(() => _currentIndex = 3),
-              ),
-              _NavBarItem(
-                icon: Icons.settings_outlined,
-                selectedIcon: Icons.settings,
-                label: 'Settings',
-                isSelected: _currentIndex == 4,
-                onTap: () => setState(() => _currentIndex = 4),
               ),
             ],
           ),
@@ -345,7 +330,7 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
             const Text(
               'Add Activity',
               style: TextStyle(
-                fontSize: 20,
+                fontSize: 24,
                 fontWeight: FontWeight.bold,
                 color: AppColors.textPrimary,
               ),
@@ -450,7 +435,7 @@ class _NavBarItem extends StatelessWidget {
             Text(
               label,
               style: TextStyle(
-                fontSize: 11,
+                fontSize: 13,
                 fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
                 color: isSelected ? AppColors.textOnYellow : AppColors.textSecondary,
               ),
@@ -505,7 +490,7 @@ class _AddActivityOption extends StatelessWidget {
                   Text(
                     title,
                     style: const TextStyle(
-                      fontSize: 16,
+                      fontSize: 18,
                       fontWeight: FontWeight.w600,
                       color: AppColors.textOnYellow,
                     ),
@@ -514,7 +499,7 @@ class _AddActivityOption extends StatelessWidget {
                   Text(
                     description,
                     style: TextStyle(
-                      fontSize: 12,
+                      fontSize: 14,
                       color: AppColors.textOnYellow.withValues(alpha: 0.8),
                     ),
                   ),
@@ -553,7 +538,7 @@ class SettingsScreen extends StatelessWidget {
                   const Text(
                     'Settings',
                     style: TextStyle(
-                      fontSize: 28,
+                      fontSize: 36,
                       fontWeight: FontWeight.bold,
                       color: AppColors.textPrimary,
                     ),
@@ -603,7 +588,7 @@ class SettingsScreen extends StatelessWidget {
                             Text(
                               profile?.name ?? 'User',
                               style: const TextStyle(
-                                fontSize: 20,
+                                fontSize: 26,
                                 fontWeight: FontWeight.bold,
                                 color: AppColors.textOnYellow,
                               ),
@@ -612,7 +597,7 @@ class SettingsScreen extends StatelessWidget {
                             Text(
                               auth.user?.email ?? '',
                               style: TextStyle(
-                                fontSize: 14,
+                                fontSize: 16,
                                 color: AppColors.textOnYellow.withValues(alpha: 0.8),
                               ),
                             ),
@@ -620,7 +605,7 @@ class SettingsScreen extends StatelessWidget {
                             Text(
                               'Subscription: ${profile?.subscription.tier.fullDisplayName ?? 'Free'}',
                               style: TextStyle(
-                                fontSize: 13,
+                                fontSize: 15,
                                 fontWeight: FontWeight.w500,
                                 color: AppColors.textOnYellow.withValues(alpha: 0.9),
                               ),
@@ -668,6 +653,18 @@ class SettingsScreen extends StatelessWidget {
                       title: 'Teams',
                       onTap: () {
                         Navigator.pushNamed(context, '/teams');
+                      },
+                    ),
+                    _SettingsItem(
+                      icon: Icons.event_busy_outlined,
+                      title: 'Rest Days',
+                      onTap: () {
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (context) => const RestDaysSettingsScreen(),
+                          ),
+                        );
                       },
                     ),
                     _SettingsItem(
@@ -771,7 +768,7 @@ class _SettingsItem extends StatelessWidget {
       title: Text(
         title,
         style: TextStyle(
-          fontSize: 16,
+          fontSize: 18,
           fontWeight: FontWeight.w500,
           color: isDestructive ? AppColors.error : AppColors.textPrimary,
         ),
@@ -817,7 +814,7 @@ class SubscriptionUpgradeScreen extends StatelessWidget {
               Text(
                 'Get access to up to 100 teams and unlock premium features.',
                 style: TextStyle(
-                  fontSize: 16,
+                  fontSize: 18,
                   color: Colors.grey[600],
                 ),
                 textAlign: TextAlign.center,
@@ -826,7 +823,7 @@ class SubscriptionUpgradeScreen extends StatelessWidget {
               Text(
                 'Subscription upgrade screen\ncoming soon!',
                 style: TextStyle(
-                  fontSize: 14,
+                  fontSize: 16,
                   color: Colors.grey[500],
                 ),
                 textAlign: TextAlign.center,
