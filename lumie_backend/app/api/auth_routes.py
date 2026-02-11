@@ -24,9 +24,16 @@ async def signup(data: UserSignUp):
     - **password**: Minimum 8 characters
     - **confirm_password**: Must match password
     - **role**: Account type (teen or parent)
+    - **invitation_token**: Optional - if provided, email is auto-verified and user auto-joins team
 
-    Sends verification email and returns JWT token.
-    User must verify email before logging in.
+    **Regular Signup (no invitation_token):**
+    - Sends verification email
+    - User must verify email before logging in
+
+    **Invitation Signup (with invitation_token):**
+    - Email is automatically verified (came via email invitation)
+    - User is automatically added to the team
+    - No verification email needed - can log in immediately
     """
     return await auth_service.signup(data)
 

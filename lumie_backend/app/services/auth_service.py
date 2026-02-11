@@ -58,13 +58,44 @@ class AuthService:
                 detail="Email already registered. Please log in."
             )
 
+        # Check if signing up via invitation
+        email_verified = False
+        team_id_to_join = None
+
+        if data.invitation_token:
+            # Validate invitation token
+            from .team_service import team_service
+            payload = team_service.decode_invitation_token(data.invitation_token)
+
+            if not payload:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Invalid or expired invitation link"
+                )
+
+            # Verify email matches invitation
+            if payload["email"].lower() != data.email.lower():
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"This invitation was sent to {payload['email']}. Please use that email address."
+                )
+
+            # Mark email as verified (they came via email invitation)
+            email_verified = True
+            team_id_to_join = payload["team_id"]
+            logger.info(f"✅ User signing up via invitation to team {team_id_to_join}")
+
         # Create user
         user_id = str(uuid.uuid4())
         now = datetime.utcnow()
 
-        # Generate verification token (secure random 32-byte hex)
-        verification_token = secrets.token_urlsafe(32)
-        verification_expires = now + timedelta(hours=24)
+        # Generate verification token only if not verified via invitation
+        if not email_verified:
+            verification_token = secrets.token_urlsafe(32)
+            verification_expires = now + timedelta(hours=24)
+        else:
+            verification_token = None
+            verification_expires = None
 
         user_doc = {
             "user_id": user_id,
@@ -72,7 +103,7 @@ class AuthService:
             "hashed_password": get_password_hash(data.password),
             "role": data.role.value,
             "profile_complete": False,
-            "email_verified": False,
+            "email_verified": email_verified,
             "verification_token": verification_token,
             "verification_token_expires": verification_expires,
             "created_at": now,
@@ -81,29 +112,63 @@ class AuthService:
 
         await db.users.insert_one(user_doc)
 
-        # Process any pending team invitations for this email
+        # If signed up via invitation, auto-accept the invitation
+        if team_id_to_join:
+            try:
+                from .team_service import team_service
+
+                # Check if there's a pending invitation for this email
+                pending_invitation = await db.pending_invitations.find_one({
+                    "team_id": team_id_to_join,
+                    "email": data.email.lower()
+                })
+
+                if pending_invitation:
+                    # Create team membership
+                    await db.team_members.insert_one({
+                        "team_id": team_id_to_join,
+                        "user_id": user_id,
+                        "role": "member",
+                        "status": "member",
+                        "invited_by": pending_invitation["invited_by"],
+                        "invited_at": pending_invitation["invited_at"],
+                        "joined_at": now
+                    })
+
+                    # Delete the pending invitation
+                    await db.pending_invitations.delete_one({"_id": pending_invitation["_id"]})
+
+                    logger.info(f"✅ Auto-accepted invitation: User {user_id} joined team {team_id_to_join}")
+                else:
+                    logger.warning(f"⚠️ No pending invitation found for {data.email.lower()} in team {team_id_to_join}")
+            except Exception as e:
+                logger.error(f"❌ Failed to auto-accept invitation: {str(e)}", exc_info=True)
+                # Don't fail signup if auto-accept fails
+
+        # Process any other pending team invitations for this email
         try:
             from .team_service import team_service
             invitations_count = await team_service.process_pending_invitations(user_id, data.email.lower())
             if invitations_count > 0:
-                logger.info(f"✅ Processed {invitations_count} pending team invitation(s) for {data.email.lower()}")
+                logger.info(f"✅ Processed {invitations_count} additional pending team invitation(s) for {data.email.lower()}")
         except Exception as e:
             logger.error(f"❌ Failed to process pending invitations: {str(e)}", exc_info=True)
             # Don't fail signup if invitation processing fails
 
-        # Send verification email
-        try:
-            result = email_service.send_verification_email(
-                to_email=data.email.lower(),
-                verification_token=verification_token
-            )
-            if result:
-                logger.info(f"✅ Verification email sent to {data.email.lower()}")
-            else:
-                logger.error(f"❌ Failed to send verification email to {data.email.lower()} - email service returned False")
-        except Exception as e:
-            logger.error(f"❌ Exception sending verification email to {data.email.lower()}: {str(e)}", exc_info=True)
-            # Don't fail signup if email sending fails
+        # Send verification email only if not verified via invitation
+        if not email_verified:
+            try:
+                result = email_service.send_verification_email(
+                    to_email=data.email.lower(),
+                    verification_token=verification_token
+                )
+                if result:
+                    logger.info(f"✅ Verification email sent to {data.email.lower()}")
+                else:
+                    logger.error(f"❌ Failed to send verification email to {data.email.lower()} - email service returned False")
+            except Exception as e:
+                logger.error(f"❌ Exception sending verification email to {data.email.lower()}: {str(e)}", exc_info=True)
+                # Don't fail signup if email sending fails
 
         # Generate token
         access_token = create_access_token(
@@ -116,7 +181,7 @@ class AuthService:
             email=data.email.lower(),
             role=data.role,
             profile_complete=False,
-            email_verified=False,
+            email_verified=email_verified,
         )
 
     async def login(self, data: UserLogin) -> TokenResponse:

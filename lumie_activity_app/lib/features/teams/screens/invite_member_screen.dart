@@ -253,7 +253,7 @@ class _InviteMemberScreenState extends State<InviteMemberScreen> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        'Important',
+                        'How it works',
                         style: TextStyle(
                           fontSize: 14,
                           fontWeight: FontWeight.w600,
@@ -262,7 +262,7 @@ class _InviteMemberScreenState extends State<InviteMemberScreen> {
                       ),
                       const SizedBox(height: 4),
                       Text(
-                        'The person must already have a Lumie account. They will receive an email invitation to join your team.',
+                        'They will receive an email invitation to join your team. If they don\'t have a Lumie account yet, they can create one directly from the invitation link.',
                         style: TextStyle(
                           fontSize: 13,
                           color: Colors.blue[800],

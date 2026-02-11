@@ -96,6 +96,7 @@ class UserSignUp(BaseModel):
     password: str = Field(..., min_length=8)
     confirm_password: str = Field(..., min_length=8)
     role: AccountRole
+    invitation_token: Optional[str] = None  # If provided, skip email verification
 
 
 class UserLogin(BaseModel):

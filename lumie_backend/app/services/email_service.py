@@ -114,8 +114,8 @@ class EmailService:
 
     def send_verification_email(self, to_email: str, verification_token: str) -> bool:
         """Send email verification email"""
-        # Use production domain for verification link (explicit .html path so nginx serves static file)
-        verification_link = f"https://yumo.org/verify.html?token={verification_token}"
+        # Use yumo.org domain for verification link
+        verification_link = f"https://yumo.org/email-verify.html?token={verification_token}"
 
         html_body = f"""
         <!DOCTYPE html>

@@ -105,7 +105,7 @@ cd /home/ubuntu/lumie_backend && source venv/bin/activate && python test_email.p
 **Server Info:**
 - Server: 54.193.153.37
 - Website: https://yumo.org
-- API: http://54.193.153.37:8000
+- API: https://yumo.org/api/v1
 
 **Quick Deploy:**
 ```bash

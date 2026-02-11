@@ -295,8 +295,8 @@
             <div id="success-container" style="display: none;">
                 <div class="success">
                     <div class="success-icon">✅</div>
-                    <h2>Account Created!</h2>
-                    <p>You've successfully signed up for Lumie. Download the app to complete your profile and join your team.</p>
+                    <h2>Welcome to the Team!</h2>
+                    <p>Your account is created and you've joined <strong id="success-team-name"></strong>! Download the Lumie app to log in and complete your profile.</p>
                     <div class="download-buttons">
                         <a href="#" class="app-button">📱 iOS App</a>
                         <a href="#" class="app-button">🤖 Android App</a>
@@ -371,7 +371,7 @@
             submitBtn.textContent = 'Creating account...';
 
             try {
-                // Sign up
+                // Sign up with invitation token (auto-verifies email and joins team)
                 const response = await fetch(`${API_BASE}/auth/signup`, {
                     method: 'POST',
                     headers: {
@@ -381,7 +381,8 @@
                         email: invitationData.email,
                         password: password,
                         confirm_password: confirmPassword,
-                        role: role
+                        role: role,
+                        invitation_token: token  // Include invitation token for auto-verification
                     })
                 });
 
@@ -393,6 +394,7 @@
                 // Success!
                 document.getElementById('invitation-form').style.display = 'none';
                 document.getElementById('success-container').style.display = 'block';
+                document.getElementById('success-team-name').textContent = invitationData.team_name;
 
             } catch (error) {
                 showFormError(error.message);

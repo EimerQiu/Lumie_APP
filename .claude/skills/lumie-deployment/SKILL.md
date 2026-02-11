@@ -23,7 +23,7 @@ Automate deployment of Lumie website and backend API to production server, inclu
 
 ### Service Status
 - **Website:** 🟢 https://yumo.org
-- **API:** 🟢 http://54.193.153.37:8000
+- **API:** 🟢 https://yumo.org
 - **Database:** 🟢 MongoDB 8.0
 - **Web Server:** 🟢 Nginx 1.24.0
 
@@ -153,10 +153,10 @@ ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.193.153.37 "sudo systemctl restart lumie-a
 #### 3. Verify API Deployment
 ```bash
 # Health check
-curl http://54.193.153.37:8000/api/v1/health
+curl https://yumo.org/api/v1/health
 
 # View API documentation
-# Browser: http://54.193.153.37:8000/docs
+# Browser: https://yumo.org/docs
 ```
 
 ### 📊 Service Management
@@ -249,7 +249,7 @@ ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.193.153.37 "sudo systemctl restart lumie-a
 
 # 4. Verify deployment
 curl https://yumo.org
-curl http://54.193.153.37:8000/api/v1/health
+curl https://yumo.org/api/v1/health
 
 echo "✅ Deployment complete!"
 ```
@@ -269,7 +269,7 @@ bash deploy.sh
 ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.193.153.37 "sudo systemctl restart lumie-api"
 
 # Check health status
-curl http://54.193.153.37:8000/api/v1/health
+curl https://yumo.org/api/v1/health
 ```
 
 ### Example 4: Quick Check All Service Status
@@ -488,7 +488,7 @@ ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.193.153.37 "sudo systemctl reload nginx"
 curl -I https://yumo.org
 
 # 2. API health check
-curl http://54.193.153.37:8000/api/v1/health
+curl https://yumo.org/api/v1/health
 
 # 3. Check service logs
 ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.193.153.37 "sudo journalctl -u lumie-api -n 20 --no-pager"
@@ -586,7 +586,7 @@ POST /api/v1/profile/teen            - Create teen profile
 POST /api/v1/profile/parent          - Create parent profile
 ```
 
-**Full API Documentation:** http://54.193.153.37:8000/docs
+**Full API Documentation:** https://yumo.org/docs
 
 ## Quick Reference
 
@@ -611,7 +611,7 @@ ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.193.153.37 "sudo journalctl -u lumie-api -
 ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.193.153.37 "sudo tail -50 /var/log/nginx/error.log"
 
 # Health check
-curl https://yumo.org && curl http://54.193.153.37:8000/api/v1/health
+curl https://yumo.org && curl https://yumo.org/api/v1/health
 ```
 
 ### Connect to Server
@@ -623,7 +623,7 @@ ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.193.153.37
 
 **Status:** 🟢 All Services Running
 **Website:** https://yumo.org
-**API:** http://54.193.153.37:8000
+**API:** https://yumo.org
 **Database:** lumie_db (MongoDB 8.0)
 **Last Updated:** 2026-02-10
 **Server:** 54.193.153.37 (Ubuntu 24.04)

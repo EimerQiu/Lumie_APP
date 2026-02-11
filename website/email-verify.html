@@ -209,8 +209,8 @@
     </div>
 
     <script>
-        // Backend API endpoint - same as Flutter app uses
-        const API_BASE = 'https://api.yumo.org/api/v1';
+        // Backend API endpoint - proxied through nginx
+        const API_BASE = '/api/v1';
         const urlParams = new URLSearchParams(window.location.search);
         const token = urlParams.get('token');
 

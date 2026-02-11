@@ -759,7 +759,7 @@ class TeamService:
             user_doc = await db.users.find_one({"user_id": member["user_id"]})
             profile = await db.profiles.find_one({"user_id": member["user_id"]})
 
-            if user_doc and profile:
+            if user_doc:
                 # Get data sharing settings (placeholder - would come from settings in real implementation)
                 data_sharing = DataSharing(
                     profile=True,
@@ -768,9 +768,12 @@ class TeamService:
                     test_results=False
                 )
 
+                # Use profile name if available, otherwise use email
+                member_name = profile.get("name", user_doc["email"]) if profile else user_doc["email"]
+
                 members.append(TeamMemberResponse(
                     user_id=member["user_id"],
-                    name=profile.get("name", "Unknown"),
+                    name=member_name,
                     email=user_doc["email"],
                     role=TeamRole(member["role"]),
                     status=MemberStatus(member["status"]),
@@ -882,31 +885,60 @@ class TeamService:
 
         shared_data = []
         for member in team_members:
+            user_doc = await db.users.find_one({"user_id": member["user_id"]})
             profile = await db.profiles.find_one({"user_id": member["user_id"]})
 
-            if profile:
+            if user_doc:
+                # Use profile name if available, otherwise use email
+                member_name = profile.get("name", user_doc["email"]) if profile else user_doc["email"]
+
                 # Placeholder data - in real implementation, would check privacy settings
-                shared_data.append(TeamMemberSharedData(
-                    user_id=member["user_id"],
-                    name=profile.get("name", "Unknown"),
-                    role=TeamRole(member["role"]),
-                    profile=SharedDataCategory(
-                        shared=True,
-                        data={"age": profile.get("age"), "role": profile.get("role")}
-                    ),
-                    activity=SharedDataCategory(
-                        shared=False,
-                        message="Not shared"
-                    ),
-                    sleep=SharedDataCategory(
-                        shared=False,
-                        message="Not shared"
-                    ),
-                    test_results=SharedDataCategory(
-                        shared=False,
-                        message="Not shared"
-                    )
-                ))
+                if profile:
+                    # User has profile - show profile data
+                    shared_data.append(TeamMemberSharedData(
+                        user_id=member["user_id"],
+                        name=member_name,
+                        role=TeamRole(member["role"]),
+                        profile=SharedDataCategory(
+                            shared=True,
+                            data={"age": profile.get("age"), "role": profile.get("role")}
+                        ),
+                        activity=SharedDataCategory(
+                            shared=False,
+                            message="Not shared"
+                        ),
+                        sleep=SharedDataCategory(
+                            shared=False,
+                            message="Not shared"
+                        ),
+                        test_results=SharedDataCategory(
+                            shared=False,
+                            message="Not shared"
+                        )
+                    ))
+                else:
+                    # User hasn't completed profile yet
+                    shared_data.append(TeamMemberSharedData(
+                        user_id=member["user_id"],
+                        name=member_name,
+                        role=TeamRole(member["role"]),
+                        profile=SharedDataCategory(
+                            shared=False,
+                            message="Profile not completed"
+                        ),
+                        activity=SharedDataCategory(
+                            shared=False,
+                            message="Not shared"
+                        ),
+                        sleep=SharedDataCategory(
+                            shared=False,
+                            message="Not shared"
+                        ),
+                        test_results=SharedDataCategory(
+                            shared=False,
+                            message="Not shared"
+                        )
+                    ))
 
         return TeamSharedDataResponse(
             team_id=team_id,

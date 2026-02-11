@@ -210,8 +210,8 @@ Edit `lib/core/constants/api_constants.dart`:
 // For local development
 static const String baseUrl = 'http://localhost:8000/api/v1';
 
-// For AWS production
-static const String baseUrl = 'http://54.193.153.37:8000/api/v1';
+// For production
+static const String baseUrl = 'https://yumo.org/api/v1';
 ```
 
 ## Theme Colors

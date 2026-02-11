@@ -151,7 +151,7 @@ Growing up with a chronic condition shouldn't mean growing up with shame, fear, 
 | SSL | 🟢 Active (auto-renewal enabled) |
 | DNS | 🟢 Configured on GoDaddy |
 | Server | 🟢 AWS EC2 (54.193.153.37) |
-| **Backend API** | 🟢 http://54.193.153.37:8000 (live) |
+| **Backend API** | 🟢 https://yumo.org (live) |
 | **API Service** | 🟢 lumie-api.service (4 workers) |
 | **Database** | 🟢 MongoDB 8.0 (running) |
 
@@ -314,9 +314,9 @@ ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.193.153.37 "sudo journalctl -u lumie-api -
 ```
 
 **Production API:**
-- Endpoint: http://54.193.153.37:8000
-- Health: http://54.193.153.37:8000/api/v1/health
-- Docs: http://54.193.153.37:8000/docs
+- Endpoint: https://yumo.org
+- Health: https://yumo.org/api/v1/health
+- Docs: https://yumo.org/docs
 
 ---
 
@@ -337,12 +337,12 @@ ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.193.153.37 "sudo journalctl -u lumie-api -
 
 **API Documentation:**
 - Local Dev: http://localhost:8000/docs
-- Production: http://54.193.153.37:8000/docs
+- Production: https://yumo.org/docs
 - ReDoc: http://localhost:8000/redoc
 
 **Production Health Check:**
 ```bash
-curl http://54.193.153.37:8000/api/v1/health
+curl https://yumo.org/api/v1/health
 # Returns: {"status":"healthy","service":"lumie-activity-api","version":"1.0.0"}
 ```
 
@@ -614,7 +614,7 @@ Proprietary - © 2026 Yumo.org. All rights reserved.
 **Caching:** ⚠️ Disabled (DEV mode for quick updates)
 
 ### Backend API
-**API Endpoint:** 🟢 http://54.193.153.37:8000 (production)
+**API Endpoint:** 🟢 https://yumo.org (production)
 **Service:** 🟢 lumie-api.service (4 uvicorn workers)
 **Database:** 🟢 MongoDB 8.0 (running)
 **Health Check:** 🟢 Operational

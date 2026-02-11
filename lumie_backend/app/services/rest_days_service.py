@@ -3,7 +3,7 @@ from datetime import datetime
 from typing import Optional
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
-from ..database import get_database
+from ..core.database import get_database
 
 
 class RestDaysService:
