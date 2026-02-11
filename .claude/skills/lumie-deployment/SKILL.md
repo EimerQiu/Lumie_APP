@@ -27,6 +27,61 @@ Automate deployment of Lumie website and backend API to production server, inclu
 - **Database:** 🟢 MongoDB 8.0
 - **Web Server:** 🟢 Nginx 1.24.0
 
+### DNS Configuration
+
+#### yumo.org (Primary Domain)
+Configure these A records on GoDaddy for yumo.org:
+
+| Type | Name | Value | TTL |
+|------|------|-------|-----|
+| A | @ | 54.193.153.37 | 1800 |
+| A | www | 54.193.153.37 | 1800 |
+
+#### yumo.life (Redirect Domain)
+Configure these A records on GoDaddy for yumo.life:
+
+| Type | Name | Value | TTL |
+|------|------|-------|-----|
+| A | @ | 54.193.153.37 | 1800 |
+| A | www | 54.193.153.37 | 1800 |
+
+**Redirect Behavior:**
+- http://yumo.org → https://yumo.org ✅
+- http://www.yumo.org → https://yumo.org ✅
+- https://www.yumo.org → https://yumo.org ✅
+- http://yumo.life → https://yumo.org ✅
+- https://yumo.life → https://yumo.org ✅
+- http://www.yumo.life → https://yumo.org ✅
+- https://www.yumo.life → https://yumo.org ✅
+
+### Nginx Configuration
+
+#### yumo.org Configuration
+**File:** `/etc/nginx/sites-available/yumo.org`
+
+**Features:**
+- HTTP → HTTPS redirect
+- www → apex redirect (www.yumo.org → yumo.org)
+- Serves content from `/home/ubuntu/website`
+- **DEV mode:** Caching disabled for quick updates
+- Gzip compression enabled
+- Security headers enabled
+
+#### yumo.life Configuration
+**File:** `/etc/nginx/sites-available/yumo.life`
+
+**Features:**
+- All traffic redirects to yumo.org
+- HTTP → yumo.org HTTPS redirect
+- HTTPS → yumo.org HTTPS redirect
+- Both apex and www subdomain redirect
+
+### SSL Certificate Details
+- **Domains:** yumo.org, www.yumo.org, yumo.life, www.yumo.life
+- **Type:** Let's Encrypt (bundled certificate)
+- **Auto-Renewal:** ✅ Enabled
+- **Certificate Path:** `/etc/letsencrypt/live/yumo-bundle/`
+
 ## Prerequisites
 
 ### Local Environment
@@ -237,6 +292,102 @@ df -h / | tail -1
 EOF
 ```
 
+## Infrastructure Configuration
+
+### Enabling Production Caching
+
+**Current:** Caching is disabled (DEV mode) for quick development updates
+
+**To enable caching for production:**
+
+1. **Edit yumo.org config:**
+   ```bash
+   ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.193.153.37
+   sudo nano /etc/nginx/sites-available/yumo.org
+   ```
+
+2. **Remove DEV cache headers:**
+   ```nginx
+   # Remove or comment out these lines:
+   # add_header Cache-Control "no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0" always;
+   # add_header Pragma "no-cache" always;
+   # add_header Expires "0" always;
+   ```
+
+3. **Add production cache settings:**
+   ```nginx
+   # Add this location block for static assets:
+   location ~* \.(jpg|jpeg|png|gif|ico|css|js|svg|mp4|webm)$ {
+       expires 1y;
+       add_header Cache-Control "public, immutable";
+   }
+   ```
+
+4. **Reload Nginx:**
+   ```bash
+   sudo nginx -t && sudo systemctl reload nginx
+   ```
+
+### Testing Deployment
+
+#### Test All URLs
+```bash
+# Primary domain (preferred)
+curl -I https://yumo.org
+
+# WWW subdomain (redirects to apex)
+curl -I https://www.yumo.org
+
+# HTTP (redirects to HTTPS)
+curl -I http://yumo.org
+
+# Secondary domain (redirects to yumo.org)
+curl -I https://yumo.life
+curl -I https://www.yumo.life
+curl -I http://yumo.life
+```
+
+#### Expected Behavior
+- ✅ https://yumo.org → **200 OK** (serves content)
+- ✅ https://www.yumo.org → **301 redirect** → https://yumo.org
+- ✅ http://yumo.org → **301 redirect** → https://yumo.org
+- ✅ https://yumo.life → **301 redirect** → https://yumo.org
+- ✅ https://www.yumo.life → **301 redirect** → https://yumo.org
+- ✅ http://yumo.life → **301 redirect** → https://yumo.org
+
+#### DNS Verification
+```bash
+# Check yumo.org
+dig yumo.org +short
+
+# Check yumo.life
+dig yumo.life +short
+
+# Both should return: 54.193.153.37
+```
+
+**Check globally:** https://dnschecker.org
+
+### Performance Metrics
+
+**Optimization Features:**
+- ✅ HTTP/2 enabled
+- ✅ Gzip compression (~70% reduction)
+- ⚠️ Caching disabled (DEV mode - enable for production)
+- ✅ SSL/TLS configured
+- ✅ Security headers enabled
+
+**Load Times (DEV mode):**
+- First Load: 1-2 seconds
+- Subsequent Loads: 800ms-1.2s (no cache)
+- With Cache (production): 200-500ms
+
+**File Sizes:**
+- HTML: 37 KB
+- CSS: 27 KB
+- JavaScript: 13 KB
+- Videos: ~2-5 MB each
+
 ## Error Handling
 
 ### Error 1: Website Not Accessible
@@ -362,6 +513,39 @@ ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.193.153.37 "cd /home/ubuntu/lumie_backend 
 ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.193.153.37 "sudo systemctl restart lumie-api"
 ```
 
+### Security Best Practices
+
+1. **Keep server updated:**
+   ```bash
+   ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.193.153.37
+   sudo apt update && sudo apt upgrade -y
+   ```
+
+2. **Monitor SSL certificate:**
+   - Auto-renews every 90 days
+   - Check status: `sudo certbot certificates`
+
+3. **Review logs regularly:**
+   ```bash
+   sudo tail -100 /var/log/nginx/access.log
+   sudo tail -100 /var/log/nginx/error.log
+   sudo journalctl -u lumie-api -n 100 --no-pager
+   ```
+
+4. **Backup website and database:**
+   ```bash
+   # Backup website files
+   scp -i ~/.ssh/Lumie_Key.pem -r ubuntu@54.193.153.37:/home/ubuntu/website ./backup-$(date +%Y%m%d)
+
+   # Backup MongoDB (on server)
+   ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.193.153.37 "mongodump --db lumie_db --out /tmp/mongo-backup-$(date +%Y%m%d)"
+   ```
+
+5. **Security Testing Tools:**
+   - **SSL Test:** https://www.ssllabs.com/ssltest/analyze.html?d=yumo.org
+   - **DNS Checker:** https://dnschecker.org
+   - **Security Headers:** https://securityheaders.com/?q=yumo.org
+
 ## Environment Management
 
 ### Environment Variables Configuration
@@ -380,7 +564,7 @@ ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.193.153.37 "sudo systemctl restart lumie-a
 
 **Key Environment Variables:**
 - `MONGODB_URL` - MongoDB connection string
-- `MONGODB_DB_NAME` - Database name (lumie_production)
+- `MONGODB_DB_NAME` - Database name (lumie_db)
 - `SECRET_KEY` - JWT signing key (auto-generated)
 - `ACCESS_TOKEN_EXPIRE_MINUTES` - Token expiry (10080 = 7 days)
 - `CORS_ORIGINS` - Allowed API origins
@@ -440,5 +624,6 @@ ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.193.153.37
 **Status:** 🟢 All Services Running
 **Website:** https://yumo.org
 **API:** http://54.193.153.37:8000
-**Last Updated:** 2026-02-07
+**Database:** lumie_db (MongoDB 8.0)
+**Last Updated:** 2026-02-10
 **Server:** 54.193.153.37 (Ubuntu 24.04)
