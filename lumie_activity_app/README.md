@@ -189,19 +189,19 @@ ACCESS_TOKEN_EXPIRE_MINUTES=10080
 | Service | Port | Status Command |
 |---------|------|----------------|
 | MongoDB | 27017 | `sudo systemctl status mongod` |
-| Lumie Backend | 8000 | `sudo systemctl status lumie-backend` |
+| Lumie Backend | 8000 | `sudo systemctl status lumie-api` |
 
 ### Useful Commands
 ```bash
 # View backend logs
-sudo journalctl -u lumie-backend -f
+sudo journalctl -u lumie-api -f
 
 # Restart backend
-sudo systemctl restart lumie-backend
+sudo systemctl restart lumie-api
 
 # Deploy new code
 scp -i ~/.ssh/Lumie_Key.pem -r lumie_backend/* ubuntu@54.193.153.37:~/lumie_backend/
-ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.193.153.37 "sudo systemctl restart lumie-backend"
+ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.193.153.37 "sudo systemctl restart lumie-api"
 ```
 
 ### API Configuration
