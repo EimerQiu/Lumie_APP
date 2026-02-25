@@ -1,3 +1,4 @@
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/services/rest_days_service.dart';
@@ -6,6 +7,8 @@ import '../../../shared/widgets/circular_progress_indicator.dart';
 import '../../../shared/widgets/gradient_card.dart';
 import '../../../shared/widgets/intensity_badge.dart';
 import '../../../shared/widgets/ring_status_indicator.dart';
+import '../../activity/screens/activity_history_screen.dart';
+import '../../sleep/screens/sleep_screen.dart';
 import '../widgets/activity_summary_card.dart';
 import '../widgets/quick_actions_section.dart';
 import '../widgets/adaptive_goal_card.dart';
@@ -26,10 +29,24 @@ class _DashboardScreenState extends State<DashboardScreen> {
   final int _goalMinutes = 60;
   final ActivityIntensity _dominantIntensity = ActivityIntensity.moderate;
 
+  bool _isRestDay = false;
+
   @override
   void initState() {
     super.initState();
     _checkRestDaySuggestion();
+    _loadRestDayStatus();
+  }
+
+  Future<void> _loadRestDayStatus() async {
+    try {
+      final isRestDay = await RestDaysService().checkTodayIsRestDay();
+      if (mounted) {
+        setState(() => _isRestDay = isRestDay);
+      }
+    } catch (_) {
+      // Non-critical — keep default false
+    }
   }
 
   /// Check if a rest day should be suggested based on sleep quality.
@@ -68,21 +85,26 @@ class _DashboardScreenState extends State<DashboardScreen> {
               SliverToBoxAdapter(
                 child: Column(
                   children: [
-                    _buildRingStatus(),
-                    const SizedBox(height: 16),
+                    _buildScoreRow(),
+                    const SizedBox(height: 12),
                     _buildMainActivityRing(),
                     const SizedBox(height: 24),
                     _buildTodaysSummary(),
                     const SizedBox(height: 16),
-                    const AdaptiveGoalCard(
-                      recommendedMinutes: 60,
-                      reason: 'Based on your recent rest and activity patterns',
-                      isReduced: false,
-                      factors: [
-                        'Good sleep last night',
-                        'Moderate activity yesterday',
-                        'No fatigue reported',
-                      ],
+                    AdaptiveGoalCard(
+                      recommendedMinutes: _isRestDay ? 20 : _goalMinutes,
+                      currentMinutes: _currentMinutes,
+                      reason: _isRestDay
+                          ? 'Today is a scheduled rest day. Light movement only — let your body recover!'
+                          : 'Based on your recent rest and activity patterns',
+                      isReduced: _isRestDay,
+                      factors: _isRestDay
+                          ? ['Rest day scheduled', 'Recovery focus', 'Light movement ok']
+                          : [
+                              'Good sleep last night',
+                              'Moderate activity yesterday',
+                              'No fatigue reported',
+                            ],
                     ),
                     const SizedBox(height: 16),
                     _buildRecentActivities(),
@@ -95,6 +117,133 @@ class _DashboardScreenState extends State<DashboardScreen> {
             ],
           ),
         ),
+      ),
+    );
+  }
+
+  Widget _buildScoreRow() {
+    final scores = [
+      _ScoreData(
+        label: 'Fatigue',
+        score: 72,
+        icon: Icons.battery_charging_full,
+        color: const Color(0xFF81C784),
+        onTap: () => Navigator.push(
+          context,
+          MaterialPageRoute(builder: (_) => const SleepScreen()),
+        ),
+      ),
+      _ScoreData(
+        label: 'Sleep',
+        score: 85,
+        icon: Icons.bedtime_outlined,
+        color: const Color(0xFF64B5F6),
+        onTap: () => Navigator.push(
+          context,
+          MaterialPageRoute(builder: (_) => const SleepScreen()),
+        ),
+      ),
+      _ScoreData(
+        label: 'Activity',
+        score: 68,
+        icon: Icons.directions_run,
+        color: const Color(0xFFFFB74D),
+        onTap: () => Navigator.push(
+          context,
+          MaterialPageRoute(builder: (_) => const ActivityHistoryScreen()),
+        ),
+      ),
+      _ScoreData(
+        label: 'Stress',
+        score: 78,
+        icon: Icons.self_improvement,
+        color: const Color(0xFFB39DDB),
+        onTap: () => Navigator.push(
+          context,
+          MaterialPageRoute(builder: (_) => const SleepScreen()),
+        ),
+      ),
+    ];
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16),
+      child: GradientCard(
+        gradient: AppColors.cardGradient,
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Today\'s Scores',
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+                color: AppColors.textSecondary,
+                letterSpacing: 0.5,
+              ),
+            ),
+            const SizedBox(height: 12),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceAround,
+              children: scores.map((s) => _buildScoreCard(s)).toList(),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildScoreCard(_ScoreData data) {
+    final Color scoreColor;
+    if (data.score >= 80) {
+      scoreColor = const Color(0xFF81C784);
+    } else if (data.score >= 60) {
+      scoreColor = const Color(0xFFFFB74D);
+    } else {
+      scoreColor = const Color(0xFFE57373);
+    }
+
+    return GestureDetector(
+      onTap: data.onTap,
+      child: Column(
+        children: [
+          Stack(
+            alignment: Alignment.center,
+            children: [
+              SizedBox(
+                width: 72,
+                height: 72,
+                child: CustomPaint(
+                  painter: _StarPainter(color: scoreColor, strokeWidth: 1.5),
+                ),
+              ),
+              Text(
+                '${data.score}',
+                style: const TextStyle(
+                  fontSize: 15,
+                  fontWeight: FontWeight.bold,
+                  color: AppColors.textPrimary,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(data.icon, size: 11, color: data.color),
+              const SizedBox(width: 3),
+              Text(
+                data.label,
+                style: const TextStyle(
+                  fontSize: 11,
+                  color: AppColors.textSecondary,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+            ],
+          ),
+        ],
       ),
     );
   }
@@ -147,28 +296,16 @@ class _DashboardScreenState extends State<DashboardScreen> {
         ),
       ),
       actions: [
-        IconButton(
-          icon: const Icon(Icons.notifications_outlined),
-          onPressed: () {},
-        ),
-        IconButton(
-          icon: const Icon(Icons.settings_outlined),
-          onPressed: () {},
+        Padding(
+          padding: const EdgeInsets.only(right: 16),
+          child: RingStatusIndicator(
+            status: _ringStatus,
+            batteryLevel: _batteryLevel,
+            compact: true,
+            onTap: () {},
+          ),
         ),
       ],
-    );
-  }
-
-  Widget _buildRingStatus() {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16),
-      child: RingStatusIndicator(
-        status: _ringStatus,
-        batteryLevel: _batteryLevel,
-        onTap: () {
-          // Navigate to ring settings
-        },
-      ),
     );
   }
 
@@ -370,4 +507,57 @@ class _DashboardScreenState extends State<DashboardScreen> {
       ),
     );
   }
+}
+
+class _StarPainter extends CustomPainter {
+  final Color color;
+  final double strokeWidth;
+
+  const _StarPainter({required this.color, required this.strokeWidth});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = color
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = strokeWidth
+      ..strokeJoin = StrokeJoin.round;
+
+    final cx = size.width / 2;
+    final cy = size.height / 2;
+    final outer = size.width / 2;
+    final inner = outer * 0.42;
+    final path = Path();
+
+    for (int i = 0; i < 5; i++) {
+      final outerAngle = (i * 72 - 90) * math.pi / 180;
+      final innerAngle = ((i * 72 + 36) - 90) * math.pi / 180;
+      final op = Offset(cx + outer * math.cos(outerAngle), cy + outer * math.sin(outerAngle));
+      final ip = Offset(cx + inner * math.cos(innerAngle), cy + inner * math.sin(innerAngle));
+      i == 0 ? path.moveTo(op.dx, op.dy) : path.lineTo(op.dx, op.dy);
+      path.lineTo(ip.dx, ip.dy);
+    }
+    path.close();
+    canvas.drawPath(path, paint);
+  }
+
+  @override
+  bool shouldRepaint(_StarPainter old) =>
+      old.color != color || old.strokeWidth != strokeWidth;
+}
+
+class _ScoreData {
+  final String label;
+  final int score;
+  final IconData icon;
+  final Color color;
+  final VoidCallback onTap;
+
+  const _ScoreData({
+    required this.label,
+    required this.score,
+    required this.icon,
+    required this.color,
+    required this.onTap,
+  });
 }
