@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:google_fonts/google_fonts.dart';
 import 'app_colors.dart';
 
 /// Lumie App Theme Configuration
@@ -10,7 +11,7 @@ class AppTheme {
       useMaterial3: true,
       brightness: Brightness.light,
       primaryColor: AppColors.primaryYellow,
-      scaffoldBackgroundColor: AppColors.backgroundWhite,
+      scaffoldBackgroundColor: AppColors.backgroundPaper,
       colorScheme: const ColorScheme.light(
         primary: AppColors.primaryLemonDark,
         primaryContainer: AppColors.primaryLemon,
@@ -143,82 +144,24 @@ class AppTheme {
         thickness: 1,
         space: 1,
       ),
-      textTheme: const TextTheme(
-        displayLarge: TextStyle(
-          fontSize: 42,
-          fontWeight: FontWeight.bold,
-          color: AppColors.textPrimary,
-        ),
-        displayMedium: TextStyle(
-          fontSize: 38,
-          fontWeight: FontWeight.bold,
-          color: AppColors.textPrimary,
-        ),
-        displaySmall: TextStyle(
-          fontSize: 34,
-          fontWeight: FontWeight.bold,
-          color: AppColors.textPrimary,
-        ),
-        headlineLarge: TextStyle(
-          fontSize: 30,
-          fontWeight: FontWeight.bold,
-          color: AppColors.textPrimary,
-        ),
-        headlineMedium: TextStyle(
-          fontSize: 28,
-          fontWeight: FontWeight.bold,
-          color: AppColors.textPrimary,
-        ),
-        headlineSmall: TextStyle(
-          fontSize: 26,
-          fontWeight: FontWeight.bold,
-          color: AppColors.textPrimary,
-        ),
-        titleLarge: TextStyle(
-          fontSize: 24,
-          fontWeight: FontWeight.bold,
-          color: AppColors.textPrimary,
-        ),
-        titleMedium: TextStyle(
-          fontSize: 22,
-          fontWeight: FontWeight.bold,
-          color: AppColors.textPrimary,
-        ),
-        titleSmall: TextStyle(
-          fontSize: 20,
-          fontWeight: FontWeight.bold,
-          color: AppColors.textPrimary,
-        ),
-        bodyLarge: TextStyle(
-          fontSize: 17,
-          fontWeight: FontWeight.normal,
-          color: AppColors.textPrimary,
-        ),
-        bodyMedium: TextStyle(
-          fontSize: 15,
-          fontWeight: FontWeight.normal,
-          color: AppColors.textSecondary,
-        ),
-        bodySmall: TextStyle(
-          fontSize: 13,
-          fontWeight: FontWeight.normal,
-          color: AppColors.textLight,
-        ),
-        labelLarge: TextStyle(
-          fontSize: 15,
-          fontWeight: FontWeight.w500,
-          color: AppColors.textPrimary,
-        ),
-        labelMedium: TextStyle(
-          fontSize: 13,
-          fontWeight: FontWeight.w500,
-          color: AppColors.textSecondary,
-        ),
-        labelSmall: TextStyle(
-          fontSize: 11,
-          fontWeight: FontWeight.w500,
-          color: AppColors.textLight,
-        ),
+      // Playfair Display for display/headline/title; system sans-serif for body
+      textTheme: GoogleFonts.playfairDisplayTextTheme().copyWith(
+        displayLarge:  GoogleFonts.playfairDisplay(fontSize: 42, fontWeight: FontWeight.bold,   color: AppColors.textPrimary),
+        displayMedium: GoogleFonts.playfairDisplay(fontSize: 38, fontWeight: FontWeight.bold,   color: AppColors.textPrimary),
+        displaySmall:  GoogleFonts.playfairDisplay(fontSize: 34, fontWeight: FontWeight.bold,   color: AppColors.textPrimary),
+        headlineLarge: GoogleFonts.playfairDisplay(fontSize: 30, fontWeight: FontWeight.bold,   color: AppColors.textPrimary),
+        headlineMedium:GoogleFonts.playfairDisplay(fontSize: 28, fontWeight: FontWeight.bold,   color: AppColors.textPrimary),
+        headlineSmall: GoogleFonts.playfairDisplay(fontSize: 26, fontWeight: FontWeight.bold,   color: AppColors.textPrimary),
+        titleLarge:    GoogleFonts.playfairDisplay(fontSize: 24, fontWeight: FontWeight.bold,   color: AppColors.textPrimary),
+        titleMedium:   GoogleFonts.playfairDisplay(fontSize: 22, fontWeight: FontWeight.bold,   color: AppColors.textPrimary),
+        titleSmall:    GoogleFonts.playfairDisplay(fontSize: 20, fontWeight: FontWeight.w600,   color: AppColors.textPrimary),
+        // Body stays in the default system sans-serif for readability
+        bodyLarge:   const TextStyle(fontSize: 17, fontWeight: FontWeight.normal, color: AppColors.textPrimary),
+        bodyMedium:  const TextStyle(fontSize: 15, fontWeight: FontWeight.normal, color: AppColors.textSecondary),
+        bodySmall:   const TextStyle(fontSize: 13, fontWeight: FontWeight.normal, color: AppColors.textLight),
+        labelLarge:  const TextStyle(fontSize: 15, fontWeight: FontWeight.w500,   color: AppColors.textPrimary),
+        labelMedium: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500,   color: AppColors.textSecondary),
+        labelSmall:  const TextStyle(fontSize: 11, fontWeight: FontWeight.w500,   color: AppColors.textLight),
       ),
     );
   }

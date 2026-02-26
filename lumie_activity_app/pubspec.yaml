@@ -47,6 +47,9 @@ dependencies:
   # Calendar widget for date selection
   table_calendar: ^3.0.9
 
+  # Elegant serif headings (Playfair Display)
+  google_fonts: ^6.2.1
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

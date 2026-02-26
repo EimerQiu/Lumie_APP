@@ -24,8 +24,11 @@ import 'features/teams/screens/invite_member_screen.dart';
 import 'features/teams/screens/member_data_screen.dart';
 import 'features/teams/screens/accept_invitation_screen.dart';
 import 'features/settings/screens/rest_days_settings_screen.dart';
+import 'features/settings/screens/edit_profile_screen.dart';
+import 'features/advisor/screens/advisor_screen.dart';
 import 'shared/models/activity_models.dart';
 import 'shared/models/user_models.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -63,6 +66,8 @@ class LumieActivityApp extends StatelessWidget {
           '/sleep/history': (context) => const SleepHistoryScreen(),
           '/teams': (context) => const TeamsListScreen(),
           '/teams/create': (context) => const CreateTeamScreen(),
+          '/settings/rest-days': (context) => const RestDaysSettingsScreen(),
+          '/profile/edit': (context) => const EditProfileScreen(),
         },
         onGenerateRoute: (settings) {
           // Handle routes with arguments
@@ -235,12 +240,11 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
 
   @override
   Widget build(BuildContext context) {
-    // New 4-tab structure following UX best practices
     final screens = [
-      const DashboardScreen(),        // Today - Daily dashboard
-      const ManualEntryScreen(),      // Track - Core daily action
-      const SleepScreen(),            // Insights - Ring vitals & trends (TODO: expand)
-      const SettingsScreen(),         // Me - Profile, settings, teams
+      const DashboardScreen(),   // Today
+      const AdvisorScreen(),     // Advisor
+      const SleepScreen(),       // Insights
+      const SettingsScreen(),    // Me
     ];
 
     return Scaffold(
@@ -278,9 +282,9 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
                 onTap: () => setState(() => _currentIndex = 0),
               ),
               _NavBarItem(
-                icon: Icons.add_circle_outline,
-                selectedIcon: Icons.add_circle,
-                label: 'Track',
+                icon: Icons.auto_awesome_outlined,
+                selectedIcon: Icons.auto_awesome,
+                label: 'Advisor',
                 isSelected: _currentIndex == 1,
                 onTap: () => setState(() => _currentIndex = 1),
               ),
@@ -517,26 +521,47 @@ class _AddActivityOption extends StatelessWidget {
   }
 }
 
-/// Settings screen with profile access and logout
-class SettingsScreen extends StatelessWidget {
+/// Settings / Me screen
+class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
 
   @override
+  State<SettingsScreen> createState() => _SettingsScreenState();
+}
+
+class _SettingsScreenState extends State<SettingsScreen> {
+  String _checkInFreq = 'Daily';
+
+  @override
+  void initState() {
+    super.initState();
+    _loadFreq();
+  }
+
+  Future<void> _loadFreq() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (mounted) setState(() => _checkInFreq = prefs.getString('advisor_checkin_freq') ?? 'Daily');
+  }
+
+  Future<void> _setFreq(String freq) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('advisor_checkin_freq', freq);
+    if (mounted) setState(() => _checkInFreq = freq);
+  }
+
+  @override
   Widget build(BuildContext context) {
-    return Container(
-      decoration: const BoxDecoration(
-        gradient: AppColors.primaryGradient,
-      ),
-      child: SafeArea(
+    return Scaffold(
+      backgroundColor: AppColors.backgroundPaper,
+      body: SafeArea(
         child: Column(
           children: [
-            // Header
             Padding(
               padding: const EdgeInsets.all(24),
               child: Row(
                 children: [
                   const Text(
-                    'Settings',
+                    'Me',
                     style: TextStyle(
                       fontSize: 36,
                       fontWeight: FontWeight.bold,
@@ -557,13 +582,7 @@ class SettingsScreen extends StatelessWidget {
                   decoration: BoxDecoration(
                     gradient: AppColors.warmGradient,
                     borderRadius: BorderRadius.circular(20),
-                    boxShadow: [
-                      BoxShadow(
-                        color: AppColors.primaryLemon.withValues(alpha: 0.3),
-                        blurRadius: 15,
-                        offset: const Offset(0, 8),
-                      ),
-                    ],
+                    boxShadow: AppColors.cardShadow,
                   ),
                   child: Row(
                     children: [
@@ -574,11 +593,7 @@ class SettingsScreen extends StatelessWidget {
                           color: AppColors.backgroundWhite.withValues(alpha: 0.5),
                           shape: BoxShape.circle,
                         ),
-                        child: const Icon(
-                          Icons.person,
-                          size: 32,
-                          color: AppColors.textOnYellow,
-                        ),
+                        child: const Icon(Icons.person, size: 32, color: AppColors.textOnYellow),
                       ),
                       const SizedBox(width: 16),
                       Expanded(
@@ -588,7 +603,7 @@ class SettingsScreen extends StatelessWidget {
                             Text(
                               profile?.name ?? 'User',
                               style: const TextStyle(
-                                fontSize: 26,
+                                fontSize: 22,
                                 fontWeight: FontWeight.bold,
                                 color: AppColors.textOnYellow,
                               ),
@@ -597,7 +612,7 @@ class SettingsScreen extends StatelessWidget {
                             Text(
                               auth.user?.email ?? '',
                               style: TextStyle(
-                                fontSize: 16,
+                                fontSize: 14,
                                 color: AppColors.textOnYellow.withValues(alpha: 0.8),
                               ),
                             ),
@@ -615,7 +630,7 @@ class SettingsScreen extends StatelessWidget {
                       ),
                       IconButton(
                         onPressed: () {
-                          // Navigate to profile edit
+                          Navigator.pushNamed(context, '/profile/edit');
                         },
                         icon: const Icon(
                           Icons.edit_outlined,
@@ -641,37 +656,119 @@ class SettingsScreen extends StatelessWidget {
                 child: ListView(
                   padding: const EdgeInsets.all(8),
                   children: [
+                    // ── Profile ──────────────────────────────────────────────
                     _SettingsItem(
                       icon: Icons.person_outline,
                       title: 'Edit Profile',
-                      onTap: () {
-                        // Navigate to edit profile
-                      },
+                      onTap: () => Navigator.pushNamed(context, '/profile/edit'),
                     ),
                     _SettingsItem(
                       icon: Icons.groups_outlined,
                       title: 'Teams',
-                      onTap: () {
-                        Navigator.pushNamed(context, '/teams');
-                      },
+                      onTap: () => Navigator.pushNamed(context, '/teams'),
+                    ),
+
+                    const Divider(height: 24),
+
+                    // ── Advisor ───────────────────────────────────────────────
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                      child: Text(
+                        'Advisor',
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                          color: AppColors.textSecondary,
+                          letterSpacing: 0.5,
+                        ),
+                      ),
+                    ),
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              Container(
+                                padding: const EdgeInsets.all(8),
+                                decoration: BoxDecoration(
+                                  color: AppColors.primaryLemon.withValues(alpha: 0.3),
+                                  borderRadius: BorderRadius.circular(10),
+                                ),
+                                child: const Icon(Icons.schedule_outlined, size: 22, color: AppColors.textOnYellow),
+                              ),
+                              const SizedBox(width: 16),
+                              const Text(
+                                'Check-in Frequency',
+                                style: TextStyle(fontSize: 18, fontWeight: FontWeight.w500, color: AppColors.textPrimary),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 12),
+                          Row(
+                            children: ['Daily', 'Weekly', 'Monthly'].map((freq) {
+                              final selected = _checkInFreq == freq;
+                              return Padding(
+                                padding: const EdgeInsets.only(right: 8),
+                                child: GestureDetector(
+                                  onTap: () => _setFreq(freq),
+                                  child: AnimatedContainer(
+                                    duration: const Duration(milliseconds: 180),
+                                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                                    decoration: BoxDecoration(
+                                      color: selected ? AppColors.primaryLemonDark : AppColors.backgroundPaper,
+                                      borderRadius: BorderRadius.circular(20),
+                                      border: Border.all(
+                                        color: selected ? AppColors.primaryLemonDark : AppColors.surfaceLight,
+                                      ),
+                                    ),
+                                    child: Text(
+                                      freq,
+                                      style: TextStyle(
+                                        fontSize: 14,
+                                        fontWeight: FontWeight.w500,
+                                        color: selected ? Colors.white : AppColors.textSecondary,
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              );
+                            }).toList(),
+                          ),
+                        ],
+                      ),
+                    ),
+
+                    const Divider(height: 24),
+
+                    // ── Health & Schedule ─────────────────────────────────────
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                      child: Text(
+                        'Health & Schedule',
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                          color: AppColors.textSecondary,
+                          letterSpacing: 0.5,
+                        ),
+                      ),
                     ),
                     _SettingsItem(
                       icon: Icons.event_busy_outlined,
-                      title: 'Rest Days',
-                      onTap: () {
-                        Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder: (context) => const RestDaysSettingsScreen(),
-                          ),
-                        );
-                      },
+                      title: 'Rest Day Schedule',
+                      onTap: () => Navigator.pushNamed(context, '/settings/rest-days'),
                     ),
                     _SettingsItem(
                       icon: Icons.watch_outlined,
                       title: 'Ring Settings',
                       onTap: () {},
                     ),
+
+                    const Divider(height: 24),
+
+                    // ── General ───────────────────────────────────────────────
                     _SettingsItem(
                       icon: Icons.notifications_outlined,
                       title: 'Notifications',
@@ -692,9 +789,7 @@ class SettingsScreen extends StatelessWidget {
                       icon: Icons.logout,
                       title: 'Log Out',
                       isDestructive: true,
-                      onTap: () {
-                        _showLogoutDialog(context);
-                      },
+                      onTap: () => _showLogoutDialog(context),
                     ),
                   ],
                 ),

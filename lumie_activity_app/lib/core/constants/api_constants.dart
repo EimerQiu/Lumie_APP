@@ -20,6 +20,9 @@ class ApiConstants {
   static const String walkTestBest = '/walk-test/best';
   static const String health = '/health';
 
+  // Advisor
+  static const String advisorChat = '/advisor/chat';
+
   // Timeouts
   static const Duration connectTimeout = Duration(seconds: 10);
   static const Duration receiveTimeout = Duration(seconds: 30);

@@ -1,136 +1,118 @@
 import 'package:flutter/material.dart';
 
-/// Lumie App Color Palette
-/// White-first design: white canvas, amber-yellow as accent
+/// Lumie App — warm-neutral palette.
+/// White/paper canvas · amber-gold accent · clean grays.
 class AppColors {
   AppColors._();
 
-  // ── Amber / Yellow accent (primary brand color) ────────────────────────────
-  // Used on: buttons, progress fills, active states, highlights
-  static const Color primaryLemon     = Color(0xFFFDE68A); // amber-200 — soft glow
-  static const Color primaryLemonLight = Color(0xFFFFFBEB); // amber-50  — barely warm
-  static const Color primaryLemonDark  = Color(0xFFF59E0B); // amber-500 — bold accent
-  static const Color primaryYellow     = Color(0xFFFBBF24); // amber-400 — mid accent
-
-  // ── Page / scaffold backgrounds ────────────────────────────────────────────
-  static const Color backgroundLight = Color(0xFFF9FAFB); // neutral-50 (near white)
+  // ── Backgrounds ────────────────────────────────────────────────────────────
+  static const Color backgroundPaper = Color(0xFFFDFCF8); // warm off-white
   static const Color backgroundWhite = Color(0xFFFFFFFF);
-  static const Color surfaceLight    = Color(0xFFF3F4F6); // neutral-100 — dividers, tracks
+  static const Color backgroundLight = Color(0xFFF5F3EE); // warm off-white surface
+  static const Color surfaceLight    = Color(0xFFE8E6E1); // warm divider / track
   static const Color cardBackground  = Color(0xFFFFFFFF);
 
+  // ── Amber accent ───────────────────────────────────────────────────────────
+  static const Color primaryLemonDark  = Color(0xFFF59E0B); // amber-500 — CTA, progress
+  static const Color primaryYellow     = Color(0xFFFBBF24); // amber-400
+  static const Color primaryLemon      = Color(0xFFFEF3C7); // amber-100 — chip bg
+  static const Color primaryLemonLight = Color(0xFFFFFBEB); // amber-50  — very subtle
+
   // ── Text ───────────────────────────────────────────────────────────────────
-  static const Color textPrimary   = Color(0xFF111827); // near-black
-  static const Color textSecondary = Color(0xFF6B7280); // gray-500
-  static const Color textLight     = Color(0xFF9CA3AF); // gray-400
-  static const Color textOnYellow  = Color(0xFF78350F); // amber-900 — on amber bg
+  static const Color textPrimary   = Color(0xFF1C1917); // warm near-black
+  static const Color textSecondary = Color(0xFF78716C); // stone-500
+  static const Color textLight     = Color(0xFFA8A29E); // stone-400
+  static const Color textOnYellow  = Color(0xFF78350F); // amber-900 on amber bg
 
-  // ── Secondary accents ──────────────────────────────────────────────────────
-  static const Color accentOrange   = Color(0xFFD97706); // amber-600
-  static const Color accentPeach    = Color(0xFFFED7AA); // orange-200
-  static const Color accentGreen    = Color(0xFF86EFAC); // green-300
-  static const Color accentMint     = Color(0xFF99F6E4); // teal-200
-  static const Color accentBlue     = Color(0xFF7DD3FC); // sky-300
-  static const Color accentLavender = Color(0xFFC4B5FD); // violet-300
-
-  // ── Intensity colours (data-viz) ───────────────────────────────────────────
-  static const Color intensityLow      = Color(0xFFBBF7D0); // green-200
-  static const Color intensityModerate = Color(0xFFFDE68A); // amber-200
-  static const Color intensityHigh     = Color(0xFFFED7AA); // orange-200
-
-  // ── Status colours ─────────────────────────────────────────────────────────
-  static const Color success = Color(0xFF4ADE80); // green-400
-  static const Color warning = Color(0xFFFBBF24); // amber-400
-  static const Color error   = Color(0xFFF87171); // red-400
-  static const Color info    = Color(0xFF38BDF8); // sky-400
+  // ── Status (minimal set) ───────────────────────────────────────────────────
+  static const Color success = Color(0xFF4ADE80);
+  static const Color warning = Color(0xFFF59E0B); // reuse accent
+  static const Color error   = Color(0xFFF87171);
+  static const Color info    = Color(0xFF38BDF8);
 
   // ── Ring status ────────────────────────────────────────────────────────────
   static const Color ringConnected    = Color(0xFF4ADE80);
   static const Color ringDisconnected = Color(0xFFF87171);
   static const Color ringSyncing      = Color(0xFF38BDF8);
 
+  // ── Intensity (data-viz only) ──────────────────────────────────────────────
+  static const Color intensityLow      = Color(0xFFBBF7D0);
+  static const Color intensityModerate = Color(0xFFFDE68A);
+  static const Color intensityHigh     = Color(0xFFFED7AA);
+
+  // ── Accent aliases kept for compatibility ──────────────────────────────────
+  static const Color accentOrange   = Color(0xFFD97706); // amber-600
+  static const Color accentPeach    = Color(0xFFFEF3C7); // → same as primaryLemon
+  static const Color accentGreen    = Color(0xFF86EFAC);
+  static const Color accentMint     = Color(0xFF99F6E4);
+  static const Color accentBlue     = Color(0xFF7DD3FC);
+  static const Color accentLavender = Color(0xFFC4B5FD);
+
   // ── Gradients ──────────────────────────────────────────────────────────────
 
-  /// Page background: starts barely warm at the top, fades to pure white.
-  /// Gives the sunrise hint without overwhelming the white canvas.
+  /// Page background — warm paper, no dramatic colour shift.
   static const LinearGradient primaryGradient = LinearGradient(
     begin: Alignment.topCenter,
     end: Alignment.bottomCenter,
-    stops: [0.0, 0.25, 1.0],
-    colors: [
-      Color(0xFFFFFBEB), // amber-50 — just a whisper of warmth
-      Color(0xFFFAFAFA), // near white
-      Color(0xFFFFFFFF), // pure white
-    ],
+    colors: [Color(0xFFFDFCF8), Color(0xFFFDFCF8)],
   );
 
-  /// Card background: pure white. Shadow gives the elevation.
+  /// Card — pure white, shadow does the work.
   static const LinearGradient cardGradient = LinearGradient(
     colors: [Color(0xFFFFFFFF), Color(0xFFFFFFFF)],
   );
 
-  /// Progress / game bar fill: vibrant amber streak.
+  /// Amber streak — for progress bars, game bar fill.
   static const LinearGradient progressGradient = LinearGradient(
     begin: Alignment.centerLeft,
     end: Alignment.centerRight,
-    colors: [Color(0xFFFDE68A), Color(0xFFFBBF24), Color(0xFFF59E0B)],
+    colors: [Color(0xFFFDE68A), Color(0xFFF59E0B), Color(0xFFD97706)],
   );
 
-  /// Used on icon containers, bottom-nav selected state, chips.
+  /// Warm amber — chips, icon containers, nav selected state.
   static const LinearGradient warmGradient = LinearGradient(
     begin: Alignment.topLeft,
     end: Alignment.bottomRight,
-    colors: [Color(0xFFFEF3C7), Color(0xFFFDE68A)], // amber-100 → amber-200
+    colors: [Color(0xFFFEF3C7), Color(0xFFFDE68A)],
   );
 
-  /// Cool (blue) gradient for ring/sync elements.
+  /// Cool blue — ring/sync elements.
   static const LinearGradient coolGradient = LinearGradient(
     begin: Alignment.topLeft,
     end: Alignment.bottomRight,
     colors: [Color(0xFFE0F2FE), Color(0xFFBAE6FD), Color(0xFF7DD3FC)],
   );
 
-  /// Mint gradient for health data sections.
+  /// Teal — health/wellness data sections.
   static const LinearGradient mintGradient = LinearGradient(
     begin: Alignment.topLeft,
     end: Alignment.bottomRight,
     colors: [Color(0xFFCCFBF1), Color(0xFF99F6E4), Color(0xFF5EEAD4)],
   );
 
-  /// Sunrise: used for the logo / brand icon container.
+  /// Brand logo container.
   static const LinearGradient sunriseGradient = LinearGradient(
     begin: Alignment.topCenter,
     end: Alignment.bottomCenter,
     colors: [Color(0xFFFEF3C7), Color(0xFFFDE68A), Color(0xFFFBBF24)],
   );
 
-  /// Activity ring arc gradient.
+  /// Activity ring arc.
   static const LinearGradient activityRingGradient = LinearGradient(
     begin: Alignment.topCenter,
     end: Alignment.bottomCenter,
     colors: [Color(0xFFFBBF24), Color(0xFFF59E0B), Color(0xFFD97706)],
   );
 
-  /// Radial gradient for circular progress (inner glow).
   static const RadialGradient circularProgressGradient = RadialGradient(
     center: Alignment.center,
     radius: 0.8,
     colors: [Color(0xFFFDE68A), Color(0xFFF59E0B)],
   );
 
-  // ── Convenience shadow ─────────────────────────────────────────────────────
-  /// Neutral card shadow — no yellow tint, just depth.
-  static List<BoxShadow> get cardShadow => [
-        const BoxShadow(
-          color: Color(0x0D000000), // 5% black
-          blurRadius: 16,
-          spreadRadius: 0,
-          offset: Offset(0, 2),
-        ),
-        const BoxShadow(
-          color: Color(0x08000000), // 3% black — secondary soft edge
-          blurRadius: 4,
-          spreadRadius: 0,
-          offset: Offset(0, 1),
-        ),
+  // ── Neutral card shadow ────────────────────────────────────────────────────
+  static List<BoxShadow> get cardShadow => const [
+        BoxShadow(color: Color(0x0D000000), blurRadius: 16, offset: Offset(0, 2)),
+        BoxShadow(color: Color(0x08000000), blurRadius: 4,  offset: Offset(0, 1)),
       ];
 }

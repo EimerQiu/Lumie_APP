@@ -74,49 +74,44 @@ class _DashboardScreenState extends State<DashboardScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: Container(
-        decoration: const BoxDecoration(
-          gradient: AppColors.primaryGradient,
-        ),
-        child: SafeArea(
-          child: CustomScrollView(
-            slivers: [
-              _buildAppBar(),
-              SliverToBoxAdapter(
-                child: Column(
-                  children: [
-                    _buildScoreRow(),
-                    const SizedBox(height: 12),
-                    _buildMainActivityRing(),
-                    const SizedBox(height: 24),
-                    _buildTodaysSummary(),
-                    const SizedBox(height: 16),
-                    AdaptiveGoalCard(
-                      recommendedMinutes: _isRestDay ? 20 : _goalMinutes,
-                      currentMinutes: _currentMinutes,
-                      reason: _isRestDay
-                          ? 'Today is a scheduled rest day. Light movement only — let your body recover!'
-                          : 'Based on your recent rest and activity patterns',
-                      isReduced: _isRestDay,
-                      factors: _isRestDay
-                          ? ['Rest day scheduled', 'Recovery focus', 'Light movement ok']
-                          : [
-                              'Good sleep last night',
-                              'Moderate activity yesterday',
-                              'No fatigue reported',
-                            ],
-                    ),
-                    const SizedBox(height: 16),
-                    _buildRecentActivities(),
-                    const SizedBox(height: 16),
-                    const QuickActionsSection(),
-                    const SizedBox(height: 100),
-                  ],
+      backgroundColor: AppColors.backgroundPaper,
+      drawer: _buildDrawer(context),
+      body: CustomScrollView(
+        slivers: [
+          _buildAppBar(),
+          SliverToBoxAdapter(
+            child: Column(
+              children: [
+                _buildScoreRow(),
+                const SizedBox(height: 12),
+                _buildMainActivityRing(),
+                const SizedBox(height: 24),
+                _buildTodaysSummary(),
+                const SizedBox(height: 16),
+                AdaptiveGoalCard(
+                  recommendedMinutes: _isRestDay ? 20 : _goalMinutes,
+                  currentMinutes: _currentMinutes,
+                  reason: _isRestDay
+                      ? 'Today is a scheduled rest day. Light movement only — let your body recover!'
+                      : 'Based on your recent rest and activity patterns',
+                  isReduced: _isRestDay,
+                  factors: _isRestDay
+                      ? ['Rest day scheduled', 'Recovery focus', 'Light movement ok']
+                      : [
+                          'Good sleep last night',
+                          'Moderate activity yesterday',
+                          'No fatigue reported',
+                        ],
                 ),
-              ),
-            ],
+                const SizedBox(height: 16),
+                _buildRecentActivities(),
+                const SizedBox(height: 16),
+                const QuickActionsSection(),
+                const SizedBox(height: 100),
+              ],
+            ),
           ),
-        ),
+        ],
       ),
     );
   }
@@ -252,49 +247,38 @@ class _DashboardScreenState extends State<DashboardScreen> {
     return SliverAppBar(
       expandedHeight: 60,
       floating: true,
-      backgroundColor: Colors.transparent,
-      flexibleSpace: FlexibleSpaceBar(
-        titlePadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-        title: Row(
-          children: [
-            Container(
-              padding: const EdgeInsets.all(8),
-              decoration: BoxDecoration(
-                gradient: AppColors.sunriseGradient,
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: const Text(
-                '☀️',
-                style: TextStyle(fontSize: 20),
-              ),
-            ),
-            const SizedBox(width: 12),
-            const Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(
-                    'Good Morning!',
-                    style: TextStyle(
-                      fontSize: 22,
-                      fontWeight: FontWeight.bold,
-                      color: AppColors.textPrimary,
-                    ),
-                  ),
-                  Text(
-                    'Let\'s check your activity',
-                    style: TextStyle(
-                      fontSize: 12,
-                      color: AppColors.textSecondary,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ],
+      backgroundColor: AppColors.backgroundPaper,
+      elevation: 0,
+      scrolledUnderElevation: 0,
+      leading: Builder(
+        builder: (ctx) => IconButton(
+          icon: const Icon(Icons.menu, color: AppColors.textPrimary),
+          onPressed: () => Scaffold.of(ctx).openDrawer(),
         ),
       ),
+      title: const Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            'Good Morning',
+            style: TextStyle(
+              fontSize: 20,
+              fontWeight: FontWeight.bold,
+              color: AppColors.textPrimary,
+            ),
+          ),
+          Text(
+            'Here\'s your day at a glance',
+            style: TextStyle(
+              fontSize: 11,
+              color: AppColors.textSecondary,
+              fontWeight: FontWeight.normal,
+            ),
+          ),
+        ],
+      ),
+      centerTitle: false,
       actions: [
         Padding(
           padding: const EdgeInsets.only(right: 16),
@@ -306,6 +290,81 @@ class _DashboardScreenState extends State<DashboardScreen> {
           ),
         ),
       ],
+    );
+  }
+
+  Widget _buildDrawer(BuildContext context) {
+    return Drawer(
+      backgroundColor: AppColors.backgroundPaper,
+      child: SafeArea(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(24, 24, 24, 8),
+              child: Text(
+                'Lumie',
+                style: TextStyle(
+                  fontSize: 28,
+                  fontWeight: FontWeight.bold,
+                  color: AppColors.textPrimary,
+                  fontFamily: 'Playfair Display',
+                ),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
+              child: Container(height: 2, width: 32, color: AppColors.primaryLemonDark),
+            ),
+            _DrawerItem(
+              icon: Icons.wb_sunny_outlined,
+              label: 'Today',
+              onTap: () => Navigator.pop(context),
+            ),
+            _DrawerItem(
+              icon: Icons.auto_awesome_outlined,
+              label: 'Advisor',
+              onTap: () {
+                Navigator.pop(context);
+                // Handled by bottom nav index 1
+              },
+            ),
+            _DrawerItem(
+              icon: Icons.history,
+              label: 'Activity History',
+              onTap: () {
+                Navigator.pop(context);
+                Navigator.push(context, MaterialPageRoute(builder: (_) => const ActivityHistoryScreen()));
+              },
+            ),
+            _DrawerItem(
+              icon: Icons.bedtime_outlined,
+              label: 'Sleep',
+              onTap: () {
+                Navigator.pop(context);
+                Navigator.push(context, MaterialPageRoute(builder: (_) => const SleepScreen()));
+              },
+            ),
+            const Divider(indent: 24, endIndent: 24),
+            _DrawerItem(
+              icon: Icons.event_busy_outlined,
+              label: 'Rest Day Schedule',
+              onTap: () {
+                Navigator.pop(context);
+                Navigator.pushNamed(context, '/settings/rest-days');
+              },
+            ),
+            const Spacer(),
+            Padding(
+              padding: const EdgeInsets.all(24),
+              child: Text(
+                'Version 1.0',
+                style: TextStyle(fontSize: 12, color: AppColors.textLight),
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 
@@ -505,6 +564,31 @@ class _DashboardScreenState extends State<DashboardScreen> {
             ),
         ],
       ),
+    );
+  }
+}
+
+class _DrawerItem extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final VoidCallback onTap;
+
+  const _DrawerItem({required this.icon, required this.label, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return ListTile(
+      contentPadding: const EdgeInsets.symmetric(horizontal: 24),
+      leading: Icon(icon, color: AppColors.textSecondary, size: 20),
+      title: Text(
+        label,
+        style: const TextStyle(
+          fontSize: 15,
+          fontWeight: FontWeight.w500,
+          color: AppColors.textPrimary,
+        ),
+      ),
+      onTap: onTap,
     );
   }
 }

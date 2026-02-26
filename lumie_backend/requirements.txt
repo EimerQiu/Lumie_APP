@@ -21,6 +21,9 @@ python-multipart==0.0.6
 # Email validation
 email-validator==2.1.0
 
+# Anthropic Claude AI
+anthropic>=0.40.0
+
 # Gmail API for sending emails
 google-api-python-client==2.116.0
 google-auth==2.27.0
