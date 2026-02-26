@@ -55,10 +55,10 @@ class _SleepHistoryScreenState extends State<SleepHistoryScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: AppColors.backgroundLight,
+      backgroundColor: AppColors.backgroundWhite,
       appBar: AppBar(
         title: const Text('Sleep History'),
-        backgroundColor: AppColors.backgroundLight,
+        backgroundColor: AppColors.backgroundWhite,
         elevation: 0,
       ),
       body: _isLoading

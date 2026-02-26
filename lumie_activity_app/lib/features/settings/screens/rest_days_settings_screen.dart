@@ -87,9 +87,9 @@ class _RestDaysSettingsScreenState extends State<RestDaysSettingsScreen> {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Rest Days'),
-        backgroundColor: AppColors.backgroundLight,
+        backgroundColor: AppColors.backgroundWhite,
       ),
-      backgroundColor: AppColors.backgroundLight,
+      backgroundColor: AppColors.backgroundWhite,
       body: _isLoading
           ? const Center(
               child: CircularProgressIndicator(

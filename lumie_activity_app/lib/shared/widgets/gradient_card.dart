@@ -9,7 +9,6 @@ class GradientCard extends StatelessWidget {
   final EdgeInsetsGeometry? margin;
   final double borderRadius;
   final VoidCallback? onTap;
-  final double elevation;
 
   const GradientCard({
     super.key,
@@ -19,7 +18,6 @@ class GradientCard extends StatelessWidget {
     this.margin,
     this.borderRadius = 16,
     this.onTap,
-    this.elevation = 2,
   });
 
   @override
@@ -29,13 +27,7 @@ class GradientCard extends StatelessWidget {
       decoration: BoxDecoration(
         gradient: gradient ?? AppColors.cardGradient,
         borderRadius: BorderRadius.circular(borderRadius),
-        boxShadow: [
-          BoxShadow(
-            color: AppColors.primaryLemon.withValues(alpha: 0.3),
-            blurRadius: elevation * 2,
-            offset: Offset(0, elevation),
-          ),
-        ],
+        boxShadow: AppColors.cardShadow,
       ),
       child: Material(
         color: Colors.transparent,

@@ -214,7 +214,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 width: 72,
                 height: 72,
                 child: CustomPaint(
-                  painter: _StarPainter(color: scoreColor, strokeWidth: 1.5),
+                  painter: _StarPainter(color: scoreColor, strokeWidth: 1.5, progress: data.score / 100),
                 ),
               ),
               Text(
@@ -512,23 +512,20 @@ class _DashboardScreenState extends State<DashboardScreen> {
 class _StarPainter extends CustomPainter {
   final Color color;
   final double strokeWidth;
+  final double progress; // 0.0 – 1.0
 
-  const _StarPainter({required this.color, required this.strokeWidth});
+  const _StarPainter({
+    required this.color,
+    required this.strokeWidth,
+    required this.progress,
+  });
 
-  @override
-  void paint(Canvas canvas, Size size) {
-    final paint = Paint()
-      ..color = color
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = strokeWidth
-      ..strokeJoin = StrokeJoin.round;
-
+  Path _buildStarPath(Size size) {
     final cx = size.width / 2;
     final cy = size.height / 2;
     final outer = size.width / 2;
     final inner = outer * 0.42;
     final path = Path();
-
     for (int i = 0; i < 5; i++) {
       final outerAngle = (i * 72 - 90) * math.pi / 180;
       final innerAngle = ((i * 72 + 36) - 90) * math.pi / 180;
@@ -538,12 +535,40 @@ class _StarPainter extends CustomPainter {
       path.lineTo(ip.dx, ip.dy);
     }
     path.close();
-    canvas.drawPath(path, paint);
+    return path;
+  }
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final starPath = _buildStarPath(size);
+
+    // Background track
+    canvas.drawPath(
+      starPath,
+      Paint()
+        ..color = color.withValues(alpha: 0.15)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = strokeWidth
+        ..strokeJoin = StrokeJoin.round,
+    );
+
+    // Progress arc trimmed to `progress` of total path length
+    final metric = starPath.computeMetrics().first;
+    final filled = metric.extractPath(0, metric.length * progress.clamp(0.0, 1.0));
+    canvas.drawPath(
+      filled,
+      Paint()
+        ..color = color
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = strokeWidth
+        ..strokeCap = StrokeCap.round
+        ..strokeJoin = StrokeJoin.round,
+    );
   }
 
   @override
   bool shouldRepaint(_StarPainter old) =>
-      old.color != color || old.strokeWidth != strokeWidth;
+      old.color != color || old.strokeWidth != strokeWidth || old.progress != progress;
 }
 
 class _ScoreData {
