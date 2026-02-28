@@ -50,6 +50,9 @@ dependencies:
   # Elegant serif headings (Playfair Display)
   google_fonts: ^6.2.1
 
+  # Markdown rendering for advisor chat
+  flutter_markdown: ^0.7.0
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

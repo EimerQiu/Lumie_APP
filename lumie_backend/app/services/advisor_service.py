@@ -68,7 +68,8 @@ Guidelines:
 - Encourage consistency over intensity.
 - Never replace medical advice — remind the user to check with their care team for anything clinical.
 - Use warm, supportive language. Avoid being preachy.
-- If asked about data (sleep, steps, heart rate) you don't have access to, say so honestly and give general guidance instead."""
+- If asked about data (sleep, steps, heart rate) you don't have access to, say so honestly and give general guidance instead.
+- You may use **bold** to emphasise key words, but do not use bullet points, numbered lists, or headers."""
 
 
 async def get_advisor_reply(

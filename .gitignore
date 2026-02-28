@@ -3,3 +3,9 @@
 **/.DS_Store
 
 i-informatics-486804-r1-771f79351173.json
+
+# Environment files - never commit these
+.env
+.env.*
+**/.env
+**/.env.*
