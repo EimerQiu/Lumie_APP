@@ -559,6 +559,328 @@ This feature must be completed before:
 
 ---
 
+## Ring Connection Procedure
+
+### 1. Feature Overview
+
+The Ring Connection Procedure handles the pairing and management of the Lumie Ring hardware with the user's account. This flow is presented immediately after the user completes their Sign Up and profile setup, and determines whether the user proceeds with full ring-based features or uses the app in a limited, ring-free mode.
+
+This feature supports:
+- Post-signup ring ownership prompt
+- Bluetooth-based ring discovery and pairing
+- Persistent ring connection (remembered across sessions)
+- Automatic data sync on app launch
+- Graceful degradation for users without a ring
+
+### 2. Purpose & Goals
+
+#### 2.1 Why This Feature Exists
+
+The Ring Connection Procedure exists to:
+- Bridge the gap between account creation and hardware activation
+- Ensure ring owners can pair quickly and start collecting health data immediately
+- Allow non-ring users to proceed without friction
+- Establish a persistent Bluetooth bond so future app launches automatically reconnect and sync
+
+#### 2.2 Explicit Non-Goals
+
+- This flow does not handle ring firmware updates (handled separately)
+- This flow does not handle ring purchase or checkout
+- This flow does not configure which ring-based features are enabled (determined by subscription tier)
+- This flow does not pair rings for family members (each user pairs their own ring)
+
+### 3. Ring Dependency
+
+| Requirement | Status |
+|---|---|
+| Requires Lumie Ring | ❌ No |
+| Works without hardware | ✅ Yes (limited feature set) |
+| Allows later ring pairing | ✅ Yes (via Settings) |
+
+### 4. User Flow
+
+#### 4.1 Ring Ownership Prompt (Post-Signup)
+
+After the user completes Sign Up (account creation + account type selection + profile details), the app presents a screen asking:
+
+**"Do you have a Lumie Ring?"**
+
+Options:
+- **"Yes, connect my ring"** → proceeds to Bluetooth Discovery (4.2)
+- **"Not yet, skip for now"** → proceeds to Ring-Free Mode (4.5)
+
+UX Notes:
+- This screen appears once after initial signup
+- Users who skip can pair later from Settings → Ring Management
+- The prompt should briefly explain the benefits of connecting a ring (e.g., "Connect your ring to unlock activity tracking, sleep monitoring, fatigue insights, and more")
+
+#### 4.2 Bluetooth Prerequisite Check
+
+When the user selects "Yes, connect my ring," the app checks the device's Bluetooth status.
+
+**If Bluetooth is OFF:**
+- Display a prompt: "Please turn on Bluetooth to find your Lumie Ring"
+- Provide a button to open the device's Bluetooth settings (platform-specific)
+- The app waits and re-checks Bluetooth status when the user returns
+- Do not proceed to scanning until Bluetooth is confirmed ON
+
+**If Bluetooth is ON:**
+- Proceed directly to Ring Discovery (4.3)
+
+**Permissions (Platform-Specific):**
+- **iOS**: Request Bluetooth permission via system dialog if not already granted
+- **Android**: Request `BLUETOOTH_SCAN`, `BLUETOOTH_CONNECT`, and `ACCESS_FINE_LOCATION` permissions as required by API level
+- If permissions are denied, display an explanation and a link to the app's system permission settings
+
+#### 4.3 Ring Discovery (Scanning)
+
+Once Bluetooth is confirmed ON and permissions are granted, the app begins scanning for nearby Lumie Ring devices.
+
+**Scanning Behavior:**
+- Scan for BLE (Bluetooth Low Energy) devices filtered by the Lumie Ring service UUID
+- Display a scanning animation/indicator while searching
+- Timeout after 30 seconds if no rings are found
+
+**Discovery Results:**
+- Display a list of discovered Lumie Rings nearby
+- Each ring entry shows:
+  - Ring identifier (e.g., device name or last 4 characters of MAC address)
+  - Signal strength indicator (optional, helps distinguish between multiple rings)
+- If multiple rings are found, the user selects which ring to connect
+
+**No Rings Found:**
+- Display: "No Lumie Rings found nearby"
+- Provide troubleshooting tips:
+  - Make sure your ring is charged and nearby
+  - Try restarting Bluetooth
+  - Ensure the ring is not connected to another device
+- Offer a "Scan Again" button
+- Offer a "Skip for Now" option to proceed without a ring
+
+#### 4.4 Ring Pairing & Connection
+
+When the user taps "Connect" on a discovered ring:
+
+**Connection Flow:**
+1. App initiates BLE connection to the selected ring
+2. Display a connecting indicator (e.g., "Connecting to your Lumie Ring...")
+3. Once connected, perform a handshake/validation to confirm it is a genuine Lumie Ring
+4. On successful pairing:
+   - Save the ring's unique identifier (MAC address / device ID) to the user's profile on the server
+   - Store the ring identifier locally for auto-reconnect
+   - Display a success screen: "Your Lumie Ring is connected!"
+   - Trigger an initial data sync if the ring has stored data
+5. Proceed to the app's home screen with full ring-based features enabled (based on subscription tier)
+
+**Connection Failure:**
+- Display: "Could not connect to this ring. Please try again."
+- Offer "Retry" and "Skip for Now" options
+- Log the failure for diagnostics
+
+#### 4.5 Ring-Free Mode (Skip Path)
+
+If the user selects "Not yet, skip for now" at the ownership prompt or skips during discovery:
+
+- The user proceeds directly to the app's home screen
+- Features that require ring data are visually indicated as unavailable with messaging explaining the ring requirement
+- Ring-dependent features display a locked/disabled state with a prompt: "Connect a Lumie Ring to unlock this feature"
+- The user can pair a ring at any time from Settings → Ring Management
+
+**Features Unavailable Without Ring:**
+- Activity Tracking
+- Sleep Monitoring
+- Fatigue Index
+- Stress/Anxiety Analysis
+- AI Advisor (requires ring data for personalized insights)
+- Advanced Analytics
+
+**Features Available Without Ring:**
+- Med Reminders (subject to subscription tier limits)
+- Habit Tracker (subject to subscription tier limits)
+- Peer Community (subject to subscription tier limits)
+- Family Linking (subject to subscription tier limits)
+- Profile management
+- Settings
+
+### 5. Persistent Connection & Auto-Sync
+
+#### 5.1 Remembered Ring
+
+Once a ring is successfully paired:
+- The ring's unique identifier is stored both locally (on-device) and server-side (in the user's profile)
+- On subsequent app launches, the app automatically attempts to reconnect to the remembered ring via BLE
+- No user action is required for reconnection
+
+#### 5.2 Auto-Reconnect Behavior
+
+**On App Launch:**
+1. Check if a ring identifier exists in local storage
+2. If yes, check if Bluetooth is ON
+3. If Bluetooth is ON, attempt to connect to the remembered ring silently (no UI interruption)
+4. If connection succeeds, begin automatic data sync
+5. If connection fails (ring out of range, off, or dead battery), show a subtle status indicator (e.g., "Ring disconnected" in the home screen header) — do not block the user from using the app
+
+**Background Reconnect:**
+- If the ring comes back in range while the app is open, attempt to reconnect automatically
+- On successful reconnect, sync any pending data
+
+#### 5.3 Automatic Data Sync
+
+When the ring connects (either on app launch or reconnect):
+- The app syncs all data stored on the ring since the last sync
+- Sync happens in the background without blocking the UI
+- A subtle sync indicator is shown (e.g., a small progress icon)
+- Once sync completes, the dashboard and relevant feature screens update with the new data
+- Sync timestamp is recorded both locally and server-side
+
+**Sync Failure Handling:**
+- If sync fails mid-transfer, the app retries automatically
+- Partial data is not discarded — sync resumes from where it left off
+- If repeated failures occur, display: "Unable to sync ring data. Please make sure your ring is nearby and charged."
+
+### 6. Ring Management (Settings Integration)
+
+Users can manage their ring connection from **Settings → Ring Management**:
+
+| Action | Description |
+|---|---|
+| View connected ring | Shows ring identifier and connection status |
+| Disconnect ring | Unpairs the ring from the account, clears local and server-side ring data |
+| Connect a new ring | Initiates the Ring Discovery flow (4.3) |
+| Reconnect | Manually trigger a reconnect attempt if auto-reconnect failed |
+
+**Switching Rings:**
+- A user can only have one ring paired at a time
+- To switch rings, the user must first disconnect the current ring, then pair the new one
+- Disconnecting does not delete historical data collected from the previous ring
+
+### 7. Data Fields & Storage
+
+#### 7.1 Ring Connection Data Model
+
+**Backend (Python/Pydantic):**
+
+```python
+class RingConnectionStatus(str, Enum):
+    """Ring connection status."""
+    CONNECTED = "connected"
+    DISCONNECTED = "disconnected"
+    NEVER_PAIRED = "never_paired"
+
+class RingInfo(BaseModel):
+    """Paired ring information stored in user profile."""
+    ring_device_id: Optional[str] = None  # Unique hardware identifier
+    ring_name: Optional[str] = None  # Display name (e.g., "Lumie Ring A3F2")
+    connection_status: RingConnectionStatus = RingConnectionStatus.NEVER_PAIRED
+    paired_at: Optional[datetime] = None
+    last_sync_at: Optional[datetime] = None
+    firmware_version: Optional[str] = None
+```
+
+**Frontend (Flutter/Dart):**
+
+```dart
+enum RingConnectionStatus {
+  connected,
+  disconnected,
+  neverPaired;
+}
+
+class RingInfo {
+  final String? ringDeviceId;
+  final String? ringName;
+  final RingConnectionStatus connectionStatus;
+  final DateTime? pairedAt;
+  final DateTime? lastSyncAt;
+  final String? firmwareVersion;
+}
+```
+
+#### 7.2 Database Schema Addition
+
+**MongoDB `users` collection (ring fields added to user document):**
+
+```json
+{
+  "user_id": "string",
+  "ring": {
+    "ring_device_id": "string | null",
+    "ring_name": "string | null",
+    "connection_status": "connected" | "disconnected" | "never_paired",
+    "paired_at": "ISO8601 datetime | null",
+    "last_sync_at": "ISO8601 datetime | null",
+    "firmware_version": "string | null"
+  }
+}
+```
+
+### 8. Required API Endpoints
+
+```
+POST /ring/pair
+  - Pair a ring to the user's account
+  - Request: { ring_device_id, ring_name, firmware_version }
+  - Response: Updated RingInfo
+
+POST /ring/unpair
+  - Unpair the current ring from the user's account
+  - Clears ring fields on the user profile
+  - Response: Confirmation
+
+GET /ring/status
+  - Retrieve current ring pairing and sync status
+  - Response: RingInfo
+
+POST /ring/sync
+  - Record a completed data sync
+  - Request: { sync_timestamp, data_summary }
+  - Response: Confirmation with updated last_sync_at
+
+POST /ring/sync/upload
+  - Upload ring sensor data collected since last sync
+  - Request: { ring_device_id, data_type, records[] }
+  - Response: { records_processed, sync_timestamp }
+```
+
+### 9. Error States & Edge Cases
+
+| Scenario | Handling |
+|---|---|
+| Bluetooth OFF during pairing | Prompt user to enable Bluetooth; block scanning until ON |
+| Bluetooth permission denied | Explain why permission is needed; link to system settings |
+| No rings found after scan | Show troubleshooting tips; offer rescan or skip |
+| Connection fails during pairing | Show retry option; allow skip |
+| Ring already paired to another account | Display: "This ring is connected to another account. Please unpair it first or contact support." |
+| Ring goes out of range while using app | Show subtle "Ring disconnected" indicator; auto-reconnect when back in range |
+| App launched with no Bluetooth | Use app in ring-free mode; show reconnect option |
+| Sync interrupted | Resume from last checkpoint; do not discard partial data |
+| User switches phones | Ring identifier stored server-side allows re-pairing on new device via Settings |
+| Ring battery dead | Treat as disconnected; auto-reconnect when ring is charged and in range |
+
+### 10. Security & Privacy
+
+- Ring pairing is tied to a single authenticated user account
+- Ring device identifiers are stored securely and not shared with other users
+- Data synced from the ring is subject to the same privacy controls as all other user data
+- Bluetooth scanning only discovers Lumie Ring devices (filtered by service UUID); other BLE devices are ignored
+- Ring data access follows the same family sharing rules as other health data (off by default, user-controlled)
+
+### 11. Dependencies & Order of Implementation
+
+This feature requires:
+- User Profile (user must have a completed account before pairing)
+- Authentication (ring is tied to authenticated user)
+
+This feature must be completed before:
+- Activity Tracking
+- Sleep Monitoring
+- Fatigue Index
+- Stress/Anxiety Analysis
+- AI Advisor (ring data dependent)
+- Advanced Analytics
+
+---
+
 ## Settings
 
 ### 1. Feature Overview
