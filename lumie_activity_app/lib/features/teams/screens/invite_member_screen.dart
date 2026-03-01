@@ -363,7 +363,11 @@ class _InviteMemberScreenState extends State<InviteMemberScreen> {
     if (dateStr == null) return '';
 
     try {
-      final date = DateTime.parse(dateStr.toString()).toUtc();
+      // Server sends datetime.utcnow() with no Z suffix — append Z so Dart
+      // parses it as UTC instead of local time.
+      String str = dateStr.toString();
+      if (!str.endsWith('Z') && !str.contains('+')) str += 'Z';
+      final date = DateTime.parse(str);
       final now = DateTime.now().toUtc();
       final difference = now.difference(date);
 
