@@ -80,8 +80,8 @@ class _InviteMemberScreenState extends State<InviteMemberScreen> {
       if (mounted) {
         _emailController.clear();
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Invitation sent successfully!'),
+          SnackBar(
+            content: Text('Invitation sent to $email'),
             backgroundColor: Colors.green,
           ),
         );
@@ -171,7 +171,7 @@ class _InviteMemberScreenState extends State<InviteMemberScreen> {
                   controller: _emailController,
                   keyboardType: TextInputType.emailAddress,
                   decoration: InputDecoration(
-                    hintText: 'member@example.com',
+                    hintText: 'Enter email address',
                     border: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(12),
                     ),
@@ -363,8 +363,8 @@ class _InviteMemberScreenState extends State<InviteMemberScreen> {
     if (dateStr == null) return '';
 
     try {
-      final date = DateTime.parse(dateStr.toString());
-      final now = DateTime.now();
+      final date = DateTime.parse(dateStr.toString()).toUtc();
+      final now = DateTime.now().toUtc();
       final difference = now.difference(date);
 
       if (difference.inDays == 0) {
