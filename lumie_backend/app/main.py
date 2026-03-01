@@ -15,6 +15,7 @@ from .api.profile_routes import router as profile_router
 from .api.team_routes import router as team_router
 from .api.rest_days_routes import router as rest_days_router
 from .api.advisor_routes import router as advisor_router
+from .api.task_routes import router as task_router
 
 # Configure logging
 logging.basicConfig(
@@ -97,6 +98,7 @@ app.include_router(activity_router, prefix="/api/v1", tags=["activity"])
 app.include_router(team_router, prefix="/api/v1")
 app.include_router(rest_days_router, prefix="/api/v1")
 app.include_router(advisor_router, prefix="/api/v1")
+app.include_router(task_router, prefix="/api/v1")
 
 
 @app.get("/")

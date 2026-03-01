@@ -16,6 +16,7 @@ Activity tracking app for teens with chronic health conditions.
 lumie_activity_app/lib/
   features/
     teams/          # Team system (screens, providers, widgets)
+    tasks/          # Med-Reminder (tasks, templates, batch generation)
     advisory/       # AI advisor chat
   shared/models/    # Dart data models
   core/services/    # API service layer
@@ -44,6 +45,8 @@ lumie_backend/app/
 | `teams` | Team records (soft-deleted with `is_deleted`) |
 | `team_members` | Active (`status=member`) + pending (`status=pending`) |
 | `pending_invitations` | Email invitations for unregistered users |
+| `tasks` | Med-Reminder task records |
+| `task_templates` | Reusable task templates for batch generation |
 
 ## Key Patterns
 
@@ -98,8 +101,24 @@ Flutter catches this as `SubscriptionLimitException`.
 - `SECRET_KEY` — JWT signing key
 - `ANTHROPIC_API_KEY` — for AI advisor feature
 
+## Development Logs
+
+After completing a feature or significant implementation work, **always** create a dev log in `docs/dev-logs/`.
+
+- **File name:** `YYYY-MM-DD-feature-name.md` (e.g. `2026-03-01-med-reminder.md`)
+- **Required sections:**
+  - Decisions made (with rationale)
+  - New files created (backend + frontend)
+  - Modified files
+  - API endpoints added
+  - New DB collections/indexes
+  - Testing checklist
+  - Future work / what's deferred
+- This is a **team-wide rule** — every developer must log their work so others can understand what was built and how
+
 ## Docs to Read Before Working on a Feature
 - `docs/PRD.md` — full product requirements
 - `docs/TEAM_SYSTEM_DESIGN.md` — team system API + screen design
 - `docs/SMART_RING_PROTOCOL.md` — smart ring integration
 - `docs/AutoMom_Module_PRD.md` — advisory/parent module
+- `docs/dev-logs/` — previous implementation logs (read before modifying existing features)

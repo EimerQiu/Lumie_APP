@@ -66,6 +66,17 @@ async def create_indexes():
     await db.db.pending_invitations.create_index("email")
     await db.db.pending_invitations.create_index("expires_at")
 
+    # Task collection indexes (Med-Reminder)
+    await db.db.tasks.create_index("task_id", unique=True)
+    await db.db.tasks.create_index([("user_id", 1), ("status", 1)])
+    await db.db.tasks.create_index([("user_id", 1), ("open_datetime", 1)])
+    await db.db.tasks.create_index([("team_id", 1), ("user_id", 1)])
+    await db.db.tasks.create_index("created_by")
+
+    # Task templates collection indexes
+    await db.db.task_templates.create_index("id", unique=True)
+    await db.db.task_templates.create_index("created_by")
+
 
 def get_database() -> AsyncIOMotorDatabase:
     """Get database instance."""

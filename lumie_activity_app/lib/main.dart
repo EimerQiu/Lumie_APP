@@ -29,6 +29,12 @@ import 'features/teams/screens/accept_invitation_screen.dart';
 import 'features/settings/screens/rest_days_settings_screen.dart';
 import 'features/settings/screens/edit_profile_screen.dart';
 import 'features/advisor/screens/advisor_screen.dart';
+import 'features/tasks/providers/tasks_provider.dart';
+import 'features/tasks/screens/tasks_list_screen.dart';
+import 'features/tasks/screens/create_task_screen.dart';
+import 'features/tasks/screens/templates_list_screen.dart';
+import 'features/tasks/screens/create_template_screen.dart';
+import 'features/tasks/screens/batch_generate_screen.dart';
 import 'shared/models/activity_models.dart';
 import 'shared/models/user_models.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -53,6 +59,7 @@ class LumieActivityApp extends StatelessWidget {
       providers: [
         ChangeNotifierProvider(create: (_) => AuthProvider()..init()),
         ChangeNotifierProvider(create: (_) => TeamsProvider()),
+        ChangeNotifierProvider(create: (_) => TasksProvider()),
         ChangeNotifierProvider(create: (_) => RingProvider()..init()),
       ],
       child: MaterialApp(
@@ -72,6 +79,10 @@ class LumieActivityApp extends StatelessWidget {
           '/teams/create': (context) => const CreateTeamScreen(),
           '/settings/rest-days': (context) => const RestDaysSettingsScreen(),
           '/profile/edit': (context) => const EditProfileScreen(),
+          '/tasks': (context) => const TasksListScreen(),
+          '/tasks/create': (context) => const CreateTaskScreen(),
+          '/tasks/templates': (context) => const TemplatesListScreen(),
+          '/tasks/templates/create': (context) => const CreateTemplateScreen(),
           '/ring/manage': (context) => const RingManagementScreen(),
         },
         onGenerateRoute: (settings) {
@@ -94,6 +105,12 @@ class LumieActivityApp extends StatelessWidget {
                 userId: args['userId'] as String,
                 userName: args['userName'] as String,
               ),
+            );
+          } else if (settings.name == '/tasks/batch') {
+            final templateId = settings.arguments as String;
+            return MaterialPageRoute(
+              builder: (context) => const BatchGenerateScreen(),
+              settings: RouteSettings(name: '/tasks/batch', arguments: templateId),
             );
           } else if (settings.name == '/subscription/upgrade') {
             // Placeholder for subscription upgrade screen
@@ -241,8 +258,11 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
       final teamsProvider = context.read<TeamsProvider>();
       final ringProvider = context.read<RingProvider>();
 
+      final tasksProvider = context.read<TasksProvider>();
+
       if (authProvider.profile?.subscription.tier != null) {
         teamsProvider.setUserTier(authProvider.profile!.subscription.tier);
+        tasksProvider.setUserTier(authProvider.profile!.subscription.tier);
       }
 
       // Pass auth token to ring service for backend calls
@@ -681,6 +701,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       icon: Icons.groups_outlined,
                       title: 'Teams',
                       onTap: () => Navigator.pushNamed(context, '/teams'),
+                    ),
+                    _SettingsItem(
+                      icon: Icons.medication_outlined,
+                      title: 'Med-Reminder',
+                      onTap: () => Navigator.pushNamed(context, '/tasks'),
                     ),
 
                     const Divider(height: 24),

@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart';
 import '../../../core/services/auth_service.dart';
 import '../../../core/services/profile_service.dart';
 import '../../../core/services/team_service.dart';
+import '../../../core/services/task_service.dart';
 import '../../../shared/models/user_models.dart';
 
 enum AuthState {
@@ -19,6 +20,7 @@ class AuthProvider extends ChangeNotifier {
   final AuthService _authService = AuthService();
   final ProfileService _profileService = ProfileService();
   final TeamService _teamService = TeamService();
+  final TaskService _taskService = TaskService();
 
   AuthState _state = AuthState.initial;
   String? _errorMessage;
@@ -31,15 +33,12 @@ class AuthProvider extends ChangeNotifier {
   UserProfile? get profile => _profile;
   bool get isAuthenticated => _state == AuthState.authenticated;
 
-  /// Set authentication token in team service
-  void _setTeamServiceToken() {
+  /// Set authentication token in team and task services
+  void _setServiceTokens() {
     final token = _authService.token;
-    print('🔐 AuthProvider: Attempting to set TeamService token - ${token == null ? 'NULL' : 'Token available (${token.substring(0, 20)}...)'}');
     if (token != null) {
       _teamService.setToken(token);
-      print('🔐 AuthProvider: TeamService token set successfully');
-    } else {
-      print('⚠️ AuthProvider: No token available to set in TeamService');
+      _taskService.setToken(token);
     }
   }
 
@@ -55,7 +54,7 @@ class AuthProvider extends ChangeNotifier {
         // Validate token by fetching current user from server
         try {
           _user = await _authService.getCurrentUser();
-          _setTeamServiceToken(); // Set token for team service
+          _setServiceTokens(); // Set token for team service
 
           // Determine next state based on user status
           if (_user!.role == null) {
@@ -135,7 +134,7 @@ class AuthProvider extends ChangeNotifier {
         password: password,
       );
 
-      _setTeamServiceToken(); // Set token for team service
+      _setServiceTokens(); // Set token for team service
 
       // Determine next state
       if (_user!.role == null) {
@@ -206,7 +205,7 @@ class AuthProvider extends ChangeNotifier {
       // Update saved user state to mark profile as complete
       await _authService.updateUserState(profileComplete: true);
 
-      _setTeamServiceToken(); // Set token for team service
+      _setServiceTokens(); // Set token for team service
       // First-time profile creation → show ring setup prompt
       _state = AuthState.needsRingSetup;
       notifyListeners();
@@ -241,7 +240,7 @@ class AuthProvider extends ChangeNotifier {
       // Update saved user state to mark profile as complete
       await _authService.updateUserState(profileComplete: true);
 
-      _setTeamServiceToken(); // Set token for team service
+      _setServiceTokens(); // Set token for team service
       // First-time profile creation → show ring setup prompt
       _state = AuthState.needsRingSetup;
       notifyListeners();
@@ -290,7 +289,8 @@ class AuthProvider extends ChangeNotifier {
   /// Log out
   Future<void> logout() async {
     await _authService.logout();
-    _teamService.clearToken(); // Clear token from team service
+    _teamService.clearToken();
+    _taskService.clearToken();
     _user = null;
     _profile = null;
     _state = AuthState.unauthenticated;

@@ -23,6 +23,12 @@ class ApiConstants {
   // Advisor
   static const String advisorChat = '/advisor/chat';
 
+  // Tasks / Med-Reminder
+  static const String tasks = '/tasks';
+  static const String taskTemplates = '/tasks/templates';
+  static const String taskBatchPreview = '/tasks/batch/preview';
+  static const String taskBatchGenerate = '/tasks/batch/generate';
+
   // Timeouts
   static const Duration connectTimeout = Duration(seconds: 10);
   static const Duration receiveTimeout = Duration(seconds: 30);
