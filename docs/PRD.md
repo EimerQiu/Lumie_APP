@@ -2805,7 +2805,7 @@ Task {
   open_datetime: string ("yyyy-MM-dd HH:mm", start time),
   close_datetime: string ("yyyy-MM-dd HH:mm", end time),
   user_id: string (assigned user, for personal tasks),
-  family_id: string (assigned family, for family tasks),
+  team_id: string (assigned team, for team tasks),
   created_by: string (user ID who created task),
   rpttask_id: string (reference to template, if from template),
   status: string ("pending" | "completed" | "overdue"),
@@ -2906,7 +2906,7 @@ Otherwise: progress = (current_time - open_datetime) / (close_datetime - open_da
 
 **API Endpoint**:
 ```
-POST /add-task
+POST /api/v1/tasks/
 Request Body:
 {
     "task_name": string,
@@ -2914,7 +2914,7 @@ Request Body:
     "open_datetime": string,
     "close_datetime": string,
     "user_id": string (personal task),
-    "family_id": string (family task, mutually exclusive with user_id),
+    "team_id": string (team task, mutually exclusive with user_id),
     "task_info": string (optional),
     "rpttask_id": string (from template creation)
 }
@@ -2942,10 +2942,9 @@ Request Body:
 
 **API Endpoint**:
 ```
-POST /task_complete
+POST /api/v1/tasks/{task_id}/complete
 Request Body:
 {
-    "task_id": string,
     "time_zone": string (user's timezone)
 }
 ```
@@ -2971,7 +2970,7 @@ Request Body:
 
 **API Endpoint**:
 ```
-DELETE /admin/delete_task/{taskId}
+DELETE /api/v1/tasks/{task_id}
 Query Params:
     time_zone: string
 ```
@@ -3028,9 +3027,7 @@ TimeWindow {
 
 **API Endpoint**:
 ```
-GET /repeat_task/list
-Query Params:
-    user_id: string
+GET /api/v1/tasks/templates/
 Response:
 [
     {
@@ -3083,7 +3080,7 @@ Response:
 
 **API Endpoints**:
 ```
-POST /repeat_task/create
+POST /api/v1/tasks/templates/
 Request Body:
 {
     "template_name": string,
@@ -3102,7 +3099,7 @@ Request Body:
     ]
 }
 
-GET /repeat_task/detail/{templateId}
+GET /api/v1/tasks/templates/{template_id}
 Response: Complete template data for editing
 ```
 
@@ -3153,7 +3150,7 @@ Each task:
 
 **API Call**:
 ```
-For each generated task: POST /add-task
+For each generated task: POST /api/v1/tasks/
 (See Task Creation endpoint above)
 ```
 
@@ -3172,7 +3169,7 @@ For each generated task: POST /add-task
 
 **API Endpoint**:
 ```
-DELETE /repeat-task-template/{templateId}
+DELETE /api/v1/tasks/templates/{template_id}
 ```
 
 ### 4. Task Completion Analytics
