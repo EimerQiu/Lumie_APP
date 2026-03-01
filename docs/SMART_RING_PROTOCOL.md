@@ -55,12 +55,30 @@ This document describes the complete BLE communication protocol for the Lumie Sm
 | Notify Characteristic UUID | `0000fff7-0000-1000-8000-00805f9b34fb` |
 | Max BLE packet (MTU) | 244 bytes (`0xF4`) |
 
-**Workflow:**
-1. Connect to the device and discover GATT services.
-2. Match service containing UUID fragment `fff0`.
-3. Enable notifications on the characteristic containing `fff7`.
-4. Write commands to the characteristic containing `fff6` (write-with-response).
-5. All responses arrive as notify callbacks on `fff7`.
+### Scanning / Discovery
+
+> **Important:** The X6B ring does **not** include its service UUID in its BLE advertisement packet. Scanning with a `withServices` filter (e.g. `fff0`) will return **zero results**. You must scan without any service filter and identify rings by their advertised device name.
+
+**Discovery rule:** Only show devices whose `platformName` starts with `"X6B"` (case-insensitive).
+
+```
+scan all BLE devices (no service UUID filter)
+for each result:
+  if result.device.platformName.toUpperCase().startsWith("X6B"):
+    → this is a Lumie Ring, surface it to the user
+```
+
+Recommended scan timeout: **10–30 seconds**. Sort discovered devices by RSSI (strongest signal first).
+
+### Connection Workflow
+
+1. Stop the active scan.
+2. Connect to the selected device (timeout: 15 seconds).
+3. Discover GATT services — match the service whose UUID contains `fff0`.
+4. Locate the write characteristic (`fff6`) and notify characteristic (`fff7`).
+5. Enable notifications on `fff7`.
+6. Write commands to `fff6` (write-with-response).
+7. All responses arrive as notify callbacks on `fff7`.
 
 ---
 
