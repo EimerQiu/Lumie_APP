@@ -48,23 +48,26 @@ class RingStatusIndicator extends StatelessWidget {
   }
 
   Widget _buildCompact() {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-      decoration: BoxDecoration(
-        color: statusColor.withValues(alpha: 0.15),
-        borderRadius: BorderRadius.circular(12),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          _StatusDot(color: statusColor, isAnimated: status == RingStatus.syncing),
-          const SizedBox(width: 4),
-          Icon(
-            statusIcon,
-            size: 16,
-            color: statusColor,
-          ),
-        ],
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        decoration: BoxDecoration(
+          color: statusColor.withValues(alpha: 0.15),
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            _StatusDot(color: statusColor, isAnimated: status == RingStatus.syncing),
+            const SizedBox(width: 4),
+            Icon(
+              statusIcon,
+              size: 16,
+              color: statusColor,
+            ),
+          ],
+        ),
       ),
     );
   }

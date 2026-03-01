@@ -1,13 +1,16 @@
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/services/rest_days_service.dart';
 import '../../../shared/models/activity_models.dart';
+import '../../../shared/models/ring_models.dart';
 import '../../../shared/widgets/circular_progress_indicator.dart';
 import '../../../shared/widgets/gradient_card.dart';
 import '../../../shared/widgets/intensity_badge.dart';
 import '../../../shared/widgets/ring_status_indicator.dart';
 import '../../activity/screens/activity_history_screen.dart';
+import '../../ring/providers/ring_provider.dart';
 import '../../sleep/screens/sleep_screen.dart';
 import '../widgets/activity_summary_card.dart';
 import '../widgets/quick_actions_section.dart';
@@ -23,8 +26,6 @@ class DashboardScreen extends StatefulWidget {
 
 class _DashboardScreenState extends State<DashboardScreen> {
   // Mock data for demo
-  final RingStatus _ringStatus = RingStatus.connected;
-  final int _batteryLevel = 78;
   final int _currentMinutes = 42;
   final int _goalMinutes = 60;
   final ActivityIntensity _dominantIntensity = ActivityIntensity.moderate;
@@ -282,11 +283,17 @@ class _DashboardScreenState extends State<DashboardScreen> {
       actions: [
         Padding(
           padding: const EdgeInsets.only(right: 16),
-          child: RingStatusIndicator(
-            status: _ringStatus,
-            batteryLevel: _batteryLevel,
-            compact: true,
-            onTap: () {},
+          child: Consumer<RingProvider>(
+            builder: (context, ring, _) {
+              final connectionStatus = ring.ringInfo?.connectionStatus;
+              final isConnected = connectionStatus == RingConnectionStatus.connected;
+              return RingStatusIndicator(
+                status: isConnected ? RingStatus.connected : RingStatus.disconnected,
+                batteryLevel: ring.ringInfo?.batteryLevel,
+                compact: true,
+                onTap: () => Navigator.pushNamed(context, '/ring/manage'),
+              );
+            },
           ),
         ),
       ],

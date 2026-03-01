@@ -4,6 +4,9 @@ import 'package:provider/provider.dart';
 import 'core/theme/app_theme.dart';
 import 'core/theme/app_colors.dart';
 import 'features/auth/providers/auth_provider.dart';
+import 'features/ring/providers/ring_provider.dart';
+import 'features/ring/screens/ring_ownership_screen.dart';
+import 'features/ring/screens/ring_management_screen.dart';
 import 'features/auth/screens/welcome_screen.dart';
 import 'features/auth/screens/login_screen.dart';
 import 'features/auth/screens/account_type_screen.dart';
@@ -50,6 +53,7 @@ class LumieActivityApp extends StatelessWidget {
       providers: [
         ChangeNotifierProvider(create: (_) => AuthProvider()..init()),
         ChangeNotifierProvider(create: (_) => TeamsProvider()),
+        ChangeNotifierProvider(create: (_) => RingProvider()..init()),
       ],
       child: MaterialApp(
         title: 'Lumie Activity',
@@ -68,6 +72,7 @@ class LumieActivityApp extends StatelessWidget {
           '/teams/create': (context) => const CreateTeamScreen(),
           '/settings/rest-days': (context) => const RestDaysSettingsScreen(),
           '/profile/edit': (context) => const EditProfileScreen(),
+          '/ring/manage': (context) => const RingManagementScreen(),
         },
         onGenerateRoute: (settings) {
           // Handle routes with arguments
@@ -138,6 +143,9 @@ class AuthWrapper extends StatelessWidget {
             }
             // Fallback to account type if role is unknown
             return const SelectAccountTypeScreen();
+
+          case AuthState.needsRingSetup:
+            return const RingOwnershipScreen();
 
           case AuthState.authenticated:
             return const MainNavigationScreen();
@@ -231,9 +239,16 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final authProvider = context.read<AuthProvider>();
       final teamsProvider = context.read<TeamsProvider>();
+      final ringProvider = context.read<RingProvider>();
 
       if (authProvider.profile?.subscription.tier != null) {
         teamsProvider.setUserTier(authProvider.profile!.subscription.tier);
+      }
+
+      // Pass auth token to ring service for backend calls
+      final token = authProvider.user?.accessToken;
+      if (token != null) {
+        ringProvider.setToken(token);
       }
     });
   }
@@ -763,7 +778,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     _SettingsItem(
                       icon: Icons.watch_outlined,
                       title: 'Ring Settings',
-                      onTap: () {},
+                      onTap: () => Navigator.pushNamed(context, '/ring/manage'),
                     ),
 
                     const Divider(height: 24),
@@ -817,6 +832,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           TextButton(
             onPressed: () {
               Navigator.of(context).pop();
+              context.read<RingProvider>().clearOnLogout();
               context.read<AuthProvider>().logout();
             },
             style: TextButton.styleFrom(

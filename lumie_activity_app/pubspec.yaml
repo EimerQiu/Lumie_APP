@@ -53,6 +53,9 @@ dependencies:
   # Markdown rendering for advisor chat
   flutter_markdown: ^0.7.0
 
+  # Bluetooth Low Energy for ring pairing
+  flutter_blue_plus: ^1.35.3
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

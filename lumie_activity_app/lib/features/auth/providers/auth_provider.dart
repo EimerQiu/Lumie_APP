@@ -11,6 +11,7 @@ enum AuthState {
   unauthenticated,
   needsAccountType,
   needsProfile,
+  needsRingSetup, // shown once after first profile creation
   error,
 }
 
@@ -206,7 +207,8 @@ class AuthProvider extends ChangeNotifier {
       await _authService.updateUserState(profileComplete: true);
 
       _setTeamServiceToken(); // Set token for team service
-      _state = AuthState.authenticated;
+      // First-time profile creation → show ring setup prompt
+      _state = AuthState.needsRingSetup;
       notifyListeners();
       return true;
     } catch (e) {
@@ -240,7 +242,8 @@ class AuthProvider extends ChangeNotifier {
       await _authService.updateUserState(profileComplete: true);
 
       _setTeamServiceToken(); // Set token for team service
-      _state = AuthState.authenticated;
+      // First-time profile creation → show ring setup prompt
+      _state = AuthState.needsRingSetup;
       notifyListeners();
       return true;
     } catch (e) {
@@ -249,6 +252,12 @@ class AuthProvider extends ChangeNotifier {
       notifyListeners();
       return false;
     }
+  }
+
+  /// Called after the ring setup prompt is handled (paired or skipped)
+  void completeRingSetup() {
+    _state = AuthState.authenticated;
+    notifyListeners();
   }
 
   /// Update profile
