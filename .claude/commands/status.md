@@ -5,7 +5,7 @@ Check the status of all Lumie production services on the server.
 1. SSH to the server and check all services in one command:
 
 ```bash
-ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.193.153.37 << 'EOF'
+ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.177.85.124 << 'EOF'
 echo "=== Nginx ==="
 sudo systemctl status nginx --no-pager | head -3
 

@@ -121,16 +121,18 @@ async def create_task(
 async def get_tasks(
     status_filter: Optional[str] = Query(None, alias="status"),
     date: Optional[str] = Query(None, description="yyyy-MM-dd"),
+    timezone: Optional[str] = Query(None, description="User's timezone (e.g., America/Los_Angeles). If not provided, uses profile timezone."),
     user_id: str = Depends(get_current_user_id)
 ):
     """
     List tasks for current user
 
     - Optional filters: status (pending/completed/overdue), date (yyyy-MM-dd)
-    - Automatically marks overdue tasks
+    - Optional timezone: use current device timezone, falls back to profile timezone if not provided
+    - Automatically marks overdue tasks based on timezone
     - Sorted by open_datetime ascending
     """
-    return await task_service.get_tasks(user_id, status_filter=status_filter, date=date)
+    return await task_service.get_tasks(user_id, status_filter=status_filter, date=date, timezone=timezone)
 
 
 @router.post("/{task_id}/complete", response_model=TaskResponse)

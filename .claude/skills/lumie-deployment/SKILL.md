@@ -11,7 +11,7 @@ Automate deployment of Lumie website and backend API to production server, inclu
 ## Server Information
 
 ### Basic Info
-- **Server IP:** 54.193.153.37
+- **Server IP:** 54.177.85.124
 - **Server OS:** Ubuntu 24.04
 - **SSH Key:** `~/.ssh/Lumie_Key.pem`
 - **User:** ubuntu
@@ -34,16 +34,16 @@ Configure these A records on GoDaddy for yumo.org:
 
 | Type | Name | Value | TTL |
 |------|------|-------|-----|
-| A | @ | 54.193.153.37 | 1800 |
-| A | www | 54.193.153.37 | 1800 |
+| A | @ | 54.177.85.124 | 1800 |
+| A | www | 54.177.85.124 | 1800 |
 
 #### yumo.life (Redirect Domain)
 Configure these A records on GoDaddy for yumo.life:
 
 | Type | Name | Value | TTL |
 |------|------|-------|-----|
-| A | @ | 54.193.153.37 | 1800 |
-| A | www | 54.193.153.37 | 1800 |
+| A | @ | 54.177.85.124 | 1800 |
+| A | www | 54.177.85.124 | 1800 |
 
 **Redirect Behavior:**
 - http://yumo.org → https://yumo.org ✅
@@ -102,7 +102,7 @@ Configure these A records on GoDaddy for yumo.life:
 #### 1. Deploy All Website Files
 ```bash
 cd /Users/ciline/Documents/development/projects/Lumie_APP
-scp -i ~/.ssh/Lumie_Key.pem -r ./website/* ubuntu@54.193.153.37:/home/ubuntu/website/
+scp -i ~/.ssh/Lumie_Key.pem -r ./website/* ubuntu@54.177.85.124:/home/ubuntu/website/
 ```
 
 **Note:** Changes take effect immediately in DEV mode, no Nginx restart needed
@@ -110,16 +110,16 @@ scp -i ~/.ssh/Lumie_Key.pem -r ./website/* ubuntu@54.193.153.37:/home/ubuntu/web
 #### 2. Deploy Specific Files
 ```bash
 # Deploy HTML only
-scp -i ~/.ssh/Lumie_Key.pem ./website/index.html ubuntu@54.193.153.37:/home/ubuntu/website/
+scp -i ~/.ssh/Lumie_Key.pem ./website/index.html ubuntu@54.177.85.124:/home/ubuntu/website/
 
 # Deploy CSS only
-scp -i ~/.ssh/Lumie_Key.pem ./website/styles.css ubuntu@54.193.153.37:/home/ubuntu/website/
+scp -i ~/.ssh/Lumie_Key.pem ./website/styles.css ubuntu@54.177.85.124:/home/ubuntu/website/
 
 # Deploy JavaScript only
-scp -i ~/.ssh/Lumie_Key.pem ./website/script.js ubuntu@54.193.153.37:/home/ubuntu/website/
+scp -i ~/.ssh/Lumie_Key.pem ./website/script.js ubuntu@54.177.85.124:/home/ubuntu/website/
 
 # Deploy assets
-scp -i ~/.ssh/Lumie_Key.pem -r ./website/assets/* ubuntu@54.193.153.37:/home/ubuntu/website/assets/
+scp -i ~/.ssh/Lumie_Key.pem -r ./website/assets/* ubuntu@54.177.85.124:/home/ubuntu/website/assets/
 ```
 
 #### 3. Verify Deployment
@@ -147,7 +147,7 @@ bash deploy.sh
 
 #### 2. Restart API Service
 ```bash
-ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.193.153.37 "sudo systemctl restart lumie-api"
+ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.177.85.124 "sudo systemctl restart lumie-api"
 ```
 
 #### 3. Verify API Deployment
@@ -164,72 +164,72 @@ curl https://yumo.org/api/v1/health
 #### API Service (lumie-api.service)
 ```bash
 # Check status
-ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.193.153.37 "sudo systemctl status lumie-api"
+ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.177.85.124 "sudo systemctl status lumie-api"
 
 # Start service
-ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.193.153.37 "sudo systemctl start lumie-api"
+ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.177.85.124 "sudo systemctl start lumie-api"
 
 # Stop service
-ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.193.153.37 "sudo systemctl stop lumie-api"
+ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.177.85.124 "sudo systemctl stop lumie-api"
 
 # Restart service (after code updates)
-ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.193.153.37 "sudo systemctl restart lumie-api"
+ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.177.85.124 "sudo systemctl restart lumie-api"
 
 # View real-time logs
-ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.193.153.37 "sudo journalctl -u lumie-api -f"
+ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.177.85.124 "sudo journalctl -u lumie-api -f"
 
 # View last 50 log lines
-ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.193.153.37 "sudo journalctl -u lumie-api -n 50 --no-pager"
+ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.177.85.124 "sudo journalctl -u lumie-api -n 50 --no-pager"
 ```
 
 #### MongoDB Database
 ```bash
 # Check status
-ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.193.153.37 "sudo systemctl status mongod"
+ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.177.85.124 "sudo systemctl status mongod"
 
 # Start MongoDB
-ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.193.153.37 "sudo systemctl start mongod"
+ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.177.85.124 "sudo systemctl start mongod"
 
 # Connect to MongoDB shell
-ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.193.153.37 "mongosh"
+ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.177.85.124 "mongosh"
 
 # View database list
-ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.193.153.37 "mongosh --eval 'show dbs'"
+ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.177.85.124 "mongosh --eval 'show dbs'"
 ```
 
 #### Nginx Web Server
 ```bash
 # Check status
-ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.193.153.37 "sudo systemctl status nginx"
+ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.177.85.124 "sudo systemctl status nginx"
 
 # Restart Nginx (full restart)
-ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.193.153.37 "sudo systemctl restart nginx"
+ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.177.85.124 "sudo systemctl restart nginx"
 
 # Reload config (graceful restart, no downtime)
-ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.193.153.37 "sudo systemctl reload nginx"
+ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.177.85.124 "sudo systemctl reload nginx"
 
 # Test Nginx config
-ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.193.153.37 "sudo nginx -t"
+ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.177.85.124 "sudo nginx -t"
 
 # View full config
-ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.193.153.37 "sudo nginx -T"
+ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.177.85.124 "sudo nginx -T"
 ```
 
 ### 🔐 SSL Certificate Management
 
 #### Check Certificate Status
 ```bash
-ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.193.153.37 "sudo certbot certificates"
+ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.177.85.124 "sudo certbot certificates"
 ```
 
 #### Manual Certificate Renewal
 ```bash
-ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.193.153.37 "sudo certbot renew"
+ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.177.85.124 "sudo certbot renew"
 ```
 
 #### Test Renewal (Dry Run)
 ```bash
-ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.193.153.37 "sudo certbot renew --dry-run"
+ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.177.85.124 "sudo certbot renew --dry-run"
 ```
 
 ## Examples
@@ -238,14 +238,14 @@ ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.193.153.37 "sudo certbot renew --dry-run"
 ```bash
 # 1. Deploy frontend website
 cd /Users/ciline/Documents/development/projects/Lumie_APP
-scp -i ~/.ssh/Lumie_Key.pem -r ./website/* ubuntu@54.193.153.37:/home/ubuntu/website/
+scp -i ~/.ssh/Lumie_Key.pem -r ./website/* ubuntu@54.177.85.124:/home/ubuntu/website/
 
 # 2. Deploy backend API
 cd /Users/ciline/Documents/development/projects/Lumie_APP/lumie_backend
 bash deploy.sh
 
 # 3. Restart API service
-ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.193.153.37 "sudo systemctl restart lumie-api"
+ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.177.85.124 "sudo systemctl restart lumie-api"
 
 # 4. Verify deployment
 curl https://yumo.org
@@ -257,7 +257,7 @@ echo "✅ Deployment complete!"
 ### Example 2: Frontend Only Update
 ```bash
 cd /Users/ciline/Documents/development/projects/Lumie_APP
-scp -i ~/.ssh/Lumie_Key.pem -r ./website/* ubuntu@54.193.153.37:/home/ubuntu/website/
+scp -i ~/.ssh/Lumie_Key.pem -r ./website/* ubuntu@54.177.85.124:/home/ubuntu/website/
 
 # Immediately visit https://yumo.org to check changes (hard refresh browser)
 ```
@@ -266,7 +266,7 @@ scp -i ~/.ssh/Lumie_Key.pem -r ./website/* ubuntu@54.193.153.37:/home/ubuntu/web
 ```bash
 cd /Users/ciline/Documents/development/projects/Lumie_APP/lumie_backend
 bash deploy.sh
-ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.193.153.37 "sudo systemctl restart lumie-api"
+ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.177.85.124 "sudo systemctl restart lumie-api"
 
 # Check health status
 curl https://yumo.org/api/v1/health
@@ -274,7 +274,7 @@ curl https://yumo.org/api/v1/health
 
 ### Example 4: Quick Check All Service Status
 ```bash
-ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.193.153.37 << 'EOF'
+ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.177.85.124 << 'EOF'
 echo "=== Nginx Status ==="
 sudo systemctl status nginx --no-pager | head -3
 
@@ -302,7 +302,7 @@ EOF
 
 1. **Edit yumo.org config:**
    ```bash
-   ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.193.153.37
+   ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.177.85.124
    sudo nano /etc/nginx/sites-available/yumo.org
    ```
 
@@ -363,7 +363,7 @@ dig yumo.org +short
 # Check yumo.life
 dig yumo.life +short
 
-# Both should return: 54.193.153.37
+# Both should return: 54.177.85.124
 ```
 
 **Check globally:** https://dnschecker.org
@@ -394,13 +394,13 @@ dig yumo.life +short
 **Diagnostic Steps:**
 ```bash
 # 1. Check Nginx status
-ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.193.153.37 "sudo systemctl status nginx"
+ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.177.85.124 "sudo systemctl status nginx"
 
 # 2. View error logs
-ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.193.153.37 "sudo tail -50 /var/log/nginx/error.log"
+ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.177.85.124 "sudo tail -50 /var/log/nginx/error.log"
 
 # 3. Test Nginx config
-ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.193.153.37 "sudo nginx -t"
+ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.177.85.124 "sudo nginx -t"
 ```
 
 **Solutions:**
@@ -411,16 +411,16 @@ ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.193.153.37 "sudo nginx -t"
 **Diagnostic Steps:**
 ```bash
 # 1. Check service status
-ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.193.153.37 "sudo systemctl status lumie-api"
+ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.177.85.124 "sudo systemctl status lumie-api"
 
 # 2. View error logs
-ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.193.153.37 "sudo journalctl -u lumie-api -n 100 --no-pager"
+ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.177.85.124 "sudo journalctl -u lumie-api -n 100 --no-pager"
 
 # 3. Check port usage
-ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.193.153.37 "sudo lsof -i :8000"
+ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.177.85.124 "sudo lsof -i :8000"
 
 # 4. Check MongoDB
-ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.193.153.37 "sudo systemctl status mongod"
+ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.177.85.124 "sudo systemctl status mongod"
 ```
 
 **Solutions:**
@@ -431,20 +431,20 @@ ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.193.153.37 "sudo systemctl status mongod"
 ### Error 3: Address Already in Use
 ```bash
 # 1. Find process using port 8000
-ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.193.153.37 "sudo lsof -i :8000"
+ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.177.85.124 "sudo lsof -i :8000"
 
 # 2. Check for duplicate services (IMPORTANT!)
-ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.193.153.37 "sudo systemctl list-units --type=service | grep lumie"
+ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.177.85.124 "sudo systemctl list-units --type=service | grep lumie"
 
 # 3. If lumie-backend.service exists, disable it (it's a duplicate)
-ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.193.153.37 "sudo systemctl stop lumie-backend.service"
-ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.193.153.37 "sudo systemctl disable lumie-backend.service"
+ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.177.85.124 "sudo systemctl stop lumie-backend.service"
+ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.177.85.124 "sudo systemctl disable lumie-backend.service"
 
 # 4. Kill rogue processes (if needed, replace <PID>)
-ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.193.153.37 "sudo kill -9 <PID>"
+ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.177.85.124 "sudo kill -9 <PID>"
 
 # 5. Restart the correct service
-ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.193.153.37 "sudo systemctl restart lumie-api"
+ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.177.85.124 "sudo systemctl restart lumie-api"
 ```
 
 **Note:** Only `lumie-api.service` should be running. If you find `lumie-backend.service`, it's a duplicate that must be stopped and disabled.
@@ -454,24 +454,24 @@ ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.193.153.37 "sudo systemctl restart lumie-a
 
 **Solution 2:** Check file upload succeeded
 ```bash
-ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.193.153.37 "stat /home/ubuntu/website/index.html"
+ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.177.85.124 "stat /home/ubuntu/website/index.html"
 ```
 
 **Solution 3:** Verify file permissions
 ```bash
-ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.193.153.37 "ls -la /home/ubuntu/website/"
+ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.177.85.124 "ls -la /home/ubuntu/website/"
 ```
 
 ### Error 5: SSL Certificate Issues
 ```bash
 # Check certificate expiry
-ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.193.153.37 "sudo certbot certificates"
+ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.177.85.124 "sudo certbot certificates"
 
 # Force renewal
-ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.193.153.37 "sudo certbot renew --force-renewal"
+ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.177.85.124 "sudo certbot renew --force-renewal"
 
 # Reload Nginx
-ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.193.153.37 "sudo systemctl reload nginx"
+ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.177.85.124 "sudo systemctl reload nginx"
 ```
 
 ## Safety Checks
@@ -491,10 +491,10 @@ curl -I https://yumo.org
 curl https://yumo.org/api/v1/health
 
 # 3. Check service logs
-ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.193.153.37 "sudo journalctl -u lumie-api -n 20 --no-pager"
+ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.177.85.124 "sudo journalctl -u lumie-api -n 20 --no-pager"
 
 # 4. Monitor service status
-ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.193.153.37 "sudo systemctl status lumie-api nginx mongod"
+ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.177.85.124 "sudo systemctl status lumie-api nginx mongod"
 ```
 
 ### 🔄 Rollback Plan
@@ -503,21 +503,21 @@ If deployment has issues:
 **Frontend Rollback:**
 ```bash
 # Restore from backup
-scp -i ~/.ssh/Lumie_Key.pem -r ./backup-20260207/* ubuntu@54.193.153.37:/home/ubuntu/website/
+scp -i ~/.ssh/Lumie_Key.pem -r ./backup-20260207/* ubuntu@54.177.85.124:/home/ubuntu/website/
 ```
 
 **Backend Rollback:**
 ```bash
 # Restore to previous version
-ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.193.153.37 "cd /home/ubuntu/lumie_backend && git checkout <previous-commit>"
-ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.193.153.37 "sudo systemctl restart lumie-api"
+ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.177.85.124 "cd /home/ubuntu/lumie_backend && git checkout <previous-commit>"
+ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.177.85.124 "sudo systemctl restart lumie-api"
 ```
 
 ### Security Best Practices
 
 1. **Keep server updated:**
    ```bash
-   ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.193.153.37
+   ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.177.85.124
    sudo apt update && sudo apt upgrade -y
    ```
 
@@ -535,10 +535,10 @@ ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.193.153.37 "sudo systemctl restart lumie-a
 4. **Backup website and database:**
    ```bash
    # Backup website files
-   scp -i ~/.ssh/Lumie_Key.pem -r ubuntu@54.193.153.37:/home/ubuntu/website ./backup-$(date +%Y%m%d)
+   scp -i ~/.ssh/Lumie_Key.pem -r ubuntu@54.177.85.124:/home/ubuntu/website ./backup-$(date +%Y%m%d)
 
    # Backup MongoDB (on server)
-   ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.193.153.37 "mongodump --db lumie_db --out /tmp/mongo-backup-$(date +%Y%m%d)"
+   ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.177.85.124 "mongodump --db lumie_db --out /tmp/mongo-backup-$(date +%Y%m%d)"
    ```
 
 5. **Security Testing Tools:**
@@ -553,13 +553,13 @@ ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.193.153.37 "sudo systemctl restart lumie-a
 
 ```bash
 # View environment variables (sensitive info hidden)
-ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.193.153.37 "cat /home/ubuntu/lumie_backend/.env"
+ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.177.85.124 "cat /home/ubuntu/lumie_backend/.env"
 
 # Edit environment variables
-ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.193.153.37 "nano /home/ubuntu/lumie_backend/.env"
+ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.177.85.124 "nano /home/ubuntu/lumie_backend/.env"
 
 # Restart service after changes
-ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.193.153.37 "sudo systemctl restart lumie-api"
+ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.177.85.124 "sudo systemctl restart lumie-api"
 ```
 
 **Key Environment Variables:**
@@ -593,22 +593,22 @@ POST /api/v1/profile/parent          - Create parent profile
 ### Common Commands Cheat Sheet
 ```bash
 # Deploy website
-scp -i ~/.ssh/Lumie_Key.pem -r ./website/* ubuntu@54.193.153.37:/home/ubuntu/website/
+scp -i ~/.ssh/Lumie_Key.pem -r ./website/* ubuntu@54.177.85.124:/home/ubuntu/website/
 
 # Deploy API
 cd lumie_backend && bash deploy.sh
 
 # Restart API
-ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.193.153.37 "sudo systemctl restart lumie-api"
+ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.177.85.124 "sudo systemctl restart lumie-api"
 
 # Restart Nginx
-ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.193.153.37 "sudo systemctl restart nginx"
+ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.177.85.124 "sudo systemctl restart nginx"
 
 # View API logs
-ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.193.153.37 "sudo journalctl -u lumie-api -f"
+ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.177.85.124 "sudo journalctl -u lumie-api -f"
 
 # View Nginx error logs
-ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.193.153.37 "sudo tail -50 /var/log/nginx/error.log"
+ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.177.85.124 "sudo tail -50 /var/log/nginx/error.log"
 
 # Health check
 curl https://yumo.org && curl https://yumo.org/api/v1/health
@@ -616,7 +616,7 @@ curl https://yumo.org && curl https://yumo.org/api/v1/health
 
 ### Connect to Server
 ```bash
-ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.193.153.37
+ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.177.85.124
 ```
 
 ---
@@ -626,4 +626,4 @@ ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.193.153.37
 **API:** https://yumo.org
 **Database:** lumie_db (MongoDB 8.0)
 **Last Updated:** 2026-02-10
-**Server:** 54.193.153.37 (Ubuntu 24.04)
+**Server:** 54.177.85.124 (Ubuntu 24.04)

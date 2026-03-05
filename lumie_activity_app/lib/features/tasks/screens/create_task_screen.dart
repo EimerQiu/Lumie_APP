@@ -2,6 +2,7 @@
 
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:timezone/timezone.dart' as tz;
 import '../../../core/theme/app_colors.dart';
 import '../../../shared/models/task_models.dart';
 import '../../../shared/models/subscription_error.dart';
@@ -46,6 +47,35 @@ class _CreateTaskScreenState extends State<CreateTaskScreen> {
 
   String _formatDatetime(DateTime date, TimeOfDay time) =>
       '${_formatDate(date)} ${_formatTime(time)}';
+
+  String _getDetectedTimezone() {
+    try {
+      // Try to get the timezone name from the timezone package
+      String tzName = tz.local.name;
+      // If it's just 'UTC', try to get a more specific timezone
+      if (tzName == 'UTC' || tzName.isEmpty) {
+        // Get UTC offset from DateTime
+        final now = DateTime.now();
+        final offset = now.timeZoneOffset;
+        final offsetHours = offset.inHours;
+
+        final Map<int, String> offsetMap = {
+          -8: 'America/Los_Angeles',
+          -7: 'America/Denver',
+          -6: 'America/Chicago',
+          -5: 'America/New_York',
+          0: 'UTC',
+          1: 'Europe/London',
+          8: 'Asia/Shanghai',
+          9: 'Asia/Tokyo',
+        };
+        return offsetMap[offsetHours] ?? 'UTC';
+      }
+      return tzName;
+    } catch (e) {
+      return 'UTC (detection failed)';
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -95,6 +125,53 @@ class _CreateTaskScreenState extends State<CreateTaskScreen> {
             TaskTypeSelector(
               selectedType: _selectedType,
               onChanged: (type) => setState(() => _selectedType = type),
+            ),
+            const SizedBox(height: 24),
+
+            // Timezone info
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: AppColors.primaryLemon.withValues(alpha: 0.2),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(
+                  color: AppColors.primaryLemon.withValues(alpha: 0.5),
+                ),
+              ),
+              child: Row(
+                children: [
+                  const Icon(
+                    Icons.public,
+                    size: 20,
+                    color: AppColors.textOnYellow,
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          'Timezone',
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w500,
+                            color: AppColors.textSecondary,
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          _getDetectedTimezone(),
+                          style: const TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.w600,
+                            color: AppColors.textOnYellow,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
             ),
             const SizedBox(height: 24),
 

@@ -2,6 +2,7 @@
 
 import 'dart:async';
 import 'package:flutter/foundation.dart';
+import 'package:timezone/timezone.dart' as tz;
 import '../../../core/services/task_service.dart';
 import '../../../shared/models/task_models.dart';
 import '../../../shared/models/user_models.dart';
@@ -27,8 +28,11 @@ class TasksProvider extends ChangeNotifier {
       _tasks.where((t) => t.status == TaskStatus.overdue).toList();
   List<Task> get completedTasks =>
       _tasks.where((t) => t.status == TaskStatus.completed).toList();
-  List<Task> get activeTasks =>
-      _tasks.where((t) => t.status != TaskStatus.completed).toList();
+
+  /// Display list & limit counting: only pending tasks (hide overdue)
+  List<Task> get activeTasks => _tasks
+      .where((t) => t.status == TaskStatus.pending)
+      .toList();
   List<RepeatTaskTemplate> get templates => _templates;
   String? get errorMessage => _errorMessage;
   bool get isLoading => _state == TasksState.loading;
@@ -40,7 +44,7 @@ class TasksProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Count of active (non-completed) tasks
+  /// Count of pending tasks for subscription limit checking
   int get activeTaskCount => activeTasks.length;
 
   /// Check if user has reached task limit
@@ -53,6 +57,38 @@ class TasksProvider extends ChangeNotifier {
 
   /// Check if user can create more tasks
   bool get canCreateTask => !hasReachedTaskLimit;
+
+  /// Get device timezone with fallback
+  String _getDeviceTimezone() {
+    try {
+      // Try to get the timezone name from the timezone package
+      String tzName = tz.local.name;
+      // If it's just 'UTC', try to get a more specific timezone
+      if (tzName == 'UTC' || tzName.isEmpty) {
+        // Get UTC offset from DateTime
+        final now = DateTime.now();
+        final offset = now.timeZoneOffset;
+
+        // Map common offsets to IANA timezone names
+        final offsetHours = offset.inHours;
+        final Map<int, String> offsetMap = {
+          -8: 'America/Los_Angeles',
+          -7: 'America/Denver',
+          -6: 'America/Chicago',
+          -5: 'America/New_York',
+          0: 'UTC',
+          1: 'Europe/London',
+          8: 'Asia/Shanghai',
+          9: 'Asia/Tokyo',
+        };
+
+        return offsetMap[offsetHours] ?? 'UTC';
+      }
+      return tzName;
+    } catch (e) {
+      return 'UTC';
+    }
+  }
 
   /// Task limit text for UI display
   String get taskLimitText {
@@ -77,9 +113,17 @@ class TasksProvider extends ChangeNotifier {
     notifyListeners();
 
     try {
+      // Get device timezone - use a fallback approach for iOS
+      String deviceTimezone = _getDeviceTimezone();
+      if (deviceTimezone == 'UTC' || deviceTimezone.isEmpty) {
+        // If timezone detection failed, try the timezone package as fallback
+        deviceTimezone = tz.local.name;
+      }
+
       final response = await _taskService.getTasks(
         status: status,
         date: date,
+        timezone: deviceTimezone,
       );
       _tasks = response.tasks;
       _state = TasksState.loaded;
@@ -113,11 +157,18 @@ class TasksProvider extends ChangeNotifier {
     String? teamId,
     String? taskInfo,
   }) async {
+    // Get device timezone for time conversion
+    String deviceTimezone = _getDeviceTimezone();
+    if (deviceTimezone == 'UTC' || deviceTimezone.isEmpty) {
+      deviceTimezone = tz.local.name;
+    }
+
     final task = await _taskService.createTask(
       taskName: taskName,
       taskType: taskType,
       openDatetime: openDatetime,
       closeDatetime: closeDatetime,
+      timezone: deviceTimezone,
       userId: userId,
       teamId: teamId,
       taskInfo: taskInfo,

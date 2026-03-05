@@ -7,6 +7,7 @@ import uuid
 from datetime import datetime, timedelta
 from typing import Optional, List
 from fastapi import HTTPException, status
+from zoneinfo import ZoneInfo
 
 from ..core.database import get_database
 from ..core.subscription_helpers import get_task_limit, raise_task_limit_error
@@ -26,6 +27,39 @@ class TaskService:
     def _format_datetime(self, dt: datetime) -> str:
         """Format datetime to ISO string for response"""
         return dt.isoformat()
+
+    def _convert_local_to_utc(self, local_time_str: str, timezone: str) -> str:
+        """
+        Convert a local time string to UTC format
+
+        Args:
+            local_time_str: Time string in format "yyyy-MM-dd HH:mm"
+            timezone: Timezone name (e.g., "America/Los_Angeles")
+
+        Returns:
+            UTC time string in format "yyyy-MM-dd HH:mm"
+        """
+        try:
+            # Parse the local time string
+            local_dt = datetime.strptime(local_time_str, "%Y-%m-%d %H:%M")
+
+            # Get the timezone
+            try:
+                tz = ZoneInfo(timezone)
+            except Exception:
+                tz = ZoneInfo("UTC")
+
+            # Attach timezone info to the local datetime (assume it's in this timezone)
+            local_dt_with_tz = local_dt.replace(tzinfo=tz)
+
+            # Convert to UTC
+            utc_dt = local_dt_with_tz.astimezone(ZoneInfo("UTC"))
+
+            # Return as string in same format
+            return utc_dt.strftime("%Y-%m-%d %H:%M")
+        except Exception:
+            # If conversion fails, return the original string
+            return local_time_str
 
     def _task_doc_to_response(self, doc: dict) -> TaskResponse:
         """Convert a MongoDB task document to TaskResponse"""
@@ -91,33 +125,39 @@ class TaskService:
 
     async def get_active_task_count(self, user_id: str) -> int:
         """
-        Count number of active (non-completed) tasks for user
+        Count number of active (pending) tasks for user
 
         Args:
             user_id: User ID to count tasks for
 
         Returns:
-            Number of tasks where status is pending or overdue
+            Number of tasks where status is pending (overdue tasks don't count towards limit)
         """
         db = get_database()
         count = await db.tasks.count_documents({
             "user_id": user_id,
-            "status": {"$in": [TaskStatus.PENDING.value, TaskStatus.OVERDUE.value]}
+            "status": TaskStatus.PENDING.value
         })
         return count
 
-    async def _check_overdue_tasks(self, tasks: List[dict]) -> List[dict]:
+    async def _check_overdue_tasks(self, tasks: List[dict], user_timezone: str = "UTC") -> List[dict]:
         """
         Lazily mark tasks as overdue if their close_datetime has passed
+        Tasks are stored in UTC, so comparison is done in UTC regardless of user timezone
 
         Args:
-            tasks: List of task documents
+            tasks: List of task documents (with times in UTC)
+            user_timezone: User's timezone (ignored, kept for backward compatibility)
 
         Returns:
             Updated task documents with overdue status applied
         """
         db = get_database()
-        now_str = datetime.utcnow().strftime("%Y-%m-%d %H:%M")
+
+        # Get current time in UTC
+        now_utc = datetime.utcnow()
+        now_str = now_utc.strftime("%Y-%m-%d %H:%M")
+
         updated_tasks = []
 
         for task in tasks:
@@ -190,12 +230,16 @@ class TaskService:
                 limit=limit,
             )
 
-        # Validate time ordering
+        # Validate time ordering (using local times)
         if data.close_datetime <= data.open_datetime:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="End time must be after start time"
             )
+
+        # Convert local times to UTC for storage
+        open_datetime_utc = self._convert_local_to_utc(data.open_datetime, data.timezone)
+        close_datetime_utc = self._convert_local_to_utc(data.close_datetime, data.timezone)
 
         # Create task
         task_id = str(uuid.uuid4())
@@ -205,8 +249,8 @@ class TaskService:
             "task_id": task_id,
             "task_name": data.task_name,
             "task_type": data.task_type.value,
-            "open_datetime": data.open_datetime,
-            "close_datetime": data.close_datetime,
+            "open_datetime": open_datetime_utc,
+            "close_datetime": close_datetime_utc,
             "user_id": assigned_user_id,
             "team_id": data.team_id,
             "created_by": user_id,
@@ -227,6 +271,7 @@ class TaskService:
         user_id: str,
         status_filter: Optional[str] = None,
         date: Optional[str] = None,
+        timezone: Optional[str] = None,
     ) -> TaskListResponse:
         """
         Get tasks for user with optional filters
@@ -235,11 +280,19 @@ class TaskService:
             user_id: User ID
             status_filter: Filter by status (pending, completed, overdue)
             date: Filter by date (yyyy-MM-dd)
+            timezone: User's current timezone (e.g., from device). If not provided, uses profile timezone.
 
         Returns:
             TaskListResponse with matching tasks
         """
         db = get_database()
+
+        # Use provided timezone, or fetch from profile as fallback
+        if timezone:
+            user_timezone = timezone
+        else:
+            profile = await db.profiles.find_one({"user_id": user_id})
+            user_timezone = profile.get("timezone", "UTC") if profile else "UTC"
 
         query = {"user_id": user_id}
 
@@ -253,8 +306,8 @@ class TaskService:
         cursor = db.tasks.find(query).sort("open_datetime", 1)
         tasks = await cursor.to_list(length=None)
 
-        # Lazily update overdue status
-        tasks = await self._check_overdue_tasks(tasks)
+        # Lazily update overdue status using user's timezone
+        tasks = await self._check_overdue_tasks(tasks, user_timezone=user_timezone)
 
         # Apply status filter again after overdue check (in case filter was for a specific status)
         if status_filter:

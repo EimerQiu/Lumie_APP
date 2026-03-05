@@ -61,11 +61,13 @@ class TaskService {
   // ============ Task Operations ============
 
   /// Create a new task
+  /// Includes device timezone so backend can convert local times to UTC
   Future<Task> createTask({
     required String taskName,
     required String taskType,
     required String openDatetime,
     required String closeDatetime,
+    String? timezone,
     String? userId,
     String? teamId,
     String? rpttaskId,
@@ -81,6 +83,7 @@ class TaskService {
         'task_type': taskType,
         'open_datetime': openDatetime,
         'close_datetime': closeDatetime,
+        if (timezone != null) 'timezone': timezone,
         if (userId != null) 'user_id': userId,
         if (teamId != null) 'team_id': teamId,
         if (rpttaskId != null) 'rpttask_id': rpttaskId,
@@ -95,15 +98,18 @@ class TaskService {
   }
 
   /// Get tasks for current user
+  /// Optionally pass device timezone for proper overdue checking while traveling
   Future<TaskListResponse> getTasks({
     String? status,
     String? date,
+    String? timezone,
   }) async {
     if (_token == null) throw Exception('Not authenticated');
 
     final queryParams = <String, String>{};
     if (status != null) queryParams['status'] = status;
     if (date != null) queryParams['date'] = date;
+    if (timezone != null) queryParams['timezone'] = timezone;
 
     final uri = Uri.parse('${ApiConstants.baseUrl}/tasks')
         .replace(queryParameters: queryParams.isNotEmpty ? queryParams : null);

@@ -147,11 +147,13 @@ class Task {
   }
 
   /// Calculate progress (0.0 to 1.0) based on current time within window
+  /// Times are stored in UTC and need to be compared against local time
   double get progress {
     try {
       final now = DateTime.now();
-      final open = DateTime.parse(openDatetime.replaceAll(' ', 'T'));
-      final close = DateTime.parse(closeDatetime.replaceAll(' ', 'T'));
+      // Parse UTC times and convert to local
+      final open = DateTime.parse(openDatetime.replaceAll(' ', 'T') + 'Z').toLocal();
+      final close = DateTime.parse(closeDatetime.replaceAll(' ', 'T') + 'Z').toLocal();
 
       if (now.isBefore(open)) return 0.0;
       if (now.isAfter(close)) return 1.0;
@@ -170,6 +172,18 @@ class Task {
 
   /// Gradient color index based on task_id hash mod 6
   int get colorIndex => taskId.hashCode.abs() % 6;
+
+  /// Check if task is actually overdue (current time > close time)
+  /// Times are stored in UTC and need to be compared against local time
+  bool get isActuallyOverdue {
+    try {
+      final now = DateTime.now();
+      final close = DateTime.parse(closeDatetime.replaceAll(' ', 'T') + 'Z').toLocal();
+      return now.isAfter(close);
+    } catch (_) {
+      return false;
+    }
+  }
 
   /// Formatted time window display
   String get timeWindowText {

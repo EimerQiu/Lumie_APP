@@ -157,6 +157,7 @@ class TeenProfileCreate(BaseModel):
     weight: WeightData
     icd10_code: Optional[str] = None
     advisor_name: Optional[str] = None
+    timezone: str = Field(default="UTC", description="User's timezone (e.g., America/Los_Angeles)")
 
 
 class ParentProfileCreate(BaseModel):
@@ -165,6 +166,7 @@ class ParentProfileCreate(BaseModel):
     age: Optional[int] = Field(None, ge=18)
     height: Optional[HeightData] = None
     weight: Optional[WeightData] = None
+    timezone: str = Field(default="UTC", description="User's timezone (e.g., America/Los_Angeles)")
 
 
 class ProfileUpdate(BaseModel):
@@ -176,6 +178,7 @@ class ProfileUpdate(BaseModel):
     icd10_code: Optional[str] = None
     advisor_name: Optional[str] = None
     rest_days: Optional[RestDaySettings] = None
+    timezone: Optional[str] = Field(None, description="User's timezone (e.g., America/Los_Angeles)")
 
 
 class UserProfile(BaseModel):
@@ -190,6 +193,7 @@ class UserProfile(BaseModel):
     icd10_code: Optional[str] = None
     advisor_name: Optional[str] = None
     rest_days: Optional[RestDaySettings] = None
+    timezone: str = "UTC"
     profile_complete: bool = True
     subscription: SubscriptionStatus = Field(default_factory=lambda: SubscriptionStatus())
     created_at: datetime
@@ -206,6 +210,7 @@ class ProfileInDB(BaseModel):
     weight: Optional[dict] = None  # {value, unit}
     icd10_code: Optional[str] = None
     advisor_name: Optional[str] = None
+    timezone: str = "UTC"
     subscription: Optional[dict] = None  # SubscriptionStatus as dict
     created_at: datetime
     updated_at: datetime

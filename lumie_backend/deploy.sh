@@ -5,7 +5,7 @@
 set -e  # Exit on error
 
 # Configuration
-SERVER_IP="54.193.153.37"
+SERVER_IP="54.177.85.124"
 SERVER_USER="ubuntu"
 SSH_KEY="$HOME/.ssh/Lumie_Key.pem"
 REMOTE_DIR="/home/ubuntu/lumie_backend"

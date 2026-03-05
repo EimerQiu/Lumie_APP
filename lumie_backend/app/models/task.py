@@ -32,8 +32,9 @@ class TaskCreate(BaseModel):
     """Request model for creating a single task"""
     task_name: str = Field(..., min_length=1, max_length=200)
     task_type: TaskType = Field(default=TaskType.MEDICINE)
-    open_datetime: str = Field(..., description="yyyy-MM-dd HH:mm")
-    close_datetime: str = Field(..., description="yyyy-MM-dd HH:mm")
+    open_datetime: str = Field(..., description="yyyy-MM-dd HH:mm in user's local timezone")
+    close_datetime: str = Field(..., description="yyyy-MM-dd HH:mm in user's local timezone")
+    timezone: str = Field(default="UTC", description="User's timezone for time conversion (e.g., America/Los_Angeles)")
     user_id: Optional[str] = Field(None, description="For team tasks: assigned user")
     team_id: Optional[str] = Field(None, description="For team tasks: team ID")
     rpttask_id: Optional[str] = Field(None, description="Template reference")

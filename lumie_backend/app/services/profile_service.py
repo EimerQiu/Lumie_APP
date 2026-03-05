@@ -65,6 +65,7 @@ class ProfileService:
             "weight": {"value": data.weight.value, "unit": data.weight.unit.value},
             "icd10_code": data.icd10_code,
             "advisor_name": data.advisor_name,
+            "timezone": data.timezone,
             "created_at": now,
             "updated_at": now,
         }
@@ -135,6 +136,7 @@ class ProfileService:
             "weight": {"value": data.weight.value, "unit": data.weight.unit.value} if data.weight else None,
             "icd10_code": None,
             "advisor_name": None,
+            "timezone": data.timezone,
             "created_at": now,
             "updated_at": now,
         }
@@ -214,6 +216,7 @@ class ProfileService:
             weight=weight_data,
             icd10_code=profile.get("icd10_code"),
             advisor_name=profile.get("advisor_name"),
+            timezone=profile.get("timezone", "UTC"),
             profile_complete=True,
             subscription=subscription,
             created_at=profile["created_at"],
@@ -255,6 +258,8 @@ class ProfileService:
             # Only allow for teen accounts
             if profile["role"] == AccountRole.TEEN.value:
                 update_fields["advisor_name"] = data.advisor_name if data.advisor_name else None
+        if data.timezone is not None:
+            update_fields["timezone"] = data.timezone
 
         await db.profiles.update_one(
             {"user_id": user_id},
