@@ -937,7 +937,20 @@ Each category has:
 - Default: Family sharing = OFF
 - User must explicitly enable
 
-#### 4.3 Apple Health Integration
+#### 4.3 Display Preferences
+
+Users can control how certain metrics are shown across the app.
+
+| Setting | Options | Default |
+|---|---|---|
+| Score Display Mode | Numeric (0–100) / Qualitative (Low / Moderate / High / Excellent) | Qualitative |
+
+**Rules:**
+- Toggle applies globally to all scores (Sleep Score, Fatigue Index, Stress/Anxiety)
+- Changing the setting takes effect immediately without a restart
+- Setting is synced to the server so it persists across devices
+
+#### 4.4 Apple Health Integration
 
 **Capabilities:**
 - Connect / Disconnect Apple Health
@@ -975,6 +988,9 @@ UserSettings {
     connected: boolean,
     readPermissions: string[],
     writePermissions: string[]
+  },
+  displayPreferences: {
+    showNumericScores: boolean   // true = show 0–100; false = show qualitative labels (default)
   },
   updatedAt: timestamp
 }
@@ -1732,6 +1748,7 @@ The Lumie Ring enables:
 - Timing
 - Analyze
 - RHR
+- Body Temperature
 
 ### 1. Feature Overview
 
@@ -1739,6 +1756,7 @@ The Sleep feature tracks and analyzes ring-measured sleep patterns to help teens
 - Provide clear, non-clinical sleep insights
 - Support adaptive activity goals
 - Offer context for fatigue and recovery trends
+- Compute a nightly Sleep Score that summarizes overall sleep quality
 
 ### 2. Ring Dependency
 
@@ -1756,50 +1774,152 @@ The Sleep feature tracks and analyzes ring-measured sleep patterns to help teens
 - Users with pre-existing chronic health conditions
 - Users wearing a Lumie Ring
 
-### 4. Sleep Metrics (Basics)
+### 4. Ring Data Sources
 
-#### 4.1 Total Sleep Time
+| Signal | Used For |
+|---|---|
+| Heart rate (HR) | Stage estimation, RHR, overnight curve |
+| Heart rate variability (HRV) | Recovery quality |
+| Accelerometer / motion | Movement, restlessness, wake detection |
+| Skin temperature | Body temperature deviation |
+| SpO₂ (if available) | Optional enrichment; not required |
 
-**Definition:** Total Sleep Time represents the total duration spent asleep during a sleep period, excluding time awake.
+#### 4.1 Sleep Session Stitching
 
-**Functional Requirements:**
-- Automatically detected per sleep session
-- Displayed in hours and minutes
-- Nightly values stored for trend visualization
-- No fixed "ideal" duration shown
+If the ring loses contact or data gaps occur mid-sleep, the system uses a 30-minute stitching window:
+- Gaps ≤ 30 min are filled using linear interpolation
+- Gaps > 30 min split the session into two separate records
+- Only the longer session is surfaced as the primary sleep record for the night
 
-#### 4.2 Sleep Stages
+#### 4.2 Correlating HR and Temperature to Sleep
 
-Sleep stages are estimated using ring-measured physiological signals.
+The ring does not include a dedicated sleep-mode processor. Sleep stages are inferred server-side from:
+1. HR level and HRV trend during low-motion windows
+2. Skin temperature delta vs. the user's baseline (drops during deep sleep; rises during REM)
+3. Sustained motion absence
 
-**Stages Displayed:**
-- REM Sleep
+This inference runs after the morning sync, not in real time.
+
+### 5. Sleep Screen Layout
+
+The Sleep screen is organized as a single scrollable view with the following sections displayed from top to bottom.
+
+#### 5.1 Sleep Score (Hero Area)
+
+A single nightly score (0–100) that summarizes sleep quality. Shown as the primary visual element at the top of the screen.
+
+**Score Calculation (Equal Weights, 20 pts each):**
+
+| Component | Max Points | What Earns Full Points |
+|---|---|---|
+| Total sleep duration | 20 | Within user's age-appropriate target range |
+| Sleep efficiency | 20 | ≥ 85% time in bed spent asleep |
+| Deep sleep % | 20 | Within user's personal baseline range |
+| REM sleep % | 20 | Within user's personal baseline range |
+| Resting heart rate | 20 | At or below user's 30-day average RHR |
+
+**Score Display:**
+
+Score display respects the user's **Display Preferences** setting (Settings → Display Preferences):
+- **Qualitative mode (default):** Shows a label only — Poor / Fair / Good / Excellent
+- **Numeric mode:** Shows the 0–100 numeric score
+
+| Range | Qualitative Label |
+|---|---|
+| 0–49 | Poor |
+| 50–69 | Fair |
+| 70–84 | Good |
+| 85–100 | Excellent |
+
+**Rules:**
+- Score is calculated once per sleep session after morning sync
+- Score is never shown mid-sleep (ring must be removed and synced)
+- If any component data is missing, that component scores 0
+- No score is shown if total sleep duration < 2 hours
+
+#### 5.2 Quick Stats Row
+
+Displayed immediately below the Sleep Score as a horizontal row of 3 cards:
+
+| Card | Content |
+|---|---|
+| Total Sleep | Hours and minutes (e.g., "7h 23m") |
+| Time in Bed | Time from first sleep signal to final wake |
+| Efficiency | Percentage of time in bed spent asleep |
+
+#### 5.3 Hypnogram
+
+A timeline chart showing sleep stage transitions across the entire night.
+
+**Y-axis stages (top to bottom):**
+- Awake
+- REM
+- Light
+- Deep
+
+**X-axis:** Time from sleep onset to final wake
+
+**Rules:**
+- Color-coded by stage
+- No numerical labels on the chart
+- Tap a region to see stage name and duration in a tooltip
+
+#### 5.4 Sleep Stages Breakdown
+
+A section below the hypnogram showing duration and percentage for each stage:
 - Deep Sleep
 - Light Sleep
+- REM Sleep
+- Awake (time spent awake after sleep onset)
 
-**Functional Requirements:**
-- Displayed as duration and percentage of total sleep
-- Compared to the user's personal baseline
-- No clinical interpretation or disorder labeling
-- No universal "normal" ranges shown
+Each stage is compared to the user's personal 30-day baseline:
+- "More than usual"
+- "About the same"
+- "Less than usual"
 
-#### 4.3 Sleep Timing
+No clinical thresholds or "ideal" percentages are shown.
 
-**Definition:** Sleep Timing describes when sleep occurs, including onset and wake time.
+#### 5.5 Sleep Contributors
 
-**Metrics:**
-- Bedtime
-- Wake time
-- Sleep window consistency
+A visual breakdown of how each score component contributed to the overall Sleep Score.
 
-**Functional Requirements:**
-- Automatically detected
-- Visualized across multiple days
-- No enforcement of "correct" schedules
+Displayed as a horizontal bar or icon list showing each of the 5 components and whether it helped, was neutral, or brought the score down. Labels use plain language:
+- "You got plenty of deep sleep"
+- "Your heart rate was a bit higher than usual overnight"
 
-### 5. Sleep Target Framework
+#### 5.6 Overnight Heart Rate Graph
 
-#### 5.1 Sleep Targets (Age-Aware & Adaptive)
+A line chart showing continuous heart rate throughout the sleep session.
+
+**Rules:**
+- Y-axis: BPM (range auto-scaled to session data)
+- X-axis: Time
+- Highlights minimum HR (RHR candidate) with a dot
+- No reference lines or "normal" zones
+
+#### 5.7 Body Temperature Detail
+
+Displays skin temperature deviation from the user's nightly baseline (in °C or °F based on user unit preference).
+
+**Rules:**
+- Shown as a relative value: e.g., "+0.3°C above your usual" or "Within your typical range"
+- No absolute temperature value is shown (device-dependent, not clinically calibrated)
+- If temperature sensor data is unavailable, this section is hidden
+
+### 6. Weekly Sleep Trend
+
+A week-view section (accessible by scrolling or via a tab) showing:
+- Nightly Sleep Score trend as a bar chart
+- Total sleep duration trend as a line
+- Bedtime consistency (dot chart showing sleep onset time each night)
+
+**Rules:**
+- Compares to the user's own recent average, not population norms
+- No labels like "bad week" or performance framing
+
+### 7. Sleep Target Framework
+
+#### 7.1 Sleep Targets (Age-Aware & Adaptive)
 
 **Definition:** Sleep targets represent personalized reference ranges that indicate how close a user is to their own sleep needs, rather than population ideals.
 
@@ -1819,7 +1939,7 @@ Sleep targets are derived from:
 - Recent sleep consistency
 - Long-term averages (not single nights)
 
-#### 5.2 Baseline Adjustment Logic
+#### 7.2 Baseline Adjustment Logic
 
 - Initial sleep targets are set using age-appropriate reference ranges
 - Over time, targets gradually adjust toward what is sustainable for the individual
@@ -1829,7 +1949,7 @@ Example (conceptual):
 - If a user consistently sleeps ~7h 30m, the baseline shifts toward that value
 - The system avoids labeling consistent patterns as "bad" or "failed"
 
-#### 5.3 Sleep Stage Targeting
+#### 7.3 Sleep Stage Targeting
 
 Sleep stages are evaluated as:
 - Progress toward personal targets
@@ -1841,9 +1961,9 @@ Sleep stages are evaluated as:
 - ❌ No "normal / abnormal" labels
 - ❌ No clinical thresholds
 
-### 6. Sleep Analysis
+### 8. Sleep Analysis
 
-#### 6.1 Resting Heart Rate (RHR)
+#### 8.1 Resting Heart Rate (RHR)
 
 **Definition:** Resting Heart Rate (RHR) represents the lowest stable heart rate recorded during sleep, used as a general indicator of overnight recovery.
 
@@ -1855,7 +1975,20 @@ Sleep stages are evaluated as:
 - Displayed alongside sleep duration
 - Compared only to the user's historical baseline
 
-#### 6.2 Sleep Consistency (Derived Metric)
+#### 8.2 Body Temperature Deviation
+
+**Definition:** Nightly skin temperature deviation from the user's personal baseline, used as a supplemental recovery signal.
+
+**Data Source:**
+- Skin temperature sensor on the Lumie Ring (measured during sleep)
+
+**Functional Requirements:**
+- Expressed as a relative delta, not an absolute temperature
+- Compared to the user's 30-day nightly average
+- Displayed in the user's preferred unit (°C or °F)
+- If unavailable, the metric is hidden (not estimated)
+
+#### 8.3 Sleep Consistency (Derived Metric)
 
 **Definition:** Sleep Consistency reflects how regular sleep timing is across multiple nights.
 
@@ -1864,12 +1997,167 @@ Sleep stages are evaluated as:
 - Input to adaptive activity goals
 - Not displayed as a score or grade
 
-### 7. Integration with Other Features
+### 9. Data Storage & Sync
+
+#### 9.1 Sleep Session Data Model
+
+**Backend (Python/Pydantic):**
+
+```python
+class SleepStage(str, Enum):
+    AWAKE = "awake"
+    LIGHT = "light"
+    DEEP = "deep"
+    REM = "rem"
+
+class SleepStageSegment(BaseModel):
+    stage: SleepStage
+    start_time: datetime
+    end_time: datetime
+    duration_minutes: int
+
+class SleepSession(BaseModel):
+    session_id: str
+    user_id: str
+    ring_device_id: str
+    sleep_start: datetime
+    sleep_end: datetime
+    total_sleep_minutes: int
+    time_in_bed_minutes: int
+    efficiency_percent: float
+    stages: List[SleepStageSegment]
+    rhr_bpm: Optional[int]
+    avg_hrv_ms: Optional[float]
+    body_temp_delta_c: Optional[float]   # deviation from baseline
+    sleep_score: Optional[int]           # 0–100, null if insufficient data
+    score_components: Optional[dict]     # breakdown of score by component
+    synced_at: datetime
+    created_at: datetime
+```
+
+**Frontend (Flutter/Dart):**
+
+```dart
+enum SleepStage { awake, light, deep, rem }
+
+class SleepStageSegment {
+  final SleepStage stage;
+  final DateTime startTime;
+  final DateTime endTime;
+  final int durationMinutes;
+}
+
+class SleepSession {
+  final String sessionId;
+  final DateTime sleepStart;
+  final DateTime sleepEnd;
+  final int totalSleepMinutes;
+  final int timeInBedMinutes;
+  final double efficiencyPercent;
+  final List<SleepStageSegment> stages;
+  final int? rhrBpm;
+  final double? avgHrvMs;
+  final double? bodyTempDeltaC;
+  final int? sleepScore;
+  final Map<String, dynamic>? scoreComponents;
+}
+```
+
+#### 9.2 MongoDB Collection
+
+**Collection:** `sleep_sessions`
+
+```json
+{
+  "session_id": "string",
+  "user_id": "string",
+  "ring_device_id": "string",
+  "sleep_start": "ISO8601",
+  "sleep_end": "ISO8601",
+  "total_sleep_minutes": 443,
+  "time_in_bed_minutes": 480,
+  "efficiency_percent": 92.3,
+  "stages": [
+    { "stage": "light", "start_time": "ISO8601", "end_time": "ISO8601", "duration_minutes": 45 }
+  ],
+  "rhr_bpm": 54,
+  "avg_hrv_ms": 42.1,
+  "body_temp_delta_c": 0.2,
+  "sleep_score": 78,
+  "score_components": {
+    "duration": 16,
+    "efficiency": 20,
+    "deep_sleep": 14,
+    "rem_sleep": 16,
+    "rhr": 12
+  },
+  "synced_at": "ISO8601",
+  "created_at": "ISO8601"
+}
+```
+
+**Indexes:**
+- `{ user_id: 1, sleep_start: -1 }` — for fetching recent sessions
+- `{ session_id: 1 }` — unique
+
+### 10. Required API Endpoints
+
+```
+GET /sleep/sessions
+  - Retrieve all sleep sessions for the authenticated user
+  - Query params: limit, before_date
+  - Response: List of SleepSession objects (newest first)
+
+GET /sleep/sessions/latest
+  - Retrieve the most recent sleep session
+  - Response: SleepSession
+
+GET /sleep/sessions/{session_id}
+  - Retrieve full detail for a specific session (including stage segments)
+  - Response: SleepSession with stages
+
+POST /sleep/sessions
+  - Upload a new sleep session from the ring sync
+  - Request: SleepSession data (stages, HR data, temp data)
+  - Response: Created session with computed sleep_score
+
+GET /sleep/trend
+  - Weekly sleep trend data (scores, durations, bedtimes)
+  - Query params: weeks (default 1)
+  - Response: List of nightly summaries
+```
+
+### 11. Error States & Edge Cases
+
+| Scenario | Handling |
+|---|---|
+| Sleep < 2 hours | No sleep score shown; session stored for trend data |
+| Missing HR data | Affected score components score 0; session still stored |
+| Temperature sensor unavailable | Body temp section hidden |
+| Data gap > 30 min mid-sleep | Session split; longer session shown as primary |
+| Ring not worn | No session recorded; screen shows "No sleep data for this night" |
+| Duplicate session upload | Server deduplicates by `sleep_start` within ±15 min |
+
+### 12. Security & Privacy
+
+- Sleep data is private by default
+- Shared with family only if user enables "Activity data" sharing in Settings
+- Sleep score and stage data are never visible to peers or in community features
+- Sleep sessions are tied to the authenticated user and cannot be accessed cross-account
+
+### 13. Integration with Other Features
 
 Sleep data may be referenced by:
 - Adaptive Activity Goals (Activity feature)
-- Fatigue Index (Feature 4)
+- Fatigue Index
+- Stress / Anxiety (sleep timing as optional context)
 - Advisor
+
+### 14. Dependencies
+
+This feature requires:
+- Lumie Ring (paired and synced)
+- User Profile (for age-appropriate targets)
 
 ---
 

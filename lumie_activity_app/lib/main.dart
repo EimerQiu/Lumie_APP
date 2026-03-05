@@ -29,6 +29,8 @@ import 'features/teams/screens/accept_invitation_screen.dart';
 import 'features/settings/screens/rest_days_settings_screen.dart';
 import 'features/settings/screens/edit_profile_screen.dart';
 import 'features/advisor/screens/advisor_screen.dart';
+import 'features/heart_rate/providers/heart_rate_provider.dart';
+import 'features/heart_rate/screens/heart_rate_screen.dart';
 import 'features/tasks/providers/tasks_provider.dart';
 import 'features/tasks/screens/tasks_list_screen.dart';
 import 'features/tasks/screens/create_task_screen.dart';
@@ -61,6 +63,10 @@ class LumieActivityApp extends StatelessWidget {
         ChangeNotifierProvider(create: (_) => TeamsProvider()),
         ChangeNotifierProvider(create: (_) => TasksProvider()),
         ChangeNotifierProvider(create: (_) => RingProvider()..init()),
+        ChangeNotifierProxyProvider<RingProvider, HeartRateProvider>(
+          create: (_) => HeartRateProvider(),
+          update: (_, ring, hr) => hr!..updateRingProvider(ring),
+        ),
       ],
       child: MaterialApp(
         title: 'Lumie Activity',
@@ -84,6 +90,7 @@ class LumieActivityApp extends StatelessWidget {
           '/tasks/templates': (context) => const TemplatesListScreen(),
           '/tasks/templates/create': (context) => const CreateTemplateScreen(),
           '/ring/manage': (context) => const RingManagementScreen(),
+          '/heart-rate': (context) => const HeartRateScreen(),
         },
         onGenerateRoute: (settings) {
           // Handle routes with arguments

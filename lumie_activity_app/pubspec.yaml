@@ -56,6 +56,9 @@ dependencies:
   # Bluetooth Low Energy for ring pairing
   flutter_blue_plus: ^1.35.3
 
+  # Charts for Heart Rate trend
+  fl_chart: ^0.68.0
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

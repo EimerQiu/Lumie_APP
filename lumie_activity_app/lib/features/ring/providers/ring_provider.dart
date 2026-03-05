@@ -7,6 +7,7 @@ import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import '../../../core/services/ring_ble_service.dart';
 import '../../../core/services/ring_service.dart';
 import '../../../shared/models/ring_models.dart';
+import '../../../shared/models/heart_rate_models.dart';
 
 enum RingProviderState {
   idle,
@@ -14,6 +15,7 @@ enum RingProviderState {
   scanning,
   connecting,
   paired,
+  disconnected, // paired ring exists but BLE is not currently connected
   unpaired,
   error,
 }
@@ -35,6 +37,7 @@ class RingProvider extends ChangeNotifier {
   String? get errorMessage => _errorMessage;
   bool get isBluetoothOn => _isBluetoothOn;
   bool get isPaired => _ringInfo?.isPaired ?? false;
+  bool get isConnected => _bleService.isConnected;
 
   void setToken(String token) => _ringService.setToken(token);
   void clearToken() => _ringService.clearToken();
@@ -44,11 +47,19 @@ class RingProvider extends ChangeNotifier {
   Future<void> init() async {
     // Load cached ring info
     _ringInfo = await _ringService.loadLocalRingInfo();
-    _state = (_ringInfo?.isPaired == true)
-        ? RingProviderState.paired
-        : RingProviderState.unpaired;
 
-    // Monitor Bluetooth state
+    // Wire up disconnection callback so we get notified if the ring drops
+    _bleService.onDisconnected = _handleDisconnected;
+
+    if (_ringInfo?.isPaired == true) {
+      // Start disconnected; attempt BLE reconnect in the background
+      _state = RingProviderState.disconnected;
+      _tryReconnect();
+    } else {
+      _state = RingProviderState.unpaired;
+    }
+
+    // Monitor Bluetooth adapter state
     _isBluetoothOn = await RingBleService.isBluetoothOn();
     _btStateSubscription = RingBleService.adapterStateStream.listen((state) {
       _isBluetoothOn = state == BluetoothAdapterState.on;
@@ -56,6 +67,31 @@ class RingProvider extends ChangeNotifier {
     });
 
     notifyListeners();
+  }
+
+  void _handleDisconnected() {
+    if (_ringInfo?.isPaired == true) {
+      _state = RingProviderState.disconnected;
+      notifyListeners();
+    }
+  }
+
+  /// Attempt to reconnect to the cached ring. Safe to call at any time.
+  Future<void> tryReconnect() => _tryReconnect();
+
+  Future<void> _tryReconnect() async {
+    final deviceId = _ringInfo?.ringDeviceId;
+    if (deviceId == null) return;
+    try {
+      await _bleService.reconnect(deviceId);
+      _ringInfo =
+          _ringInfo?.copyWith(connectionStatus: RingConnectionStatus.connected);
+      _state = RingProviderState.paired;
+      notifyListeners();
+    } catch (_) {
+      _state = RingProviderState.disconnected;
+      notifyListeners();
+    }
   }
 
   @override
@@ -164,6 +200,17 @@ class RingProvider extends ChangeNotifier {
     _errorMessage = null;
     notifyListeners();
   }
+
+  // ─── Heart Rate BLE delegation ────────────────────────────────────────────
+
+  Future<List<HrDataPoint>> fetchHrHistory() =>
+      isPaired ? _bleService.fetchHrHistory() : Future.value([]);
+
+  Stream<int> startHrStreaming() =>
+      isPaired ? _bleService.startHrStreaming() : const Stream.empty();
+
+  Future<void> stopHrStreaming() =>
+      isPaired ? _bleService.stopHrStreaming() : Future.value();
 
   // ─── Ring prompt tracking ─────────────────────────────────────────────────
 

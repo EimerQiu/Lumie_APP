@@ -11,6 +11,7 @@ import '../../../shared/widgets/intensity_badge.dart';
 import '../../../shared/widgets/ring_status_indicator.dart';
 import '../../activity/screens/activity_history_screen.dart';
 import '../../ring/providers/ring_provider.dart';
+import '../../heart_rate/providers/heart_rate_provider.dart';
 import '../../sleep/screens/sleep_screen.dart';
 import '../widgets/activity_summary_card.dart';
 import '../widgets/quick_actions_section.dart';
@@ -84,6 +85,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
             child: Column(
               children: [
                 _buildScoreRow(),
+                const SizedBox(height: 12),
+                _buildHrCard(),
                 const SizedBox(height: 12),
                 _buildMainActivityRing(),
                 const SizedBox(height: 24),
@@ -241,6 +244,75 @@ class _DashboardScreenState extends State<DashboardScreen> {
           ),
         ],
       ),
+    );
+  }
+
+  Widget _buildHrCard() {
+    return Consumer2<RingProvider, HeartRateProvider>(
+      builder: (context, ring, hr, _) {
+        if (!ring.isPaired) return const SizedBox.shrink();
+        final connected = ring.isConnected;
+        final bpmText = connected
+            ? (hr.latestHr != null ? '${hr.latestHr} BPM' : 'Tap to measure')
+            : 'Ring disconnected';
+        return Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16),
+          child: GestureDetector(
+            onTap: () => Navigator.pushNamed(context, '/heart-rate'),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+              decoration: BoxDecoration(
+                color: AppColors.backgroundWhite,
+                borderRadius: BorderRadius.circular(16),
+                boxShadow: AppColors.cardShadow,
+              ),
+              child: Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: (connected ? Colors.redAccent : AppColors.textLight)
+                          .withValues(alpha: 0.12),
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: Icon(
+                      connected ? Icons.favorite : Icons.bluetooth_disabled,
+                      color: connected ? Colors.redAccent : AppColors.textLight,
+                      size: 20,
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        'Heart Rate',
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                          color: AppColors.textSecondary,
+                        ),
+                      ),
+                      Text(
+                        bpmText,
+                        style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.bold,
+                          color: connected
+                              ? AppColors.textPrimary
+                              : AppColors.textSecondary,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const Spacer(),
+                  const Icon(Icons.chevron_right, color: AppColors.textSecondary),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
     );
   }
 

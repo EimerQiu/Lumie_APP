@@ -6,8 +6,10 @@
 // Notify char:     0000fff7-0000-1000-8000-00805f9b34fb
 
 import 'dart:async';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import '../../shared/models/ring_models.dart';
+import '../../shared/models/heart_rate_models.dart';
 
 class RingBleService {
   static const String _writeCharFragment = 'fff6';
@@ -22,6 +24,14 @@ class RingBleService {
   BluetoothCharacteristic? _writeChar;
   BluetoothCharacteristic? _notifyChar;
   StreamSubscription<List<int>>? _notifySubscription;
+
+  // HR streaming state (command 0x09)
+  StreamController<int>? _hrStreamController;
+  StreamSubscription<List<int>>? _hrStreamSub;
+
+  // Connection state monitoring
+  StreamSubscription<BluetoothConnectionState>? _connectionStateSub;
+  VoidCallback? onDisconnected;
 
   bool get isConnected => _connectedDevice != null && _writeChar != null;
 
@@ -139,6 +149,8 @@ class RingBleService {
     final macFormatted = mac ?? ring.deviceId;
     final ringName = 'Lumie Ring ${macFormatted.length >= 5 ? macFormatted.substring(macFormatted.length - 5).replaceAll(':', '') : macFormatted}';
 
+    _subscribeToConnectionState(device);
+
     return RingInfo(
       ringDeviceId: macFormatted,
       ringName: ringName,
@@ -150,6 +162,12 @@ class RingBleService {
   }
 
   Future<void> disconnect() async {
+    await _connectionStateSub?.cancel();
+    _connectionStateSub = null;
+    await _hrStreamSub?.cancel();
+    _hrStreamSub = null;
+    await _hrStreamController?.close();
+    _hrStreamController = null;
     await _notifySubscription?.cancel();
     _notifySubscription = null;
     try {
@@ -158,6 +176,187 @@ class RingBleService {
     _connectedDevice = null;
     _writeChar = null;
     _notifyChar = null;
+  }
+
+  void _subscribeToConnectionState(BluetoothDevice device) {
+    _connectionStateSub?.cancel();
+    _connectionStateSub = device.connectionState.listen((state) {
+      if (state == BluetoothConnectionState.disconnected) {
+        _connectionStateSub = null;
+        _writeChar = null;
+        _notifyChar = null;
+        _connectedDevice = null;
+        onDisconnected?.call();
+      }
+    });
+  }
+
+  /// Reconnect to a previously paired ring by device ID (no full handshake).
+  /// Discovers GATT, enables notifications, and re-syncs time.
+  Future<void> reconnect(String deviceId) async {
+    final device = BluetoothDevice.fromId(deviceId);
+    await device.connect(
+        autoConnect: false, timeout: const Duration(seconds: 10));
+    _connectedDevice = device;
+
+    final services = await device.discoverServices();
+    BluetoothService? lumieService;
+    for (final s in services) {
+      if (s.serviceUuid.str.toLowerCase().contains('fff0')) {
+        lumieService = s;
+        break;
+      }
+    }
+    if (lumieService == null) {
+      await disconnect();
+      throw Exception('Service not found during reconnect');
+    }
+
+    for (final c in lumieService.characteristics) {
+      final uuid = c.characteristicUuid.str.toLowerCase();
+      if (uuid.contains(_writeCharFragment)) _writeChar = c;
+      if (uuid.contains(_notifyCharFragment)) _notifyChar = c;
+    }
+
+    if (_writeChar == null || _notifyChar == null) {
+      await disconnect();
+      throw Exception('Characteristics not found during reconnect');
+    }
+
+    await _notifyChar!.setNotifyValue(true);
+    await _setTime();
+    _subscribeToConnectionState(device);
+  }
+
+  // ─── Heart Rate ───────────────────────────────────────────────────────────
+
+  /// Command 0x55 — Fetch today's stored HR history from the ring.
+  /// Returns a list of [HrDataPoint] recorded today, newest last.
+  Future<List<HrDataPoint>> fetchHrHistory() async {
+    if (_notifyChar == null) return [];
+
+    final today = DateTime.now();
+    final results = <HrDataPoint>[];
+    final completer = Completer<List<HrDataPoint>>();
+    StreamSubscription<List<int>>? sub;
+
+    sub = _notifyChar!.lastValueStream.listen((data) {
+      if (data.isEmpty || data[0] != 0x55) return;
+
+      // End-of-data marker: 0x55 0xFF
+      if (data.length >= 2 && data[1] == 0xFF) {
+        if (!completer.isCompleted) completer.complete(results);
+        return;
+      }
+
+      if (data.length < 10) return;
+
+      final yy = _bcdToDecimal(data[3]);
+      final mm = _bcdToDecimal(data[4]);
+      final dd = _bcdToDecimal(data[5]);
+      final hh = _bcdToDecimal(data[6]);
+      final min = _bcdToDecimal(data[7]);
+      final ss = _bcdToDecimal(data[8]);
+      final hr = data[9];
+
+      if (hr == 0 || hr >= 250) return;
+
+      final recordTime = DateTime(2000 + yy, mm, dd, hh, min, ss);
+      if (recordTime.year == today.year &&
+          recordTime.month == today.month &&
+          recordTime.day == today.day) {
+        results.add(HrDataPoint(time: recordTime, bpm: hr));
+      }
+    });
+
+    try {
+      final payload = List<int>.filled(15, 0);
+      payload[0] = 0x55;
+      payload[1] = 0x00; // read latest records
+      await _writeCommand(payload);
+      return await completer.future.timeout(
+        const Duration(seconds: 3),
+        onTimeout: () => results,
+      );
+    } catch (_) {
+      return results;
+    } finally {
+      await sub.cancel();
+    }
+  }
+
+  /// Start an on-demand HR measurement.
+  ///
+  /// Sends 0x28 (mode=HR, 60s) to activate the ring's PPG sensor (green LED),
+  /// then enables 0x09 streaming to receive live BPM values.
+  /// Returns a broadcast stream of BPM integers.
+  Stream<int> startHrStreaming() {
+    if (_notifyChar == null) return const Stream.empty();
+
+    _hrStreamController?.close();
+    _hrStreamController = StreamController<int>.broadcast();
+
+    _hrStreamSub?.cancel();
+    _hrStreamSub = _notifyChar!.lastValueStream.listen((data) {
+      if (data.isEmpty || data[0] != 0x09) return;
+
+      int hr = 0;
+      if (data.length == 16) {
+        // Format A: HR at byte 13
+        hr = data[13];
+      } else if (data.length >= 26) {
+        // Format B: HR at byte 21
+        hr = data[21];
+      }
+
+      if (hr > 0 && hr < 250 && _hrStreamController?.isClosed == false) {
+        _hrStreamController!.add(hr);
+      }
+    });
+
+    // 1. Send 0x28 mode=0x02 to trigger the dedicated HR measurement (green LED on).
+    //    Duration = 60 seconds (minimum per protocol is 30s).
+    final measurePayload = List<int>.filled(15, 0);
+    measurePayload[0] = 0x28;
+    measurePayload[1] = 0x02; // HR mode
+    measurePayload[2] = 0x01; // start
+    measurePayload[5] = 60;   // duration_lo: 60 seconds
+    measurePayload[6] = 0x00; // duration_hi
+    _writeCommand(measurePayload).catchError((_) {});
+
+    // 2. Enable 0x09 streaming so live values flow back to the app.
+    final streamPayload = List<int>.filled(15, 0);
+    streamPayload[0] = 0x09;
+    streamPayload[1] = 0x01; // start
+    streamPayload[2] = 0x01; // enable temperature
+    _writeCommand(streamPayload).catchError((_) {});
+
+    return _hrStreamController!.stream;
+  }
+
+  /// Stop the on-demand HR measurement and streaming.
+  Future<void> stopHrStreaming() async {
+    // Stop the 0x28 dedicated measurement (turns off the green LED).
+    try {
+      final measurePayload = List<int>.filled(15, 0);
+      measurePayload[0] = 0x28;
+      measurePayload[1] = 0x02; // HR mode
+      measurePayload[2] = 0x00; // stop
+      await _writeCommand(measurePayload);
+    } catch (_) {}
+
+    // Stop 0x09 streaming.
+    try {
+      final streamPayload = List<int>.filled(15, 0);
+      streamPayload[0] = 0x09;
+      streamPayload[1] = 0x00; // stop
+      await _writeCommand(streamPayload);
+    } catch (_) {}
+
+    await _hrStreamSub?.cancel();
+    _hrStreamSub = null;
+    await _hrStreamController?.close();
+    _hrStreamController = null;
   }
 
   // ─── Commands ────────────────────────────────────────────────────────────

@@ -1,8 +1,11 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../shared/models/activity_models.dart';
 import '../../../shared/widgets/gradient_card.dart';
 import '../../../shared/widgets/intensity_badge.dart';
+import '../../ring/providers/ring_provider.dart';
+import 'workout_recording_screen.dart';
 
 class ActivityHistoryScreen extends StatefulWidget {
   const ActivityHistoryScreen({super.key});
@@ -81,9 +84,91 @@ class _ActivityHistoryScreenState extends State<ActivityHistoryScreen> {
     ),
   ];
 
+  // ── Record Workout ─────────────────────────────────────────────────────────
+
+  void _onRecordWorkout() {
+    final ring = context.read<RingProvider>();
+
+    if (!ring.isPaired || !ring.isBluetoothOn) {
+      _showRingRequiredDialog(ring);
+      return;
+    }
+
+    _showActivityPicker();
+  }
+
+  void _showRingRequiredDialog(RingProvider ring) {
+    final bool bluetoothOff = ring.isPaired && !ring.isBluetoothOn;
+    final String title = 'Ring Not Connected';
+    final String message = bluetoothOff
+        ? 'Turn on Bluetooth to connect your Lumie Ring for heart rate tracking.'
+        : 'Your Lumie Ring is not connected.\n\nIf your ring is in the charger, remove it and make sure it\'s nearby.';
+
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Row(
+          children: [
+            const Icon(Icons.bluetooth_disabled, color: AppColors.error),
+            const SizedBox(width: 8),
+            Text(title),
+          ],
+        ),
+        content: Text(message),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('OK'),
+          ),
+          if (!ring.isPaired)
+            ElevatedButton(
+              onPressed: () {
+                Navigator.of(ctx).pop();
+                Navigator.of(context).pushNamed('/ring/manage');
+              },
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.primaryLemonDark,
+                foregroundColor: const Color(0xFF78350F),
+              ),
+              child: const Text('Connect Ring'),
+            ),
+        ],
+      ),
+    );
+  }
+
+  void _showActivityPicker() {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) => _ActivityPickerSheet(
+        onSelected: (type) {
+          Navigator.of(ctx).pop();
+          Navigator.of(context).push(
+            MaterialPageRoute(
+              builder: (_) => WorkoutRecordingScreen(activityType: type),
+              fullscreenDialog: true,
+            ),
+          );
+        },
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: _onRecordWorkout,
+        backgroundColor: AppColors.primaryLemonDark,
+        foregroundColor: const Color(0xFF78350F),
+        icon: const Icon(Icons.play_arrow_rounded),
+        label: const Text(
+          'Record Workout',
+          style: TextStyle(fontWeight: FontWeight.w600),
+        ),
+      ),
       body: Container(
         decoration: const BoxDecoration(
           gradient: AppColors.primaryGradient,
@@ -95,7 +180,7 @@ class _ActivityHistoryScreenState extends State<ActivityHistoryScreen> {
               _buildWeekSelector(),
               Expanded(
                 child: SingleChildScrollView(
-                  padding: const EdgeInsets.only(bottom: 32),
+                  padding: const EdgeInsets.only(bottom: 100),
                   child: Column(
                     children: [
                       const SizedBox(height: 16),
@@ -525,6 +610,92 @@ class _ActivityHistoryScreenState extends State<ActivityHistoryScreen> {
     return '${months[date.month - 1]} ${date.day}';
   }
 }
+
+// ── Activity Picker Bottom Sheet ───────────────────────────────────────────
+
+class _ActivityPickerSheet extends StatelessWidget {
+  final void Function(ActivityType) onSelected;
+
+  const _ActivityPickerSheet({required this.onSelected});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: const BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const SizedBox(height: 12),
+          Container(
+            width: 40,
+            height: 4,
+            decoration: BoxDecoration(
+              color: AppColors.surfaceLight,
+              borderRadius: BorderRadius.circular(2),
+            ),
+          ),
+          const SizedBox(height: 16),
+          const Text(
+            'Choose Activity',
+            style: TextStyle(
+              fontSize: 18,
+              fontWeight: FontWeight.w600,
+              color: AppColors.textPrimary,
+            ),
+          ),
+          const SizedBox(height: 16),
+          GridView.builder(
+            shrinkWrap: true,
+            physics: const NeverScrollableScrollPhysics(),
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 32),
+            gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+              crossAxisCount: 3,
+              mainAxisSpacing: 12,
+              crossAxisSpacing: 12,
+              childAspectRatio: 1,
+            ),
+            itemCount: ActivityType.predefinedTypes.length,
+            itemBuilder: (_, i) {
+              final type = ActivityType.predefinedTypes[i];
+              return GestureDetector(
+                onTap: () => onSelected(type),
+                child: Container(
+                  decoration: BoxDecoration(
+                    gradient: AppColors.warmGradient,
+                    borderRadius: BorderRadius.circular(16),
+                  ),
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Text(type.icon, style: const TextStyle(fontSize: 28)),
+                      const SizedBox(height: 6),
+                      Text(
+                        type.name,
+                        textAlign: TextAlign.center,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w600,
+                          color: AppColors.textOnYellow,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              );
+            },
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 
 class _WeekStatItem extends StatelessWidget {
   final String label;
