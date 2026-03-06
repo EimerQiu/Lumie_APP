@@ -29,6 +29,12 @@ class ApiConstants {
   static const String taskBatchPreview = '/tasks/batch/preview';
   static const String taskBatchGenerate = '/tasks/batch/generate';
 
+  // Admin Tasks
+  static const String adminTaskList = '/admin/task-list-ios';
+  static const String adminTaskComplete = '/admin/task_complete';
+  static const String adminDeleteTask = '/admin/delete_task';
+  static const String adminRewardCalc = '/admin/reward-calc';
+
   // Timeouts
   static const Duration connectTimeout = Duration(seconds: 10);
   static const Duration receiveTimeout = Duration(seconds: 30);

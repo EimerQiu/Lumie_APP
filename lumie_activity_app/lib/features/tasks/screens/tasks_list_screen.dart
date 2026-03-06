@@ -4,7 +4,6 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../shared/models/task_models.dart';
-import '../../teams/widgets/upgrade_prompt_sheet.dart';
 import '../providers/tasks_provider.dart';
 import '../widgets/task_card.dart';
 
@@ -43,6 +42,12 @@ class _TasksListScreenState extends State<TasksListScreen> {
         elevation: 0,
         foregroundColor: AppColors.textPrimary,
         actions: [
+          // Admin Dashboard button
+          IconButton(
+            onPressed: () => Navigator.pushNamed(context, '/tasks/admin'),
+            icon: const Icon(Icons.admin_panel_settings_outlined),
+            tooltip: 'Admin Dashboard',
+          ),
           // Templates button
           IconButton(
             onPressed: () => Navigator.pushNamed(context, '/tasks/templates'),
@@ -157,10 +162,10 @@ class _TasksListScreenState extends State<TasksListScreen> {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(Icons.task_alt, size: 64, color: AppColors.surfaceLight),
+            Icon(Icons.calendar_today, size: 64, color: AppColors.surfaceLight),
             const SizedBox(height: 16),
             Text(
-              'No active tasks',
+              'No Tasks Available',
               style: TextStyle(
                 fontSize: 18,
                 fontWeight: FontWeight.w500,
@@ -169,11 +174,18 @@ class _TasksListScreenState extends State<TasksListScreen> {
             ),
             const SizedBox(height: 8),
             Text(
-              'Tap + to create a new task',
+              'Check the Admin Dashboard for all previous\nand upcoming tasks, or tap + to create one.',
               style: TextStyle(
                 fontSize: 14,
                 color: AppColors.textLight,
               ),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 16),
+            TextButton.icon(
+              onPressed: () => Navigator.pushNamed(context, '/tasks/admin'),
+              icon: const Icon(Icons.admin_panel_settings, size: 18),
+              label: const Text('Open Admin Dashboard'),
             ),
           ],
         ),
@@ -199,16 +211,7 @@ class _TasksListScreenState extends State<TasksListScreen> {
   }
 
   void _onAddTask(TasksProvider provider) {
-    if (provider.hasReachedTaskLimit) {
-      UpgradePromptBottomSheet.showCustom(
-        context: context,
-        title: 'Task Limit Reached',
-        message: 'You\'ve reached your task limit (${provider.activeTaskCount}/6 active tasks)',
-        detail: 'Upgrade to Pro for unlimited tasks.',
-        onUpgrade: () => Navigator.pushNamed(context, '/subscription/upgrade'),
-      );
-      return;
-    }
+    // No quantity limit — date-range limit is enforced server-side
     Navigator.pushNamed(context, '/tasks/create');
   }
 

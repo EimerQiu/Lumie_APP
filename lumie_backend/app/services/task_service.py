@@ -10,7 +10,7 @@ from fastapi import HTTPException, status
 from zoneinfo import ZoneInfo
 
 from ..core.database import get_database
-from ..core.subscription_helpers import get_task_limit, raise_task_limit_error
+from ..core.subscription_helpers import get_task_date_range, raise_task_date_range_error
 from ..models.task import (
     TaskType, TaskStatus,
     TaskCreate, TaskResponse, TaskListResponse,
@@ -162,12 +162,19 @@ class TaskService:
 
         for task in tasks:
             if task["status"] == TaskStatus.PENDING.value and task["close_datetime"] < now_str:
-                # Mark as overdue in DB
+                # Mark as expired in DB
                 await db.tasks.update_one(
                     {"task_id": task["task_id"]},
-                    {"$set": {"status": TaskStatus.OVERDUE.value, "updated_at": datetime.utcnow()}}
+                    {"$set": {"status": TaskStatus.EXPIRED.value, "updated_at": datetime.utcnow()}}
                 )
-                task["status"] = TaskStatus.OVERDUE.value
+                task["status"] = TaskStatus.EXPIRED.value
+            elif task["status"] == TaskStatus.OVERDUE.value:
+                # Normalize legacy "overdue" to "expired"
+                await db.tasks.update_one(
+                    {"task_id": task["task_id"]},
+                    {"$set": {"status": TaskStatus.EXPIRED.value, "updated_at": datetime.utcnow()}}
+                )
+                task["status"] = TaskStatus.EXPIRED.value
             updated_tasks.append(task)
 
         return updated_tasks
@@ -218,17 +225,18 @@ class TaskService:
                         detail="Assigned user is not a member of this team"
                     )
 
-        # Check subscription limit for the assigned user
+        # Check subscription date-range limit for the assigned user
         subscription_tier, tier_value = await self._get_user_subscription_tier(assigned_user_id)
-        current_count = await self.get_active_task_count(assigned_user_id)
-        limit = get_task_limit(subscription_tier)
+        max_days = get_task_date_range(subscription_tier)
 
-        if current_count >= limit:
-            raise_task_limit_error(
-                user_tier=tier_value,
-                current_count=current_count,
-                limit=limit,
-            )
+        # Check if task's close_datetime is within the allowed date range
+        try:
+            close_dt = datetime.strptime(data.close_datetime, "%Y-%m-%d %H:%M")
+            max_date = datetime.now() + timedelta(days=max_days)
+            if close_dt > max_date:
+                raise_task_date_range_error(user_tier=tier_value, max_days=max_days)
+        except ValueError:
+            pass  # Let the time ordering check below handle bad format
 
         # Validate time ordering (using local times)
         if data.close_datetime <= data.open_datetime:
@@ -674,18 +682,16 @@ class TaskService:
                 detail="No tasks to generate for the given date range"
             )
 
-        # Check subscription limit
+        # Check subscription date-range limit
         subscription_tier, tier_value = await self._get_user_subscription_tier(assigned_user_id)
-        current_count = await self.get_active_task_count(assigned_user_id)
-        limit = get_task_limit(subscription_tier)
-        new_total = current_count + len(task_docs)
+        max_days = get_task_date_range(subscription_tier)
+        max_date = datetime.utcnow() + timedelta(days=max_days)
+        max_date_str = max_date.strftime("%Y-%m-%d %H:%M")
 
-        if new_total > limit:
-            raise_task_limit_error(
-                user_tier=tier_value,
-                current_count=current_count,
-                limit=limit,
-            )
+        # Check if any generated task falls beyond the allowed range
+        for t in task_docs:
+            if t["close_datetime"] > max_date_str:
+                raise_task_date_range_error(user_tier=tier_value, max_days=max_days)
 
         # Bulk insert
         await db.tasks.insert_many(task_docs)

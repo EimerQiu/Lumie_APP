@@ -6,6 +6,7 @@ import '../../../core/theme/app_colors.dart';
 import '../../../shared/models/subscription_error.dart';
 import '../../teams/widgets/upgrade_prompt_sheet.dart';
 import '../providers/tasks_provider.dart';
+import '../widgets/family_member_selector.dart';
 
 class BatchGenerateScreen extends StatefulWidget {
   const BatchGenerateScreen({super.key});
@@ -24,6 +25,7 @@ class _BatchGenerateScreenState extends State<BatchGenerateScreen> {
   bool _isLoading = false;
   bool _isPreviewing = false;
   String? _templateId;
+  FamilyMemberSelection _memberSelection = const FamilyMemberSelection();
 
   @override
   void didChangeDependencies() {
@@ -74,6 +76,11 @@ class _BatchGenerateScreenState extends State<BatchGenerateScreen> {
             ),
           ),
           const SizedBox(height: 16),
+
+          // Family member selector (for admins)
+          FamilyMemberSelector(
+            onChanged: (selection) => setState(() => _memberSelection = selection),
+          ),
 
           // Date range
           const Text(
@@ -277,6 +284,8 @@ class _BatchGenerateScreenState extends State<BatchGenerateScreen> {
             taskInfo: _infoController.text.trim().isEmpty
                 ? null
                 : _infoController.text.trim(),
+            teamId: _memberSelection.familyId,
+            userId: _memberSelection.memberId,
           );
       setState(() => _preview = preview);
     } catch (e) {
@@ -311,6 +320,8 @@ class _BatchGenerateScreenState extends State<BatchGenerateScreen> {
             taskInfo: _infoController.text.trim().isEmpty
                 ? null
                 : _infoController.text.trim(),
+            teamId: _memberSelection.familyId,
+            userId: _memberSelection.memberId,
           );
 
       if (mounted) {

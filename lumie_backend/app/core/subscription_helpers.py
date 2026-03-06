@@ -9,9 +9,9 @@ from ..models.user import SubscriptionTier
 TEAM_LIMIT_FREE = 1
 TEAM_LIMIT_PRO = 100
 
-# Task limits by subscription tier
-TASK_LIMIT_FREE = 6
-TASK_LIMIT_PRO = 999999  # Effectively unlimited
+# Task date-range limit by subscription tier (max days into the future)
+TASK_DATE_RANGE_FREE = 7  # Free users: tasks within 7 days only
+TASK_DATE_RANGE_PRO = 999999  # Pro users: no limit
 
 
 def get_team_limit(tier: SubscriptionTier) -> int:
@@ -68,43 +68,26 @@ def raise_subscription_limit_error(
     raise HTTPException(status_code=403, detail=error_response)
 
 
-def get_task_limit(tier: SubscriptionTier) -> int:
+def get_task_date_range(tier: SubscriptionTier) -> int:
     """
-    Get active task limit for subscription tier
+    Get max days into the future for task creation by subscription tier.
 
-    Args:
-        tier: User's subscription tier
-
-    Returns:
-        Maximum number of active tasks allowed
+    Free: 7 days. Pro: unlimited.
     """
     if tier == SubscriptionTier.FREE:
-        return TASK_LIMIT_FREE
-    # Both monthly and annual are "Pro" tier
-    return TASK_LIMIT_PRO
+        return TASK_DATE_RANGE_FREE
+    return TASK_DATE_RANGE_PRO
 
 
-def raise_task_limit_error(
-    user_tier: str,
-    current_count: int,
-    limit: int,
-):
+def raise_task_date_range_error(user_tier: str, max_days: int):
     """
-    Raise standardized subscription limit error for tasks
-
-    Args:
-        user_tier: User's current subscription tier
-        current_count: Current number of active tasks
-        limit: Maximum number of active tasks allowed
-
-    Raises:
-        HTTPException with status 403 and structured error response
+    Raise error when free user tries to create a task beyond the allowed date range.
     """
     error_response = {
         "error": {
             "code": "SUBSCRIPTION_LIMIT_REACHED",
-            "message": f"You've reached your task limit ({current_count}/{limit} active tasks)",
-            "detail": f"Free users can have {TASK_LIMIT_FREE} active tasks. Upgrade to Pro for unlimited tasks.",
+            "message": f"Free plan tasks are limited to {max_days} days from today",
+            "detail": f"Upgrade to Pro to create tasks with no date restriction.",
             "subscription": {
                 "current_tier": user_tier,
                 "required_tier": "pro",

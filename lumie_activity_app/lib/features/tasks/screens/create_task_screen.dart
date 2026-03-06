@@ -9,6 +9,7 @@ import '../../../shared/models/subscription_error.dart';
 import '../../teams/widgets/upgrade_prompt_sheet.dart';
 import '../providers/tasks_provider.dart';
 import '../widgets/task_type_selector.dart';
+import '../widgets/family_member_selector.dart';
 
 class CreateTaskScreen extends StatefulWidget {
   const CreateTaskScreen({super.key});
@@ -31,6 +32,7 @@ class _CreateTaskScreenState extends State<CreateTaskScreen> {
     minute: TimeOfDay.now().minute,
   );
   bool _isLoading = false;
+  FamilyMemberSelection _memberSelection = const FamilyMemberSelection();
 
   @override
   void dispose() {
@@ -127,6 +129,11 @@ class _CreateTaskScreenState extends State<CreateTaskScreen> {
               onChanged: (type) => setState(() => _selectedType = type),
             ),
             const SizedBox(height: 24),
+
+            // Family member selector (for admins)
+            FamilyMemberSelector(
+              onChanged: (selection) => setState(() => _memberSelection = selection),
+            ),
 
             // Timezone info
             Container(
@@ -335,6 +342,8 @@ class _CreateTaskScreenState extends State<CreateTaskScreen> {
             taskInfo: _infoController.text.trim().isEmpty
                 ? null
                 : _infoController.text.trim(),
+            teamId: _memberSelection.familyId,
+            userId: _memberSelection.memberId,
           );
 
       if (mounted) {

@@ -33,11 +33,14 @@ import 'features/advisor/screens/advisor_screen.dart';
 import 'features/heart_rate/providers/heart_rate_provider.dart';
 import 'features/heart_rate/screens/heart_rate_screen.dart';
 import 'features/tasks/providers/tasks_provider.dart';
+import 'features/tasks/providers/admin_tasks_provider.dart';
 import 'features/tasks/screens/tasks_list_screen.dart';
 import 'features/tasks/screens/create_task_screen.dart';
 import 'features/tasks/screens/templates_list_screen.dart';
 import 'features/tasks/screens/create_template_screen.dart';
 import 'features/tasks/screens/batch_generate_screen.dart';
+import 'features/tasks/screens/admin_dashboard_screen.dart';
+import 'features/tasks/screens/reward_calc_screen.dart';
 import 'shared/models/activity_models.dart';
 import 'shared/models/user_models.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -67,6 +70,7 @@ class LumieActivityApp extends StatelessWidget {
         ChangeNotifierProvider(create: (_) => AuthProvider()..init()),
         ChangeNotifierProvider(create: (_) => TeamsProvider()),
         ChangeNotifierProvider(create: (_) => TasksProvider()),
+        ChangeNotifierProvider(create: (_) => AdminTasksProvider()),
         ChangeNotifierProvider(create: (_) => RingProvider()..init()),
         ChangeNotifierProxyProvider<RingProvider, HeartRateProvider>(
           create: (_) => HeartRateProvider(),
@@ -94,6 +98,8 @@ class LumieActivityApp extends StatelessWidget {
           '/tasks/create': (context) => const CreateTaskScreen(),
           '/tasks/templates': (context) => const TemplatesListScreen(),
           '/tasks/templates/create': (context) => const CreateTemplateScreen(),
+          '/tasks/admin': (context) => const AdminDashboardScreen(),
+          '/tasks/reward-calc': (context) => const RewardCalcScreen(),
           '/ring/manage': (context) => const RingManagementScreen(),
           '/heart-rate': (context) => const HeartRateScreen(),
         },

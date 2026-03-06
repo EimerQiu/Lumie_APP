@@ -41,7 +41,8 @@ enum TaskType {
 enum TaskStatus {
   pending,
   completed,
-  overdue;
+  overdue, // Legacy, maps to expired
+  expired;
 
   String get displayName {
     switch (this) {
@@ -50,11 +51,14 @@ enum TaskStatus {
       case TaskStatus.completed:
         return 'Completed';
       case TaskStatus.overdue:
-        return 'Overdue';
+      case TaskStatus.expired:
+        return 'Expired';
     }
   }
 
   static TaskStatus fromString(String value) {
+    // Normalize "overdue" to "expired"
+    if (value == 'overdue') return TaskStatus.expired;
     return TaskStatus.values.firstWhere(
       (e) => e.name == value,
       orElse: () => TaskStatus.pending,
@@ -332,6 +336,131 @@ class TemplateListResponse {
               RepeatTaskTemplate.fromJson(t as Map<String, dynamic>))
           .toList(),
       total: json['total'] as int,
+    );
+  }
+}
+
+// ============ Admin Models ============
+
+class RptTaskItem {
+  final int id;
+  final String name;
+  final int openTime;
+  final int closeTime;
+
+  const RptTaskItem({
+    required this.id,
+    required this.name,
+    required this.openTime,
+    required this.closeTime,
+  });
+
+  factory RptTaskItem.fromJson(Map<String, dynamic> json) {
+    return RptTaskItem(
+      id: json['id'] as int,
+      name: json['name'] as String,
+      openTime: json['open_time'] as int,
+      closeTime: json['close_time'] as int,
+    );
+  }
+}
+
+class AdminTaskData {
+  final String taskId;
+  final String userId;
+  final String username;
+  final String taskType;
+  final String openDatetime;
+  final String closeDatetime;
+  final String status;
+  final String? rpttaskId;
+  final String rpttaskName;
+  final String? rpttaskInfo;
+  final String rpttaskType;
+  final List<RptTaskItem> rpttaskList;
+  final String? smallTaskId;
+  final int minInterval;
+  final String? familyId;
+  final String? familyName;
+
+  const AdminTaskData({
+    required this.taskId,
+    required this.userId,
+    required this.username,
+    required this.taskType,
+    required this.openDatetime,
+    required this.closeDatetime,
+    required this.status,
+    this.rpttaskId,
+    required this.rpttaskName,
+    this.rpttaskInfo,
+    required this.rpttaskType,
+    this.rpttaskList = const [],
+    this.smallTaskId,
+    this.minInterval = 0,
+    this.familyId,
+    this.familyName,
+  });
+
+  factory AdminTaskData.fromJson(Map<String, dynamic> json) {
+    return AdminTaskData(
+      taskId: json['task_id'] as String,
+      userId: json['user_id'] as String,
+      username: json['username'] as String,
+      taskType: json['task_type'] as String,
+      openDatetime: json['open_datetime'] as String,
+      closeDatetime: json['close_datetime'] as String,
+      status: json['status'] as String,
+      rpttaskId: json['rpttask_id'] as String?,
+      rpttaskName: json['rpttask_name'] as String,
+      rpttaskInfo: json['rpttask_info'] as String?,
+      rpttaskType: json['rpttask_type'] as String,
+      rpttaskList: (json['rpttask_list'] as List?)
+              ?.map((e) => RptTaskItem.fromJson(e as Map<String, dynamic>))
+              .toList() ??
+          [],
+      smallTaskId: json['small_task_id'] as String?,
+      minInterval: json['min_interval'] as int? ?? 0,
+      familyId: json['family_id'] as String?,
+      familyName: json['family_name'] as String?,
+    );
+  }
+
+  /// Status badge color
+  bool get isCompleted => status == 'completed';
+  bool get isPending => status == 'pending';
+  bool get isExpired => status == 'expired';
+
+  /// Formatted time window for display
+  String get timeWindowText {
+    try {
+      final openParts = openDatetime.split(' ');
+      final closeParts = closeDatetime.split(' ');
+      if (openParts.length >= 2 && closeParts.length >= 2) {
+        return '${openParts[0]} ${openParts[1]} - ${closeParts[0]} ${closeParts[1]}';
+      }
+    } catch (_) {}
+    return '$openDatetime - $closeDatetime';
+  }
+}
+
+class AdminTaskListResponse {
+  final List<AdminTaskData> previousTasks;
+  final List<AdminTaskData> upcomingTasks;
+
+  const AdminTaskListResponse({
+    required this.previousTasks,
+    required this.upcomingTasks,
+  });
+
+  factory AdminTaskListResponse.fromJson(Map<String, dynamic> json) {
+    return AdminTaskListResponse(
+      previousTasks: (json['previous_tasks'] as List)
+          .map((t) => AdminTaskData.fromJson(t as Map<String, dynamic>))
+          .toList(),
+      upcomingTasks: (json['upcoming_tasks'] as List)
+          .map((t) => AdminTaskData.fromJson(t as Map<String, dynamic>))
+          .toList(),
     );
   }
 }

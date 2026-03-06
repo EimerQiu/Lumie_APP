@@ -23,7 +23,8 @@ class TaskStatus(str, Enum):
     """Task completion status"""
     PENDING = "pending"
     COMPLETED = "completed"
-    OVERDUE = "overdue"
+    OVERDUE = "overdue"  # Legacy alias
+    EXPIRED = "expired"
 
 
 # ============ Task Models ============
@@ -122,3 +123,45 @@ class BatchGenerateResponse(BaseModel):
     """Response for batch task generation"""
     created_count: int
     tasks: List[TaskResponse]
+
+
+# ============ Admin Models ============
+
+class RptTaskItem(BaseModel):
+    """Time-window subtask from template"""
+    id: int
+    name: str
+    open_time: int  # Minutes from midnight
+    close_time: int  # Minutes from midnight
+
+
+class AdminTaskData(BaseModel):
+    """Admin view task with enriched data"""
+    task_id: str
+    user_id: str
+    username: str
+    task_type: str
+    open_datetime: str
+    close_datetime: str
+    status: str
+    rpttask_id: Optional[str] = None
+    rpttask_name: str
+    rpttask_info: Optional[str] = None
+    rpttask_type: str
+    rpttask_list: List[RptTaskItem] = []
+    small_task_id: Optional[str] = None
+    min_interval: int = 0
+    family_id: Optional[str] = None
+    family_name: Optional[str] = None
+
+
+class AdminTaskListResponse(BaseModel):
+    """Response for admin task list"""
+    previous_tasks: List[AdminTaskData]
+    upcoming_tasks: List[AdminTaskData]
+
+
+class AdminTaskCompleteRequest(BaseModel):
+    """Request to complete a task as admin"""
+    task_id: str
+    time_zone: str = "UTC"

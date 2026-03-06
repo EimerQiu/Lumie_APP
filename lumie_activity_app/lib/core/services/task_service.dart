@@ -291,4 +291,96 @@ class TaskService {
     }
     _handleError(response, 'generate tasks');
   }
+
+  // ============ Admin Operations ============
+
+  /// Get admin task list (global view across teams)
+  Future<AdminTaskListResponse> getAdminTaskList({
+    String? email,
+    String timeZone = 'UTC',
+    String? currentTime,
+    int previousOffset = 0,
+    int upcomingOffset = 0,
+  }) async {
+    if (_token == null) throw Exception('Not authenticated');
+
+    final queryParams = <String, String>{
+      'time_zone': timeZone,
+      'previous_offset': previousOffset.toString(),
+      'upcoming_offset': upcomingOffset.toString(),
+    };
+    if (email != null && email.isNotEmpty) queryParams['email'] = email;
+    if (currentTime != null) queryParams['current_time'] = currentTime;
+
+    final uri = Uri.parse('${ApiConstants.baseUrl}${ApiConstants.adminTaskList}')
+        .replace(queryParameters: queryParams);
+
+    final response = await http.get(uri, headers: _headers);
+
+    if (response.statusCode == 200) {
+      return AdminTaskListResponse.fromJson(json.decode(response.body));
+    }
+    _handleError(response, 'get admin tasks');
+  }
+
+  /// Admin complete a task
+  Future<void> adminCompleteTask({
+    required String taskId,
+    String timeZone = 'UTC',
+  }) async {
+    if (_token == null) throw Exception('Not authenticated');
+
+    final response = await http.post(
+      Uri.parse('${ApiConstants.baseUrl}${ApiConstants.adminTaskComplete}'),
+      headers: _headers,
+      body: json.encode({
+        'task_id': taskId,
+        'time_zone': timeZone,
+      }),
+    );
+
+    if (response.statusCode == 200) return;
+    _handleError(response, 'admin complete task');
+  }
+
+  /// Admin delete a task
+  Future<void> adminDeleteTask(String taskId) async {
+    if (_token == null) throw Exception('Not authenticated');
+
+    final response = await http.delete(
+      Uri.parse('${ApiConstants.baseUrl}${ApiConstants.adminDeleteTask}/$taskId'),
+      headers: _headers,
+    );
+
+    if (response.statusCode == 200) return;
+    _handleError(response, 'admin delete task');
+  }
+
+  /// Get tasks for reward calculation
+  Future<List<AdminTaskData>> getRewardCalcTasks({
+    required String email,
+    String timeZone = 'UTC',
+    int offset = 0,
+  }) async {
+    if (_token == null) throw Exception('Not authenticated');
+
+    final queryParams = <String, String>{
+      'email': email,
+      'time_zone': timeZone,
+      'offset': offset.toString(),
+    };
+
+    final uri = Uri.parse('${ApiConstants.baseUrl}${ApiConstants.adminRewardCalc}')
+        .replace(queryParameters: queryParams);
+
+    final response = await http.get(uri, headers: _headers);
+
+    if (response.statusCode == 200) {
+      final data = json.decode(response.body) as List;
+      return data
+          .map((t) => AdminTaskData.fromJson(t as Map<String, dynamic>))
+          .toList();
+    }
+    _handleError(response, 'get reward calc tasks');
+  }
 }

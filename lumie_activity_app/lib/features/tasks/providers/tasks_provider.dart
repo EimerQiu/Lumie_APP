@@ -24,15 +24,36 @@ class TasksProvider extends ChangeNotifier {
   List<Task> get tasks => _tasks;
   List<Task> get pendingTasks =>
       _tasks.where((t) => t.status == TaskStatus.pending).toList();
-  List<Task> get overdueTasks =>
-      _tasks.where((t) => t.status == TaskStatus.overdue).toList();
+  List<Task> get expiredTasks =>
+      _tasks.where((t) => t.status == TaskStatus.expired).toList();
   List<Task> get completedTasks =>
       _tasks.where((t) => t.status == TaskStatus.completed).toList();
 
-  /// Display list & limit counting: only pending tasks (hide overdue)
-  List<Task> get activeTasks => _tasks
-      .where((t) => t.status == TaskStatus.pending)
-      .toList();
+  /// Display list & limit counting: only pending tasks within open window
+  List<Task> get activeTasks {
+    final now = DateTime.now();
+    return _tasks.where((t) {
+      // Must be pending status
+      if (t.status != TaskStatus.pending) return false;
+
+      // Must be within open window
+      try {
+        final open = DateTime.parse(_ensureUtcSuffix(t.openDatetime.replaceAll(' ', 'T'))).toLocal();
+        final close = DateTime.parse(_ensureUtcSuffix(t.closeDatetime.replaceAll(' ', 'T'))).toLocal();
+        return !now.isBefore(open) && !now.isAfter(close);
+      } catch (_) {
+        return false;
+      }
+    }).toList();
+  }
+
+  /// Helper to add UTC suffix to timestamps (matches task_models.dart)
+  String _ensureUtcSuffix(String dateStr) {
+    if (!dateStr.endsWith('Z') && !dateStr.contains('+')) {
+      return '${dateStr}Z';
+    }
+    return dateStr;
+  }
   List<RepeatTaskTemplate> get templates => _templates;
   String? get errorMessage => _errorMessage;
   bool get isLoading => _state == TasksState.loading;
@@ -44,19 +65,12 @@ class TasksProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Count of pending tasks for subscription limit checking
+  /// Count of pending tasks for display
   int get activeTaskCount => activeTasks.length;
 
-  /// Check if user has reached task limit
-  bool get hasReachedTaskLimit {
-    if (_userTier == SubscriptionTier.free) {
-      return activeTaskCount >= 6;
-    }
-    return false; // Pro = unlimited
-  }
-
-  /// Check if user can create more tasks
-  bool get canCreateTask => !hasReachedTaskLimit;
+  /// Free users can only create tasks within 7 days
+  int get maxTaskDays => _userTier == SubscriptionTier.free ? 7 : 999999;
+  bool get isFreeUser => _userTier == SubscriptionTier.free;
 
   /// Get device timezone with fallback
   String _getDeviceTimezone() {
@@ -90,18 +104,18 @@ class TasksProvider extends ChangeNotifier {
     }
   }
 
-  /// Task limit text for UI display
+  /// Task info text for UI display
   String get taskLimitText {
     if (_userTier == SubscriptionTier.free) {
-      return '$activeTaskCount/6 tasks';
+      return '$activeTaskCount tasks (7-day range)';
     }
     return '$activeTaskCount tasks';
   }
 
   /// Banner message for subscription status
   String? get subscriptionBannerMessage {
-    if (_userTier == SubscriptionTier.free && hasReachedTaskLimit) {
-      return 'Task limit reached ($activeTaskCount/6). Upgrade to Pro for unlimited tasks.';
+    if (_userTier == SubscriptionTier.free) {
+      return 'Free plan: tasks limited to 7 days from today. Upgrade to Pro for no limits.';
     }
     return null;
   }
