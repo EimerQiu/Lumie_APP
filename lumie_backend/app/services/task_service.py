@@ -368,16 +368,24 @@ class TaskService:
                 detail="Task is already completed"
             )
 
+        # Set done timestamp to close_datetime so task shows as "completed" not "expired"
+        # Parse close_datetime and convert to UTC timestamp
+        try:
+            close_dt = datetime.strptime(task["close_datetime"], "%Y-%m-%d %H:%M")
+        except:
+            # Fallback to current time if parsing fails
+            close_dt = datetime.utcnow()
+
         now = datetime.utcnow()
         await db.tasks.update_one(
             {"task_id": task_id},
             {"$set": {
-                "done": now,  # done timestamp indicates completion
+                "done": close_dt,  # Set done to close_datetime for proper status calculation
                 "updated_at": now,
             }}
         )
 
-        task["done"] = now
+        task["done"] = close_dt
         task["updated_at"] = now
 
         return self._task_doc_to_response(task)
