@@ -87,20 +87,18 @@ class AdminTaskService:
                         close_time=int(close_parts[0]) * 60 + int(close_parts[1]),
                     ))
 
-        # Compute expired status at query time
-        task_status = task["status"]
-        if task_status == TaskStatus.PENDING.value:
-            now_str = datetime.utcnow().strftime("%Y-%m-%d %H:%M")
-            if task["close_datetime"] < now_str:
-                task_status = TaskStatus.EXPIRED.value
-                # Update in DB lazily
-                await db.tasks.update_one(
-                    {"task_id": task["task_id"]},
-                    {"$set": {"status": TaskStatus.EXPIRED.value, "updated_at": datetime.utcnow()}}
-                )
-        # Normalize legacy "overdue" to "expired"
-        if task_status == TaskStatus.OVERDUE.value:
+        # Compute status based on done field and close_datetime
+        # done field exists → completed
+        # done doesn't exist + close_datetime passed → expired
+        # done doesn't exist + close_datetime not passed → pending
+        now_str = datetime.utcnow().strftime("%Y-%m-%d %H:%M")
+
+        if task.get("done"):
+            task_status = TaskStatus.COMPLETED.value
+        elif task["close_datetime"] < now_str:
             task_status = TaskStatus.EXPIRED.value
+        else:
+            task_status = TaskStatus.PENDING.value
 
         return AdminTaskData(
             task_id=task["task_id"],
@@ -282,11 +280,16 @@ class AdminTaskService:
                 detail="User not found with that email",
             )
 
-        # Only return tasks that have closed (close_datetime <= now)
+        # Return tasks eligible for reward calculation:
+        # - Completed (done field exists), OR
+        # - Expired (close_datetime <= now)
         now_str = datetime.utcnow().strftime("%Y-%m-%d %H:%M")
         cursor = db.tasks.find({
             "user_id": target_user_id,
-            "close_datetime": {"$lte": now_str},
+            "$or": [
+                {"done": {"$exists": True}},  # Task is completed
+                {"close_datetime": {"$lte": now_str}},  # Task window has closed
+            ]
         }).sort("close_datetime", -1).skip(offset).limit(PAGE_SIZE)
 
         tasks = await cursor.to_list(length=PAGE_SIZE)
