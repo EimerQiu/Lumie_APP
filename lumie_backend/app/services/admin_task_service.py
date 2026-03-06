@@ -283,7 +283,7 @@ class AdminTaskService:
 
         cursor = db.tasks.find({
             "user_id": target_user_id,
-        }).sort("close_datetime", 1).skip(offset).limit(PAGE_SIZE)
+        }).sort("open_datetime", -1).skip(offset).limit(PAGE_SIZE)
 
         tasks = await cursor.to_list(length=PAGE_SIZE)
         return [await self._enrich_task(t) for t in tasks]
