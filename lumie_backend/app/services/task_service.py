@@ -63,6 +63,19 @@ class TaskService:
 
     def _task_doc_to_response(self, doc: dict) -> TaskResponse:
         """Convert a MongoDB task document to TaskResponse"""
+        # Calculate status based on done field and close_datetime
+        # done field exists → completed
+        # done doesn't exist + close_datetime passed → expired
+        # done doesn't exist + close_datetime not passed → pending
+        now_str = datetime.utcnow().strftime("%Y-%m-%d %H:%M")
+
+        if doc.get("done"):
+            task_status = TaskStatus.COMPLETED
+        elif doc["close_datetime"] < now_str:
+            task_status = TaskStatus.EXPIRED
+        else:
+            task_status = TaskStatus.PENDING
+
         return TaskResponse(
             task_id=doc["task_id"],
             task_name=doc["task_name"],
@@ -73,9 +86,9 @@ class TaskService:
             team_id=doc.get("team_id"),
             created_by=doc["created_by"],
             rpttask_id=doc.get("rpttask_id"),
-            status=TaskStatus(doc["status"]),
+            status=task_status,
             task_info=doc.get("task_info"),
-            completed_at=self._format_datetime(doc["completed_at"]) if doc.get("completed_at") else None,
+            completed_at=self._format_datetime(doc["done"]) if doc.get("done") else None,
             created_at=self._format_datetime(doc["created_at"]),
             updated_at=self._format_datetime(doc["updated_at"]),
         )
@@ -161,20 +174,10 @@ class TaskService:
         updated_tasks = []
 
         for task in tasks:
-            if task["status"] == TaskStatus.PENDING.value and task["close_datetime"] < now_str:
-                # Mark as expired in DB
-                await db.tasks.update_one(
-                    {"task_id": task["task_id"]},
-                    {"$set": {"status": TaskStatus.EXPIRED.value, "updated_at": datetime.utcnow()}}
-                )
-                task["status"] = TaskStatus.EXPIRED.value
-            elif task["status"] == TaskStatus.OVERDUE.value:
-                # Normalize legacy "overdue" to "expired"
-                await db.tasks.update_one(
-                    {"task_id": task["task_id"]},
-                    {"$set": {"status": TaskStatus.EXPIRED.value, "updated_at": datetime.utcnow()}}
-                )
-                task["status"] = TaskStatus.EXPIRED.value
+            # No need to update DB - status is calculated from done field and close_datetime
+            # done field exists → completed
+            # done doesn't exist + close_datetime passed → expired (calculated at query time)
+            # done doesn't exist + close_datetime not passed → pending (calculated at query time)
             updated_tasks.append(task)
 
         return updated_tasks
@@ -358,7 +361,8 @@ class TaskService:
                 detail="Only the assigned user can complete this task"
             )
 
-        if task["status"] == TaskStatus.COMPLETED.value:
+        # Check if already completed (done field exists)
+        if task.get("done"):
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail="Task is already completed"
@@ -368,14 +372,12 @@ class TaskService:
         await db.tasks.update_one(
             {"task_id": task_id},
             {"$set": {
-                "status": TaskStatus.COMPLETED.value,
-                "completed_at": now,
+                "done": now,  # done timestamp indicates completion
                 "updated_at": now,
             }}
         )
 
-        task["status"] = TaskStatus.COMPLETED.value
-        task["completed_at"] = now
+        task["done"] = now
         task["updated_at"] = now
 
         return self._task_doc_to_response(task)

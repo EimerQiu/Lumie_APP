@@ -208,15 +208,15 @@ class AdminTaskService:
                     detail="You do not have admin authority over this task's user",
                 )
 
-        if task["status"] == TaskStatus.COMPLETED.value:
+        # Check if already completed (done field exists)
+        if task.get("done"):
             return {"message": "Task is already completed"}
 
         now = datetime.utcnow()
         await db.tasks.update_one(
             {"task_id": task_id},
             {"$set": {
-                "status": TaskStatus.COMPLETED.value,
-                "completed_at": now,
+                "done": now,  # done timestamp indicates completion
                 "updated_at": now,
             }}
         )
