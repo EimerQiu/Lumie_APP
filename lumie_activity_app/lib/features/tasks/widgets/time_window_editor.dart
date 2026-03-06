@@ -2,6 +2,7 @@
 
 import 'package:flutter/material.dart';
 import '../../../core/theme/app_colors.dart';
+import '../../../shared/widgets/scroll_datetime_picker.dart';
 
 class TimeWindowEditorData {
   String name;
@@ -111,8 +112,8 @@ class TimeWindowEditor extends StatelessWidget {
                   label: 'Start',
                   time: data.openTime,
                   onTap: () async {
-                    final picked = await showTimePicker(
-                      context: context,
+                    final picked = await showScrollTimePicker(
+                      context,
                       initialTime: data.openTime,
                     );
                     if (picked != null) {
@@ -128,8 +129,8 @@ class TimeWindowEditor extends StatelessWidget {
                   label: 'End',
                   time: data.closeTime,
                   onTap: () async {
-                    final picked = await showTimePicker(
-                      context: context,
+                    final picked = await showScrollTimePicker(
+                      context,
                       initialTime: data.closeTime,
                     );
                     if (picked != null) {

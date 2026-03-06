@@ -21,7 +21,7 @@ class _CreateTemplateScreenState extends State<CreateTemplateScreen> {
   final _formKey = GlobalKey<FormState>();
   final _nameController = TextEditingController();
   final _descController = TextEditingController();
-  final _intervalController = TextEditingController(text: '0');
+  final _intervalController = TextEditingController(text: '60');
 
   TaskType _selectedType = TaskType.medicine;
   List<TimeWindowEditorData> _windows = [TimeWindowEditorData(name: 'Morning')];

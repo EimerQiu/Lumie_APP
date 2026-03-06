@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../shared/models/subscription_error.dart';
+import '../../../shared/widgets/scroll_datetime_picker.dart';
 import '../../teams/widgets/upgrade_prompt_sheet.dart';
 import '../providers/tasks_provider.dart';
 import '../widgets/family_member_selector.dart';
@@ -82,9 +83,9 @@ class _BatchGenerateScreenState extends State<BatchGenerateScreen> {
             onChanged: (selection) => setState(() => _memberSelection = selection),
           ),
 
-          // Date range
+          // Start date
           const Text(
-            'Date Range',
+            'Start Date',
             style: TextStyle(
               fontSize: 14,
               fontWeight: FontWeight.w500,
@@ -92,53 +93,44 @@ class _BatchGenerateScreenState extends State<BatchGenerateScreen> {
             ),
           ),
           const SizedBox(height: 8),
-          Row(
-            children: [
-              Expanded(
-                child: _DateButton(
-                  label: 'Start',
-                  date: _startDate,
-                  onTap: () async {
-                    final picked = await showDatePicker(
-                      context: context,
-                      initialDate: _startDate,
-                      firstDate: DateTime.now(),
-                      lastDate: DateTime.now().add(const Duration(days: 365)),
-                    );
-                    if (picked != null) {
-                      setState(() {
-                        _startDate = picked;
-                        _preview = null;
-                      });
-                    }
-                  },
-                ),
-              ),
-              const Padding(
-                padding: EdgeInsets.symmetric(horizontal: 8),
-                child: Text('to', style: TextStyle(color: AppColors.textSecondary)),
-              ),
-              Expanded(
-                child: _DateButton(
-                  label: 'End',
-                  date: _endDate,
-                  onTap: () async {
-                    final picked = await showDatePicker(
-                      context: context,
-                      initialDate: _endDate,
-                      firstDate: _startDate,
-                      lastDate: DateTime.now().add(const Duration(days: 365)),
-                    );
-                    if (picked != null) {
-                      setState(() {
-                        _endDate = picked;
-                        _preview = null;
-                      });
-                    }
-                  },
-                ),
-              ),
-            ],
+          ScrollDateTimePicker(
+            value: _startDate,
+            minimumDate: DateTime.now(),
+            maximumDate: DateTime.now().add(const Duration(days: 365)),
+            mode: PickerMode.dateOnly,
+            onChanged: (dt) {
+              setState(() {
+                _startDate = dt;
+                if (_startDate.isAfter(_endDate)) {
+                  _endDate = _startDate.add(const Duration(days: 6));
+                }
+                _preview = null;
+              });
+            },
+          ),
+          const SizedBox(height: 16),
+
+          // End date
+          const Text(
+            'End Date',
+            style: TextStyle(
+              fontSize: 14,
+              fontWeight: FontWeight.w500,
+              color: AppColors.textSecondary,
+            ),
+          ),
+          const SizedBox(height: 8),
+          ScrollDateTimePicker(
+            value: _endDate,
+            minimumDate: _startDate,
+            maximumDate: DateTime.now().add(const Duration(days: 365)),
+            mode: PickerMode.dateOnly,
+            onChanged: (dt) {
+              setState(() {
+                _endDate = dt;
+                _preview = null;
+              });
+            },
           ),
           const SizedBox(height: 8),
           Text(
@@ -353,61 +345,5 @@ class _BatchGenerateScreenState extends State<BatchGenerateScreen> {
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
-  }
-}
-
-class _DateButton extends StatelessWidget {
-  final String label;
-  final DateTime date;
-  final VoidCallback onTap;
-
-  const _DateButton({
-    required this.label,
-    required this.date,
-    required this.onTap,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final dateStr =
-        '${date.month.toString().padLeft(2, '0')}/${date.day.toString().padLeft(2, '0')}';
-
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
-        decoration: BoxDecoration(
-          border: Border.all(color: AppColors.surfaceLight),
-          borderRadius: BorderRadius.circular(8),
-        ),
-        child: Row(
-          children: [
-            const Icon(Icons.calendar_today,
-                size: 16, color: AppColors.textSecondary),
-            const SizedBox(width: 8),
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  label,
-                  style: const TextStyle(
-                    fontSize: 11,
-                    color: AppColors.textLight,
-                  ),
-                ),
-                Text(
-                  dateStr,
-                  style: const TextStyle(
-                    fontSize: 15,
-                    fontWeight: FontWeight.w500,
-                    color: AppColors.textPrimary,
-                  ),
-                ),
-              ],
-            ),
-          ],
-        ),
-      ),
-    );
   }
 }

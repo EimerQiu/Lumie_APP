@@ -29,31 +29,8 @@ class TasksProvider extends ChangeNotifier {
   List<Task> get completedTasks =>
       _tasks.where((t) => t.status == TaskStatus.completed).toList();
 
-  /// Display list & limit counting: only pending tasks within open window
-  List<Task> get activeTasks {
-    final now = DateTime.now();
-    return _tasks.where((t) {
-      // Must be pending status
-      if (t.status != TaskStatus.pending) return false;
-
-      // Must be within open window
-      try {
-        final open = DateTime.parse(_ensureUtcSuffix(t.openDatetime.replaceAll(' ', 'T'))).toLocal();
-        final close = DateTime.parse(_ensureUtcSuffix(t.closeDatetime.replaceAll(' ', 'T'))).toLocal();
-        return !now.isBefore(open) && !now.isAfter(close);
-      } catch (_) {
-        return false;
-      }
-    }).toList();
-  }
-
-  /// Helper to add UTC suffix to timestamps (matches task_models.dart)
-  String _ensureUtcSuffix(String dateStr) {
-    if (!dateStr.endsWith('Z') && !dateStr.contains('+')) {
-      return '${dateStr}Z';
-    }
-    return dateStr;
-  }
+  /// Display list: backend already filters to within-window + not-done tasks
+  List<Task> get activeTasks => _tasks;
   List<RepeatTaskTemplate> get templates => _templates;
   String? get errorMessage => _errorMessage;
   bool get isLoading => _state == TasksState.loading;
@@ -121,7 +98,7 @@ class TasksProvider extends ChangeNotifier {
   }
 
   /// Load tasks for current user
-  Future<void> loadTasks({String? status, String? date}) async {
+  Future<void> loadTasks({String? date}) async {
     _state = TasksState.loading;
     _errorMessage = null;
     notifyListeners();
@@ -135,7 +112,6 @@ class TasksProvider extends ChangeNotifier {
       }
 
       final response = await _taskService.getTasks(
-        status: status,
         date: date,
         timezone: deviceTimezone,
       );

@@ -94,7 +94,7 @@ async def batch_generate(
     """
     Generate tasks from template for a date range
 
-    - **Subscription limits:** Free users limited to 6 active tasks
+    - **Subscription limits:** Free users limited to 7-day date range
     - Creates tasks for each time window in each day of the range
     """
     return await task_service.batch_generate(user_id, data)
@@ -110,8 +110,8 @@ async def create_task(
     """
     Create a new task
 
-    - **Subscription limits:** Free users limited to 6 active tasks, Pro unlimited
-    - Returns 403 with subscription error if limit reached
+    - **Subscription limits:** Free users limited to 7-day date range, Pro unlimited
+    - Returns 403 with subscription error if date range exceeded
     - For team tasks: set team_id and user_id (must be team admin)
     """
     return await task_service.create_task(user_id, data)
@@ -119,7 +119,6 @@ async def create_task(
 
 @router.get("", response_model=TaskListResponse)
 async def get_tasks(
-    status_filter: Optional[str] = Query(None, alias="status"),
     date: Optional[str] = Query(None, description="yyyy-MM-dd"),
     timezone: Optional[str] = Query(None, description="User's timezone (e.g., America/Los_Angeles). If not provided, uses profile timezone."),
     user_id: str = Depends(get_current_user_id)
@@ -127,12 +126,11 @@ async def get_tasks(
     """
     List tasks for current user
 
-    - Optional filters: status (pending/completed/overdue), date (yyyy-MM-dd)
-    - Optional timezone: use current device timezone, falls back to profile timezone if not provided
-    - Automatically marks overdue tasks based on timezone
+    - Default: returns only tasks within current open/close window and not done
+    - Optional date filter: returns all tasks for that date (yyyy-MM-dd)
     - Sorted by open_datetime ascending
     """
-    return await task_service.get_tasks(user_id, status_filter=status_filter, date=date, timezone=timezone)
+    return await task_service.get_tasks(user_id, date=date, timezone=timezone)
 
 
 @router.post("/{task_id}/complete", response_model=TaskResponse)

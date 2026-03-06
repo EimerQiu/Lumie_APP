@@ -82,7 +82,7 @@ class TemplateCreate(BaseModel):
     template_name: str = Field(..., min_length=1, max_length=200)
     template_type: TaskType = Field(default=TaskType.MEDICINE)
     description: Optional[str] = Field(None, max_length=500)
-    min_interval: int = Field(default=0, ge=0, description="Min interval in minutes")
+    min_interval: int = Field(default=60, ge=0, description="Min interval in minutes")
     time_window_list: List[TimeWindow] = Field(..., min_length=1)
 
 

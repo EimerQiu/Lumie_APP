@@ -136,52 +136,6 @@ class TaskService:
         tier_value = subscription.get("tier", "free")
         return SubscriptionTier(tier_value), tier_value
 
-    async def get_active_task_count(self, user_id: str) -> int:
-        """
-        Count number of active (pending) tasks for user
-
-        Args:
-            user_id: User ID to count tasks for
-
-        Returns:
-            Number of tasks where status is pending (overdue tasks don't count towards limit)
-        """
-        db = get_database()
-        count = await db.tasks.count_documents({
-            "user_id": user_id,
-            "status": TaskStatus.PENDING.value
-        })
-        return count
-
-    async def _check_overdue_tasks(self, tasks: List[dict], user_timezone: str = "UTC") -> List[dict]:
-        """
-        Lazily mark tasks as overdue if their close_datetime has passed
-        Tasks are stored in UTC, so comparison is done in UTC regardless of user timezone
-
-        Args:
-            tasks: List of task documents (with times in UTC)
-            user_timezone: User's timezone (ignored, kept for backward compatibility)
-
-        Returns:
-            Updated task documents with overdue status applied
-        """
-        db = get_database()
-
-        # Get current time in UTC
-        now_utc = datetime.utcnow()
-        now_str = now_utc.strftime("%Y-%m-%d %H:%M")
-
-        updated_tasks = []
-
-        for task in tasks:
-            # No need to update DB - status is calculated from done field and close_datetime
-            # done field exists → completed
-            # done doesn't exist + close_datetime passed → expired (calculated at query time)
-            # done doesn't exist + close_datetime not passed → pending (calculated at query time)
-            updated_tasks.append(task)
-
-        return updated_tasks
-
     async def create_task(self, user_id: str, data: TaskCreate) -> TaskResponse:
         """
         Create a new task with subscription limit check
@@ -280,16 +234,17 @@ class TaskService:
     async def get_tasks(
         self,
         user_id: str,
-        status_filter: Optional[str] = None,
         date: Optional[str] = None,
         timezone: Optional[str] = None,
     ) -> TaskListResponse:
         """
-        Get tasks for user with optional filters
+        Get tasks for user
+
+        Default: returns only tasks within current open/close window and not done.
+        With date filter: returns all tasks for that date.
 
         Args:
             user_id: User ID
-            status_filter: Filter by status (pending, completed, overdue)
             date: Filter by date (yyyy-MM-dd)
             timezone: User's current timezone (e.g., from device). If not provided, uses profile timezone.
 
@@ -305,24 +260,21 @@ class TaskService:
             profile = await db.profiles.find_one({"user_id": user_id})
             user_timezone = profile.get("timezone", "UTC") if profile else "UTC"
 
-        query = {"user_id": user_id}
+        now_str = datetime.utcnow().strftime("%Y-%m-%d %H:%M")
 
-        if status_filter:
-            query["status"] = status_filter
+        query: dict = {"user_id": user_id}
 
         if date:
             # Match tasks whose window overlaps with the given date
             query["open_datetime"] = {"$regex": f"^{date}"}
+        else:
+            # Default: only tasks within current window and not done
+            query["done"] = {"$exists": False}
+            query["open_datetime"] = {"$lte": now_str}
+            query["close_datetime"] = {"$gt": now_str}
 
         cursor = db.tasks.find(query).sort("open_datetime", 1)
         tasks = await cursor.to_list(length=None)
-
-        # Lazily update overdue status using user's timezone
-        tasks = await self._check_overdue_tasks(tasks, user_timezone=user_timezone)
-
-        # Apply status filter again after overdue check (in case filter was for a specific status)
-        if status_filter:
-            tasks = [t for t in tasks if t["status"] == status_filter]
 
         task_responses = [self._task_doc_to_response(t) for t in tasks]
 
@@ -388,7 +340,64 @@ class TaskService:
         task["done"] = close_dt
         task["updated_at"] = now
 
+        # Min-interval postpone logic: only for template-generated tasks
+        await self._apply_min_interval_postpone(db, task, now)
+
         return self._task_doc_to_response(task)
+
+    async def _apply_min_interval_postpone(self, db, task: dict, now: datetime) -> None:
+        """
+        Min-interval postpone: if the completed task was generated from a template,
+        check if the next task in the same series is too close and postpone it.
+
+        Only modifies open_datetime of the next task; does not cascade.
+        """
+        rpttask_id = task.get("rpttask_id")
+        if not rpttask_id:
+            return
+
+        # Look up the template to get min_interval
+        template = await db.task_templates.find_one({"id": rpttask_id})
+        if not template:
+            return
+
+        min_interval = template.get("min_interval", 0)
+        if min_interval <= 0:
+            return
+
+        now_str = now.strftime("%Y-%m-%d %H:%M")
+
+        # Find the next open task in the same series
+        next_task = await db.tasks.find_one(
+            {
+                "user_id": task["user_id"],
+                "rpttask_id": rpttask_id,
+                "open_datetime": {"$gt": now_str},
+                "done": {"$exists": False},
+            },
+            sort=[("open_datetime", 1)],
+        )
+        if not next_task:
+            return
+
+        # Check if time gap is less than min_interval
+        next_open = datetime.strptime(next_task["open_datetime"], "%Y-%m-%d %H:%M")
+        gap_minutes = (next_open - now).total_seconds() / 60
+
+        if gap_minutes >= min_interval:
+            return
+
+        # Postpone: set open_datetime to now + min_interval
+        new_open = now + timedelta(minutes=min_interval)
+        new_open_str = new_open.strftime("%Y-%m-%d %H:%M")
+
+        await db.tasks.update_one(
+            {"task_id": next_task["task_id"]},
+            {"$set": {
+                "open_datetime": new_open_str,
+                "updated_at": now,
+            }}
+        )
 
     async def delete_task(self, task_id: str, user_id: str) -> dict:
         """

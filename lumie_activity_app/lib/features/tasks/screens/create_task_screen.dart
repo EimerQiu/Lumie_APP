@@ -6,6 +6,7 @@ import 'package:timezone/timezone.dart' as tz;
 import '../../../core/theme/app_colors.dart';
 import '../../../shared/models/task_models.dart';
 import '../../../shared/models/subscription_error.dart';
+import '../../../shared/widgets/scroll_datetime_picker.dart';
 import '../../teams/widgets/upgrade_prompt_sheet.dart';
 import '../providers/tasks_provider.dart';
 import '../widgets/task_type_selector.dart';
@@ -24,15 +25,18 @@ class _CreateTaskScreenState extends State<CreateTaskScreen> {
   final _infoController = TextEditingController();
 
   TaskType _selectedType = TaskType.medicine;
-  DateTime _startDate = DateTime.now();
-  TimeOfDay _startTime = TimeOfDay.now();
-  DateTime _endDate = DateTime.now();
-  TimeOfDay _endTime = TimeOfDay(
-    hour: (TimeOfDay.now().hour + 1) % 24,
-    minute: TimeOfDay.now().minute,
-  );
+  late DateTime _startDateTime;
+  late DateTime _endDateTime;
   bool _isLoading = false;
   FamilyMemberSelection _memberSelection = const FamilyMemberSelection();
+
+  @override
+  void initState() {
+    super.initState();
+    final now = DateTime.now();
+    _startDateTime = DateTime(now.year, now.month, now.day, now.hour, now.minute);
+    _endDateTime = _startDateTime.add(const Duration(hours: 1));
+  }
 
   @override
   void dispose() {
@@ -41,26 +45,19 @@ class _CreateTaskScreenState extends State<CreateTaskScreen> {
     super.dispose();
   }
 
-  String _formatDate(DateTime date) =>
-      '${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
-
-  String _formatTime(TimeOfDay time) =>
-      '${time.hour.toString().padLeft(2, '0')}:${time.minute.toString().padLeft(2, '0')}';
-
-  String _formatDatetime(DateTime date, TimeOfDay time) =>
-      '${_formatDate(date)} ${_formatTime(time)}';
+  String _formatDatetime(DateTime dt) {
+    final d = '${dt.year}-${dt.month.toString().padLeft(2, '0')}-${dt.day.toString().padLeft(2, '0')}';
+    final t = '${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
+    return '$d $t';
+  }
 
   String _getDetectedTimezone() {
     try {
-      // Try to get the timezone name from the timezone package
       String tzName = tz.local.name;
-      // If it's just 'UTC', try to get a more specific timezone
       if (tzName == 'UTC' || tzName.isEmpty) {
-        // Get UTC offset from DateTime
         final now = DateTime.now();
         final offset = now.timeZoneOffset;
         final offsetHours = offset.inHours;
-
         final Map<int, String> offsetMap = {
           -8: 'America/Los_Angeles',
           -7: 'America/Denver',
@@ -147,11 +144,7 @@ class _CreateTaskScreenState extends State<CreateTaskScreen> {
               ),
               child: Row(
                 children: [
-                  const Icon(
-                    Icons.public,
-                    size: 20,
-                    color: AppColors.textOnYellow,
-                  ),
+                  const Icon(Icons.public, size: 20, color: AppColors.textOnYellow),
                   const SizedBox(width: 12),
                   Expanded(
                     child: Column(
@@ -159,20 +152,12 @@ class _CreateTaskScreenState extends State<CreateTaskScreen> {
                       children: [
                         const Text(
                           'Timezone',
-                          style: TextStyle(
-                            fontSize: 12,
-                            fontWeight: FontWeight.w500,
-                            color: AppColors.textSecondary,
-                          ),
+                          style: TextStyle(fontSize: 12, fontWeight: FontWeight.w500, color: AppColors.textSecondary),
                         ),
                         const SizedBox(height: 4),
                         Text(
                           _getDetectedTimezone(),
-                          style: const TextStyle(
-                            fontSize: 14,
-                            fontWeight: FontWeight.w600,
-                            color: AppColors.textOnYellow,
-                          ),
+                          style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: AppColors.textOnYellow),
                         ),
                       ],
                     ),
@@ -182,89 +167,38 @@ class _CreateTaskScreenState extends State<CreateTaskScreen> {
             ),
             const SizedBox(height: 24),
 
-            // Start date & time
+            // Start time
             const Text(
               'Start Time',
-              style: TextStyle(
-                fontSize: 14,
-                fontWeight: FontWeight.w500,
-                color: AppColors.textSecondary,
-              ),
+              style: TextStyle(fontSize: 14, fontWeight: FontWeight.w500, color: AppColors.textSecondary),
             ),
             const SizedBox(height: 8),
-            Row(
-              children: [
-                Expanded(
-                  child: _DateButton(
-                    date: _startDate,
-                    onTap: () async {
-                      final picked = await showDatePicker(
-                        context: context,
-                        initialDate: _startDate,
-                        firstDate: DateTime.now().subtract(const Duration(days: 1)),
-                        lastDate: DateTime.now().add(const Duration(days: 365)),
-                      );
-                      if (picked != null) setState(() => _startDate = picked);
-                    },
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: _TimeButton(
-                    time: _startTime,
-                    onTap: () async {
-                      final picked = await showTimePicker(
-                        context: context,
-                        initialTime: _startTime,
-                      );
-                      if (picked != null) setState(() => _startTime = picked);
-                    },
-                  ),
-                ),
-              ],
+            ScrollDateTimePicker(
+              value: _startDateTime,
+              minimumDate: DateTime.now().subtract(const Duration(days: 1)),
+              maximumDate: DateTime.now().add(const Duration(days: 365)),
+              onChanged: (dt) {
+                setState(() {
+                  _startDateTime = dt;
+                  if (!_startDateTime.isBefore(_endDateTime)) {
+                    _endDateTime = _startDateTime.add(const Duration(hours: 1));
+                  }
+                });
+              },
             ),
             const SizedBox(height: 16),
 
-            // End date & time
+            // End time
             const Text(
               'End Time',
-              style: TextStyle(
-                fontSize: 14,
-                fontWeight: FontWeight.w500,
-                color: AppColors.textSecondary,
-              ),
+              style: TextStyle(fontSize: 14, fontWeight: FontWeight.w500, color: AppColors.textSecondary),
             ),
             const SizedBox(height: 8),
-            Row(
-              children: [
-                Expanded(
-                  child: _DateButton(
-                    date: _endDate,
-                    onTap: () async {
-                      final picked = await showDatePicker(
-                        context: context,
-                        initialDate: _endDate,
-                        firstDate: DateTime.now().subtract(const Duration(days: 1)),
-                        lastDate: DateTime.now().add(const Duration(days: 365)),
-                      );
-                      if (picked != null) setState(() => _endDate = picked);
-                    },
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: _TimeButton(
-                    time: _endTime,
-                    onTap: () async {
-                      final picked = await showTimePicker(
-                        context: context,
-                        initialTime: _endTime,
-                      );
-                      if (picked != null) setState(() => _endTime = picked);
-                    },
-                  ),
-                ),
-              ],
+            ScrollDateTimePicker(
+              value: _endDateTime,
+              minimumDate: DateTime.now().subtract(const Duration(days: 1)),
+              maximumDate: DateTime.now().add(const Duration(days: 365)),
+              onChanged: (dt) => setState(() => _endDateTime = dt),
             ),
             const SizedBox(height: 24),
 
@@ -290,26 +224,14 @@ class _CreateTaskScreenState extends State<CreateTaskScreen> {
                 style: ElevatedButton.styleFrom(
                   backgroundColor: AppColors.primaryLemonDark,
                   foregroundColor: Colors.white,
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(12),
-                  ),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                 ),
                 child: _isLoading
                     ? const SizedBox(
-                        width: 24,
-                        height: 24,
-                        child: CircularProgressIndicator(
-                          color: Colors.white,
-                          strokeWidth: 2,
-                        ),
+                        width: 24, height: 24,
+                        child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2),
                       )
-                    : const Text(
-                        'Create Task',
-                        style: TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
+                    : const Text('Create Task', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
               ),
             ),
           ],
@@ -321,8 +243,8 @@ class _CreateTaskScreenState extends State<CreateTaskScreen> {
   Future<void> _submitTask() async {
     if (!_formKey.currentState!.validate()) return;
 
-    final openDatetime = _formatDatetime(_startDate, _startTime);
-    final closeDatetime = _formatDatetime(_endDate, _endTime);
+    final openDatetime = _formatDatetime(_startDateTime);
+    final closeDatetime = _formatDatetime(_endDateTime);
 
     if (closeDatetime.compareTo(openDatetime) <= 0) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -339,9 +261,7 @@ class _CreateTaskScreenState extends State<CreateTaskScreen> {
             taskType: _selectedType.apiValue,
             openDatetime: openDatetime,
             closeDatetime: closeDatetime,
-            taskInfo: _infoController.text.trim().isEmpty
-                ? null
-                : _infoController.text.trim(),
+            taskInfo: _infoController.text.trim().isEmpty ? null : _infoController.text.trim(),
             teamId: _memberSelection.familyId,
             userId: _memberSelection.memberId,
           );
@@ -357,88 +277,17 @@ class _CreateTaskScreenState extends State<CreateTaskScreen> {
         UpgradePromptBottomSheet.show(
           context: context,
           error: e.errorResponse,
-          onUpgrade: () =>
-              Navigator.pushNamed(context, '/subscription/upgrade'),
+          onUpgrade: () => Navigator.pushNamed(context, '/subscription/upgrade'),
         );
       }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-              content: Text(
-                  'Failed: ${e.toString().replaceFirst('Exception: ', '')}')),
+          SnackBar(content: Text('Failed: ${e.toString().replaceFirst('Exception: ', '')}')),
         );
       }
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
-  }
-}
-
-class _DateButton extends StatelessWidget {
-  final DateTime date;
-  final VoidCallback onTap;
-
-  const _DateButton({required this.date, required this.onTap});
-
-  @override
-  Widget build(BuildContext context) {
-    final dateStr =
-        '${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
-
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
-        decoration: BoxDecoration(
-          border: Border.all(color: AppColors.surfaceLight),
-          borderRadius: BorderRadius.circular(8),
-        ),
-        child: Row(
-          children: [
-            const Icon(Icons.calendar_today, size: 18, color: AppColors.textSecondary),
-            const SizedBox(width: 8),
-            Text(
-              dateStr,
-              style: const TextStyle(fontSize: 15, color: AppColors.textPrimary),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _TimeButton extends StatelessWidget {
-  final TimeOfDay time;
-  final VoidCallback onTap;
-
-  const _TimeButton({required this.time, required this.onTap});
-
-  @override
-  Widget build(BuildContext context) {
-    final timeStr =
-        '${time.hour.toString().padLeft(2, '0')}:${time.minute.toString().padLeft(2, '0')}';
-
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
-        decoration: BoxDecoration(
-          border: Border.all(color: AppColors.surfaceLight),
-          borderRadius: BorderRadius.circular(8),
-        ),
-        child: Row(
-          children: [
-            const Icon(Icons.access_time, size: 18, color: AppColors.textSecondary),
-            const SizedBox(width: 8),
-            Text(
-              timeStr,
-              style: const TextStyle(fontSize: 15, color: AppColors.textPrimary),
-            ),
-          ],
-        ),
-      ),
-    );
   }
 }
