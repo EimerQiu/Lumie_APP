@@ -268,7 +268,8 @@ class AdminTaskService:
     ) -> List[AdminTaskData]:
         """
         Get tasks for reward calculation view.
-        Returns tasks sorted chronologically for a specific member.
+        Returns only closed/expired tasks (where close_datetime <= now) for reward/fine calculation.
+        Sorted by close_datetime descending (newest closed first).
         """
         db = get_database()
 
@@ -281,8 +282,11 @@ class AdminTaskService:
                 detail="User not found with that email",
             )
 
+        # Only return tasks that have closed (close_datetime <= now)
+        now_str = datetime.utcnow().strftime("%Y-%m-%d %H:%M")
         cursor = db.tasks.find({
             "user_id": target_user_id,
+            "close_datetime": {"$lte": now_str},
         }).sort("close_datetime", -1).skip(offset).limit(PAGE_SIZE)
 
         tasks = await cursor.to_list(length=PAGE_SIZE)
