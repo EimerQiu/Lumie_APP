@@ -21,6 +21,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
   final _scrollController = ScrollController();
   double _lastLoadPreviousPosition = 0;
   double _lastLoadUpcomingPosition = 0;
+  double _lastScrollPosition = 0;
 
   @override
   void initState() {
@@ -30,6 +31,10 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
       final provider = context.read<AdminTasksProvider>();
       provider.loadMemberChips();
       provider.loadTasks();
+      // Initialize scroll tracking positions to prevent accidental loads on first scroll
+      _lastScrollPosition = _scrollController.offset;
+      _lastLoadPreviousPosition = _scrollController.offset;
+      _lastLoadUpcomingPosition = _scrollController.offset;
     });
   }
 
@@ -46,23 +51,27 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
 
     final maxScroll = _scrollController.position.maxScrollExtent;
     final currentScroll = _scrollController.offset;
+    final scrollDirection = currentScroll - _lastScrollPosition;
+    _lastScrollPosition = currentScroll;
 
-    // Load more upcoming tasks when near bottom
-    // Only trigger if scrolled 200px+ since last load
-    if (currentScroll >= maxScroll - 500 &&
+    // Load more upcoming tasks when scrolling DOWN near bottom
+    // Only trigger if actively scrolling down (positive direction) AND within 800px of bottom
+    if (scrollDirection > 0 &&
+        currentScroll >= maxScroll - 800 &&
         provider.hasMoreUpcoming &&
         !provider.isLoadingMoreUpcoming &&
-        (currentScroll - _lastLoadUpcomingPosition).abs() >= 200) {
+        (currentScroll - _lastLoadUpcomingPosition).abs() >= 400) {
       _lastLoadUpcomingPosition = currentScroll;
       provider.loadMoreUpcoming();
     }
 
-    // Load more previous tasks when near top
-    // Only trigger if scrolled 200px+ since last load
-    if (currentScroll <= 500 &&
+    // Load more previous tasks when scrolling UP near top
+    // Only trigger if actively scrolling up (negative direction) AND within 200px of top
+    if (scrollDirection < 0 &&
+        currentScroll <= 200 &&
         provider.hasMorePrevious &&
         !provider.isLoadingMorePrevious &&
-        (_lastLoadPreviousPosition - currentScroll).abs() >= 200) {
+        (_lastLoadPreviousPosition - currentScroll).abs() >= 400) {
       _lastLoadPreviousPosition = currentScroll;
       provider.loadMorePrevious();
     }
