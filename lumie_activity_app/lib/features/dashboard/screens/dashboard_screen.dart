@@ -13,10 +13,12 @@ import '../../activity/screens/activity_history_screen.dart';
 import '../../ring/providers/ring_provider.dart';
 import '../../heart_rate/providers/heart_rate_provider.dart';
 import '../../sleep/screens/sleep_screen.dart';
+import '../../tasks/providers/tasks_provider.dart';
 import '../widgets/activity_summary_card.dart';
 import '../widgets/quick_actions_section.dart';
 import '../widgets/adaptive_goal_card.dart';
 import '../widgets/rest_day_suggestion_sheet.dart';
+import '../widgets/active_tasks_card.dart';
 
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key});
@@ -25,7 +27,8 @@ class DashboardScreen extends StatefulWidget {
   State<DashboardScreen> createState() => _DashboardScreenState();
 }
 
-class _DashboardScreenState extends State<DashboardScreen> {
+class _DashboardScreenState extends State<DashboardScreen>
+    with WidgetsBindingObserver {
   // Mock data for demo
   final int _currentMinutes = 42;
   final int _goalMinutes = 60;
@@ -36,8 +39,38 @@ class _DashboardScreenState extends State<DashboardScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _checkRestDaySuggestion();
     _loadRestDayStatus();
+
+    // Reload ring info in case it was paired while away
+    // Load tasks if not yet loaded
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _reconnectRing();
+      final tasksProvider = context.read<TasksProvider>();
+      if (tasksProvider.state == TasksState.initial) {
+        tasksProvider.loadTasks();
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _reconnectRing();
+    }
+  }
+
+  void _reconnectRing() {
+    if (mounted) {
+      context.read<RingProvider>().tryReconnect();
+    }
   }
 
   Future<void> _loadRestDayStatus() async {
@@ -87,6 +120,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 _buildScoreRow(),
                 const SizedBox(height: 12),
                 _buildHrCard(),
+                const SizedBox(height: 12),
+                const ActiveTasksCard(),
                 const SizedBox(height: 12),
                 _buildMainActivityRing(),
                 const SizedBox(height: 24),

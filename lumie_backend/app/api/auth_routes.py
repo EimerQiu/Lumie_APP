@@ -1,5 +1,6 @@
 """Authentication API routes."""
 from fastapi import APIRouter, Depends
+from pydantic import BaseModel, Field
 
 from ..models.user import (
     UserSignUp,
@@ -10,6 +11,11 @@ from ..models.user import (
     ResendVerification,
 )
 from ..services.auth_service import auth_service, get_current_user_id
+from ..core.database import get_database
+
+
+class DeviceTokenRequest(BaseModel):
+    device_token: str = Field(..., min_length=1)
 
 
 router = APIRouter(prefix="/auth", tags=["authentication"])
@@ -84,6 +90,44 @@ async def get_current_user_info(user_id: str = Depends(get_current_user_id)):
         profile_complete=user.profile_complete,
         email_verified=user.email_verified,
     )
+
+
+@router.post("/save-device-token")
+async def save_device_token(
+    data: DeviceTokenRequest,
+    user_id: str = Depends(get_current_user_id),
+):
+    """
+    Save or update the device push token for the current user.
+    Last-write-wins: overwrites any previous token.
+    """
+    db = get_database()
+    from datetime import datetime
+    await db.users.update_one(
+        {"user_id": user_id},
+        {"$set": {
+            "device_token": data.device_token,
+            "updated_at": datetime.utcnow(),
+        }}
+    )
+    return {"message": "Device token saved"}
+
+
+@router.delete("/device-token")
+async def delete_device_token(
+    user_id: str = Depends(get_current_user_id),
+):
+    """Remove device token on logout."""
+    db = get_database()
+    from datetime import datetime
+    await db.users.update_one(
+        {"user_id": user_id},
+        {"$set": {
+            "device_token": None,
+            "updated_at": datetime.utcnow(),
+        }}
+    )
+    return {"message": "Device token removed"}
 
 
 @router.post("/verify-email")

@@ -95,7 +95,10 @@ class TaskCard extends StatelessWidget {
                     child: Container(
                       decoration: BoxDecoration(
                         gradient: LinearGradient(
-                          colors: gradientColors,
+                          colors: [
+                            gradientColors[0].withValues(alpha: 0.65),
+                            gradientColors[1].withValues(alpha: 0.65),
+                          ],
                           begin: Alignment.centerLeft,
                           end: Alignment.centerRight,
                         ),

@@ -3,6 +3,7 @@ import '../../../core/services/auth_service.dart';
 import '../../../core/services/profile_service.dart';
 import '../../../core/services/team_service.dart';
 import '../../../core/services/task_service.dart';
+import '../../../core/services/push_notification_service.dart';
 import '../../../shared/models/user_models.dart';
 
 enum AuthState {
@@ -21,6 +22,7 @@ class AuthProvider extends ChangeNotifier {
   final ProfileService _profileService = ProfileService();
   final TeamService _teamService = TeamService();
   final TaskService _taskService = TaskService();
+  final PushNotificationService _pushService = PushNotificationService();
 
   AuthState _state = AuthState.initial;
   String? _errorMessage;
@@ -39,6 +41,7 @@ class AuthProvider extends ChangeNotifier {
     if (token != null) {
       _teamService.setToken(token);
       _taskService.setToken(token);
+      _pushService.init(token);
     }
   }
 
@@ -288,6 +291,10 @@ class AuthProvider extends ChangeNotifier {
 
   /// Log out
   Future<void> logout() async {
+    final token = _authService.token;
+    if (token != null) {
+      await _pushService.deleteToken(token);
+    }
     await _authService.logout();
     _teamService.clearToken();
     _taskService.clearToken();

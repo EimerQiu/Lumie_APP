@@ -9,7 +9,7 @@ from ..services.auth_service import get_current_user_id
 from ..services.task_service import task_service
 from ..models.task import (
     TaskCreate, TaskResponse, TaskListResponse,
-    TemplateCreate, TemplateResponse, TemplateListResponse,
+    TemplateCreate, TemplateUpdate, TemplateResponse, TemplateListResponse,
     BatchGenerateRequest, BatchGenerateResponse,
 )
 
@@ -55,6 +55,22 @@ async def get_template(
     - Must be the template creator
     """
     return await task_service.get_template(template_id, user_id)
+
+
+@router.put("/templates/{template_id}", response_model=TemplateResponse)
+async def update_template(
+    template_id: str,
+    data: TemplateUpdate,
+    user_id: str = Depends(get_current_user_id)
+):
+    """
+    Update a template
+
+    - Must be the template creator
+    - All fields are optional (partial update)
+    - Does not affect already-generated tasks
+    """
+    return await task_service.update_template(template_id, user_id, data)
 
 
 @router.delete("/templates/{template_id}")

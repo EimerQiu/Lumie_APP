@@ -1,0 +1,25 @@
+[Unit]
+Description=Lumie Notification Daemon
+After=network.target mongodb.service
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/lumie_backend
+Environment="PATH=/home/ubuntu/lumie_backend/venv/bin"
+EnvironmentFile=/home/ubuntu/lumie_backend/.env
+ExecStart=/home/ubuntu/lumie_backend/venv/bin/python notification_daemon.py
+Restart=always
+RestartSec=10
+
+# Security
+NoNewPrivileges=true
+PrivateTmp=true
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=lumie-notify
+
+[Install]
+WantedBy=multi-user.target

@@ -189,14 +189,14 @@ class Task {
     }
   }
 
-  /// Formatted time window display
+  /// Formatted time window display (UTC→local conversion)
   String get timeWindowText {
     try {
-      final openParts = openDatetime.split(' ');
-      final closeParts = closeDatetime.split(' ');
-      if (openParts.length >= 2 && closeParts.length >= 2) {
-        return '${openParts[1]} - ${closeParts[1]}';
-      }
+      final open = DateTime.parse('${openDatetime.replaceAll(' ', 'T')}Z').toLocal();
+      final close = DateTime.parse('${closeDatetime.replaceAll(' ', 'T')}Z').toLocal();
+      final openStr = '${open.hour.toString().padLeft(2, '0')}:${open.minute.toString().padLeft(2, '0')}';
+      final closeStr = '${close.hour.toString().padLeft(2, '0')}:${close.minute.toString().padLeft(2, '0')}';
+      return '$openStr - $closeStr';
     } catch (_) {}
     return '$openDatetime - $closeDatetime';
   }
@@ -431,14 +431,17 @@ class AdminTaskData {
   bool get isPending => status == 'pending';
   bool get isExpired => status == 'expired';
 
-  /// Formatted time window for display
+  /// Formatted time window for display (UTC→local conversion)
   String get timeWindowText {
     try {
-      final openParts = openDatetime.split(' ');
-      final closeParts = closeDatetime.split(' ');
-      if (openParts.length >= 2 && closeParts.length >= 2) {
-        return '${openParts[0]} ${openParts[1]} - ${closeParts[0]} ${closeParts[1]}';
+      final open = DateTime.parse('${openDatetime.replaceAll(' ', 'T')}Z').toLocal();
+      final close = DateTime.parse('${closeDatetime.replaceAll(' ', 'T')}Z').toLocal();
+      String fmt(DateTime dt) {
+        final date = '${dt.year}-${dt.month.toString().padLeft(2, '0')}-${dt.day.toString().padLeft(2, '0')}';
+        final time = '${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
+        return '$date $time';
       }
+      return '${fmt(open)} - ${fmt(close)}';
     } catch (_) {}
     return '$openDatetime - $closeDatetime';
   }

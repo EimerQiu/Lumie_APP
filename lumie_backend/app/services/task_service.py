@@ -14,7 +14,7 @@ from ..core.subscription_helpers import get_task_date_range, raise_task_date_ran
 from ..models.task import (
     TaskType, TaskStatus,
     TaskCreate, TaskResponse, TaskListResponse,
-    TemplateCreate, TemplateResponse, TemplateListResponse,
+    TemplateCreate, TemplateUpdate, TemplateResponse, TemplateListResponse,
     TimeWindow, BatchGenerateRequest, BatchGenerateResponse,
 )
 from ..models.user import SubscriptionTier
@@ -524,6 +524,65 @@ class TaskService:
 
         return self._template_doc_to_response(template)
 
+    async def update_template(self, template_id: str, user_id: str, data: TemplateUpdate) -> TemplateResponse:
+        """
+        Update a template (partial update)
+
+        Args:
+            template_id: Template ID
+            user_id: Requesting user ID (must be creator)
+            data: Template update data (all fields optional)
+
+        Returns:
+            TemplateResponse with updated template
+
+        Raises:
+            HTTPException: If not found or not authorized
+        """
+        db = get_database()
+
+        template = await db.task_templates.find_one({"id": template_id})
+        if not template:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Template not found"
+            )
+
+        if template["created_by"] != user_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You can only edit your own templates"
+            )
+
+        # Build update dict from supplied fields
+        update_fields = {"updated_at": datetime.utcnow()}
+
+        if data.template_name is not None:
+            update_fields["template_name"] = data.template_name
+
+        if data.template_type is not None:
+            update_fields["template_type"] = data.template_type.value
+
+        if data.description is not None:
+            update_fields["description"] = data.description
+
+        if data.min_interval is not None:
+            update_fields["min_interval"] = data.min_interval
+
+        if data.time_window_list is not None:
+            update_fields["time_window_list"] = [tw.model_dump() for tw in data.time_window_list]
+            update_fields["time_windows"] = len(data.time_window_list)
+
+        # Perform update
+        await db.task_templates.update_one(
+            {"id": template_id},
+            {"$set": update_fields}
+        )
+
+        # Fetch updated document
+        updated_template = await db.task_templates.find_one({"id": template_id})
+        return self._template_doc_to_response(updated_template)
+
     async def delete_template(self, template_id: str, user_id: str) -> dict:
         """
         Delete a template
@@ -569,6 +628,7 @@ class TaskService:
         created_by: str,
         team_id: Optional[str] = None,
         task_info: Optional[str] = None,
+        timezone: str = "UTC",
     ) -> List[dict]:
         """
         Generate task documents from a template for a date range
@@ -582,6 +642,7 @@ class TaskService:
             created_by: Creator user ID
             team_id: Optional team ID
             task_info: Optional task info
+            timezone: User's timezone for converting local times to UTC
 
         Returns:
             List of task documents ready for insertion
@@ -604,13 +665,16 @@ class TaskService:
                 close_time = window["close_time"]
                 is_next_day = window.get("is_next_day", False)
 
-                open_datetime = f"{date_str} {open_time}"
+                open_datetime_local = f"{date_str} {open_time}"
 
                 if is_next_day:
                     next_day = current_date + timedelta(days=1)
-                    close_datetime = f"{next_day.strftime('%Y-%m-%d')} {close_time}"
+                    close_datetime_local = f"{next_day.strftime('%Y-%m-%d')} {close_time}"
                 else:
-                    close_datetime = f"{date_str} {close_time}"
+                    close_datetime_local = f"{date_str} {close_time}"
+
+                open_datetime = self._convert_local_to_utc(open_datetime_local, timezone)
+                close_datetime = self._convert_local_to_utc(close_datetime_local, timezone)
 
                 full_task_name = f"{task_name} - {window_name}"
 
@@ -693,6 +757,7 @@ class TaskService:
             created_by=user_id,
             team_id=data.team_id,
             task_info=data.task_info,
+            timezone=data.timezone,
         )
 
         if not task_docs:
@@ -753,6 +818,7 @@ class TaskService:
             created_by=user_id,
             team_id=data.team_id,
             task_info=data.task_info,
+            timezone=data.timezone,
         )
 
         preview_tasks = [

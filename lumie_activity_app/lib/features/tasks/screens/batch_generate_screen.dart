@@ -23,8 +23,8 @@ class _BatchGenerateScreenState extends State<BatchGenerateScreen> {
   DateTime _startDate = DateTime.now();
   DateTime _endDate = DateTime.now().add(const Duration(days: 6));
   Map<String, dynamic>? _preview;
+  bool _previewExpanded = true;
   bool _isLoading = false;
-  bool _isPreviewing = false;
   String? _templateId;
   FamilyMemberSelection _memberSelection = const FamilyMemberSelection();
 
@@ -41,6 +41,8 @@ class _BatchGenerateScreenState extends State<BatchGenerateScreen> {
       if (template != null && _nameController.text.isEmpty) {
         _nameController.text = template.templateName;
       }
+      // Auto-load preview on screen open
+      WidgetsBinding.instance.addPostFrameCallback((_) => _loadPreview());
     }
   }
 
@@ -104,8 +106,8 @@ class _BatchGenerateScreenState extends State<BatchGenerateScreen> {
                 if (_startDate.isAfter(_endDate)) {
                   _endDate = _startDate.add(const Duration(days: 6));
                 }
-                _preview = null;
               });
+              _loadPreview();
             },
           ),
           const SizedBox(height: 16),
@@ -126,10 +128,8 @@ class _BatchGenerateScreenState extends State<BatchGenerateScreen> {
             maximumDate: DateTime.now().add(const Duration(days: 365)),
             mode: PickerMode.dateOnly,
             onChanged: (dt) {
-              setState(() {
-                _endDate = dt;
-                _preview = null;
-              });
+              setState(() => _endDate = dt);
+              _loadPreview();
             },
           ),
           const SizedBox(height: 8),
@@ -150,32 +150,10 @@ class _BatchGenerateScreenState extends State<BatchGenerateScreen> {
           ),
           const SizedBox(height: 24),
 
-          // Preview button
-          OutlinedButton.icon(
-            onPressed: _isPreviewing ? null : _loadPreview,
-            icon: _isPreviewing
-                ? const SizedBox(
-                    width: 18,
-                    height: 18,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  )
-                : const Icon(Icons.preview),
-            label: const Text('Preview Tasks'),
-            style: OutlinedButton.styleFrom(
-              foregroundColor: AppColors.primaryLemonDark,
-              side: BorderSide(color: AppColors.primaryLemonDark),
-              padding: const EdgeInsets.symmetric(vertical: 14),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(12),
-              ),
-            ),
-          ),
-
           // Preview results
           if (_preview != null) ...[
             const SizedBox(height: 16),
             Container(
-              padding: const EdgeInsets.all(16),
               decoration: BoxDecoration(
                 color: AppColors.primaryLemonLight,
                 borderRadius: BorderRadius.circular(12),
@@ -184,36 +162,53 @@ class _BatchGenerateScreenState extends State<BatchGenerateScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
-                    'This will create ${_preview!['task_count']} tasks',
-                    style: const TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.w600,
-                      color: AppColors.textPrimary,
+                  InkWell(
+                    onTap: () => setState(() => _previewExpanded = !_previewExpanded),
+                    borderRadius: BorderRadius.circular(12),
+                    child: Padding(
+                      padding: const EdgeInsets.all(16),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              'This will create ${_preview!['task_count']} tasks',
+                              style: const TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.w600,
+                                color: AppColors.textPrimary,
+                              ),
+                            ),
+                          ),
+                          AnimatedRotation(
+                            turns: _previewExpanded ? 0.5 : 0.0,
+                            duration: const Duration(milliseconds: 200),
+                            child: const Icon(Icons.keyboard_arrow_down, size: 20),
+                          ),
+                        ],
+                      ),
                     ),
                   ),
-                  const SizedBox(height: 8),
-                  ...(_preview!['tasks_preview'] as List).take(5).map((task) {
-                    return Padding(
-                      padding: const EdgeInsets.only(bottom: 4),
-                      child: Text(
-                        '${task['task_name']} (${task['open_datetime']} - ${task['close_datetime']})',
-                        style: TextStyle(
-                          fontSize: 13,
-                          color: AppColors.textSecondary,
-                        ),
-                      ),
-                    );
-                  }),
-                  if ((_preview!['tasks_preview'] as List).length > 5)
-                    Text(
-                      '...and ${(_preview!['tasks_preview'] as List).length - 5} more',
-                      style: TextStyle(
-                        fontSize: 13,
-                        fontStyle: FontStyle.italic,
-                        color: AppColors.textLight,
+                  if (_previewExpanded) ...[
+                    const Divider(height: 1),
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: (_preview!['tasks_preview'] as List).map((task) {
+                          return Padding(
+                            padding: const EdgeInsets.only(bottom: 4),
+                            child: Text(
+                              '${task['task_name']} (${task['open_datetime']} - ${task['close_datetime']})',
+                              style: const TextStyle(
+                                fontSize: 13,
+                                color: AppColors.textSecondary,
+                              ),
+                            ),
+                          );
+                        }).toList(),
                       ),
                     ),
+                  ],
                 ],
               ),
             ),
@@ -265,8 +260,6 @@ class _BatchGenerateScreenState extends State<BatchGenerateScreen> {
       return;
     }
 
-    setState(() => _isPreviewing = true);
-
     try {
       final preview = await context.read<TasksProvider>().batchPreview(
             templateId: _templateId!,
@@ -279,7 +272,7 @@ class _BatchGenerateScreenState extends State<BatchGenerateScreen> {
             teamId: _memberSelection.familyId,
             userId: _memberSelection.memberId,
           );
-      setState(() => _preview = preview);
+      if (mounted) setState(() { _preview = preview; _previewExpanded = true; });
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -288,8 +281,6 @@ class _BatchGenerateScreenState extends State<BatchGenerateScreen> {
                   'Failed: ${e.toString().replaceFirst('Exception: ', '')}')),
         );
       }
-    } finally {
-      if (mounted) setState(() => _isPreviewing = false);
     }
   }
 

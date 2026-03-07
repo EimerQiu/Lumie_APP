@@ -130,6 +130,11 @@ class LumieActivityApp extends StatelessWidget {
               builder: (context) => const BatchGenerateScreen(),
               settings: RouteSettings(name: '/tasks/batch', arguments: templateId),
             );
+          } else if (settings.name == '/tasks/templates/edit') {
+            final templateId = settings.arguments as String;
+            return MaterialPageRoute(
+              builder: (context) => CreateTemplateScreen(templateId: templateId),
+            );
           } else if (settings.name == '/subscription/upgrade') {
             // Placeholder for subscription upgrade screen
             return MaterialPageRoute(
@@ -288,6 +293,9 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
       if (token != null) {
         ringProvider.setToken(token);
       }
+
+      // Reload ring info (in case it was paired while away)
+      ringProvider.init();
     });
   }
 

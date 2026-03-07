@@ -212,6 +212,40 @@ class TasksProvider extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Get template by ID
+  Future<RepeatTaskTemplate> getTemplate(String templateId) async {
+    return await _taskService.getTemplate(templateId);
+  }
+
+  /// Update an existing template
+  Future<RepeatTaskTemplate> updateTemplate({
+    required String templateId,
+    required String templateName,
+    required String templateType,
+    String? description,
+    required int minInterval,
+    required List<Map<String, dynamic>> timeWindowList,
+  }) async {
+    final template = await _taskService.updateTemplate(
+      templateId: templateId,
+      templateName: templateName,
+      templateType: templateType,
+      description: description,
+      minInterval: minInterval,
+      timeWindowList: timeWindowList,
+    );
+
+    // Replace template in list for immediate UI update
+    final idx = _templates.indexWhere((t) => t.id == templateId);
+    if (idx != -1) {
+      _templates[idx] = template;
+    } else {
+      await loadTemplates();
+    }
+    notifyListeners();
+    return template;
+  }
+
   /// Preview batch generation
   Future<Map<String, dynamic>> batchPreview({
     required String templateId,
@@ -222,6 +256,7 @@ class TasksProvider extends ChangeNotifier {
     String? userId,
     String? taskInfo,
   }) async {
+    final deviceTimezone = _getDeviceTimezone();
     return await _taskService.batchPreview(
       templateId: templateId,
       taskName: taskName,
@@ -230,6 +265,7 @@ class TasksProvider extends ChangeNotifier {
       teamId: teamId,
       userId: userId,
       taskInfo: taskInfo,
+      timezone: deviceTimezone,
     );
   }
 
@@ -243,6 +279,7 @@ class TasksProvider extends ChangeNotifier {
     String? userId,
     String? taskInfo,
   }) async {
+    final deviceTimezone = _getDeviceTimezone();
     await _taskService.batchGenerate(
       templateId: templateId,
       taskName: taskName,
@@ -251,6 +288,7 @@ class TasksProvider extends ChangeNotifier {
       teamId: teamId,
       userId: userId,
       taskInfo: taskInfo,
+      timezone: deviceTimezone,
     );
     await loadTasks();
   }

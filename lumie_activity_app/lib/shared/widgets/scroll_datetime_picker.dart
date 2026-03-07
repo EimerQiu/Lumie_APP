@@ -238,8 +238,9 @@ class _InlinePickerWheelsState extends State<_InlinePickerWheels> {
         : (widget.value.hour > 12 ? widget.value.hour - 12 : widget.value.hour);
     final isAm = widget.value.hour < 12;
 
-    _hourController = FixedExtentScrollController(initialItem: hour12 - 1);
-    _minuteController = FixedExtentScrollController(initialItem: widget.value.minute);
+    // Start at midpoint of a large finite count so both directions scroll freely
+    _hourController = FixedExtentScrollController(initialItem: 12 * 250 + (hour12 - 1));
+    _minuteController = FixedExtentScrollController(initialItem: 60 * 250 + widget.value.minute);
     _ampmController = FixedExtentScrollController(initialItem: isAm ? 0 : 1);
   }
 
@@ -313,7 +314,7 @@ class _InlinePickerWheelsState extends State<_InlinePickerWheels> {
       magnification: 1.08,
       selectionOverlay: const SizedBox.shrink(),
       onSelectedItemChanged: (_) => _onWheelChanged(),
-      childCount: looping ? null : itemCount,
+      childCount: looping ? itemCount * 500 : itemCount,
       itemBuilder: (context, index) {
         final actualIndex = looping ? index % itemCount : index;
         if (!looping && (index < 0 || index >= itemCount)) return null;

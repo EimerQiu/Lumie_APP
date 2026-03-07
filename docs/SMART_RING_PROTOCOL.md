@@ -73,12 +73,36 @@ Recommended scan timeout: **10–30 seconds**. Sort discovered devices by RSSI (
 ### Connection Workflow
 
 1. Stop the active scan.
-2. Connect to the selected device (timeout: 15 seconds).
+2. Connect to the selected device (`autoConnect: false`, timeout: 15 seconds).
 3. Discover GATT services — match the service whose UUID contains `fff0`.
 4. Locate the write characteristic (`fff6`) and notify characteristic (`fff7`).
 5. Enable notifications on `fff7`.
-6. Write commands to `fff6` (write-with-response).
+6. Write commands to `fff6` (write-with-response, i.e. `withoutResponse: false`).
 7. All responses arrive as notify callbacks on `fff7`.
+8. Subscribe to the device's connection state stream to detect unexpected disconnects.
+
+### Reconnection Workflow
+
+When the app reconnects to an already-paired ring (e.g. after a background disconnect), no full handshake is needed:
+
+1. Cancel any existing connection state subscription before connecting.
+2. Connect to the device by saved device ID (`autoConnect: false`, timeout: 10 seconds).
+3. Discover GATT services and locate `fff6`/`fff7` (same as steps 3–5 above).
+4. Enable notifications on `fff7`.
+5. Re-sync time with command `0x01` (ring clock drifts; always re-sync on reconnect).
+6. Re-subscribe to the device's connection state stream.
+
+> **Important — avoid subscription leaks:** When a disconnect event fires inside the connection state listener, cancel the `StreamSubscription` object before nulling the reference. Setting the reference to `null` without cancelling leaves a ghost listener attached to the device that can fire spurious callbacks and interfere with the next connection attempt.
+
+### Connection Stability Notes
+
+These patterns were validated by comparing working implementations against this ring:
+
+- **`autoConnect: false` is required.** Using `autoConnect: true` causes erratic reconnect behaviour on iOS.
+- **Always cancel the old connection state subscription before `connect()`** — if a prior connection state subscription is still active when you call `connect()`, it may fire stale `disconnected` events that corrupt the provider state.
+- **`setNotifyValue(false)` on disconnect** — call this before `device.disconnect()` to cleanly de-register the notification. Wrap in try/catch as the write may fail if the connection is already gone.
+- **Re-sync time (0x01) on every reconnect** — the ring's RTC drifts by up to ±5 minutes per day. Stale timestamps corrupt HR history records.
+- **Auto-reconnect with backoff** — on unexpected disconnect, retry up to 3 times with exponential backoff (2 s → 4 s → 8 s). A single immediate retry often fails because the ring takes a moment to re-advertise after a BLE drop.
 
 ---
 
@@ -589,6 +613,21 @@ Byte[25]    = 0x00
 **How to detect format:**
 - If `length == 16` AND `CRC(Byte[0..14]) == Byte[15]` → Format A.
 - If `length >= 26` → Format B (use first 26 bytes).
+
+**Multi-frame packets (observed in practice):**
+
+The ring occasionally delivers two or more Format A frames concatenated in a single BLE notification (total length = N × 16, all frames starting with `0x09` and each with a valid CRC). Parse them as follows:
+
+```
+if length >= 32 AND length % 16 == 0:
+  for offset in [0, 16, 32, ...] while offset + 16 <= length:
+    frame = bytes[offset .. offset+15]
+    if frame[0] != 0x09: abort multi-frame, fall through to single-frame parse
+    if CRC(frame[0..14]) != frame[15]: abort multi-frame
+    parse frame as Format A
+else:
+  parse bytes as single frame (Format A or B)
+```
 
 **Parse steps (Format A):**
 ```

@@ -38,13 +38,11 @@ class RingBleService {
   // ─── Scanning ────────────────────────────────────────────────────────────
 
   /// Scan for nearby Lumie Rings (filtered by device name prefix "X6B").
-  /// Rings do not advertise their service UUID during scanning, so we scan
-  /// all devices and filter by the name prefix used by the X6B hardware.
-  /// Calls [onFound] for each discovered ring. Stops after [_scanTimeout].
   Future<void> startScan({
     required void Function(DiscoveredRing ring) onFound,
     required void Function() onTimeout,
   }) async {
+    debugPrint('[Ring BLE] startScan: stopping any existing scan');
     await FlutterBluePlus.stopScan();
 
     final found = <String>{};
@@ -56,13 +54,13 @@ class RingBleService {
     FlutterBluePlus.scanResults.listen((results) {
       for (final result in results) {
         final name = result.device.platformName;
-        // Only surface X6B devices (Lumie Ring hardware)
         if (!name.toUpperCase().startsWith('X6B')) continue;
 
         final id = result.device.remoteId.str;
         if (found.contains(id)) continue;
         found.add(id);
 
+        debugPrint('[Ring BLE] Found ring: $name ($id) RSSI=${result.rssi}');
         onFound(DiscoveredRing(
           deviceId: id,
           displayName: name,
@@ -71,11 +69,11 @@ class RingBleService {
       }
     });
 
-    // Wait for scan to complete then fire timeout callback
     await FlutterBluePlus.isScanning.where((s) => !s).first.timeout(
       _scanTimeout + const Duration(seconds: 2),
       onTimeout: () => false,
     );
+    debugPrint('[Ring BLE] Scan complete, found ${found.length} ring(s)');
     onTimeout();
   }
 
@@ -86,22 +84,22 @@ class RingBleService {
   // ─── Connection ──────────────────────────────────────────────────────────
 
   /// Connect to a discovered ring device and perform handshake.
-  /// Returns [RingInfo] on success, throws on failure.
   Future<RingInfo> connectAndPair({
     required DiscoveredRing ring,
-    required int gender,    // 0=female, 1=male
+    required int gender,
     required int age,
     required int heightCm,
     required int weightKg,
   }) async {
+    debugPrint('[Ring BLE] connectAndPair: ${ring.deviceId} (${ring.displayName})');
     final device = BluetoothDevice.fromId(ring.deviceId);
 
-    // Connect with auto-reconnect disabled (we manage this ourselves)
     await device.connect(autoConnect: false, timeout: const Duration(seconds: 15));
     _connectedDevice = device;
+    debugPrint('[Ring BLE] BLE connected to ${ring.deviceId}');
 
-    // Discover GATT services
     final services = await device.discoverServices();
+    debugPrint('[Ring BLE] Discovered ${services.length} services');
     BluetoothService? lumieService;
     for (final s in services) {
       if (s.serviceUuid.str.toLowerCase().contains('fff0')) {
@@ -110,6 +108,7 @@ class RingBleService {
       }
     }
     if (lumieService == null) {
+      debugPrint('[Ring BLE] ERROR: Lumie service (fff0) not found');
       await disconnect();
       throw Exception('Not a Lumie Ring: required service not found.');
     }
@@ -121,35 +120,37 @@ class RingBleService {
     }
 
     if (_writeChar == null || _notifyChar == null) {
+      debugPrint('[Ring BLE] ERROR: write/notify characteristics not found');
       await disconnect();
       throw Exception('Not a Lumie Ring: required characteristics not found.');
     }
+    debugPrint('[Ring BLE] Write char: ${_writeChar!.characteristicUuid}');
+    debugPrint('[Ring BLE] Notify char: ${_notifyChar!.characteristicUuid}');
 
-    // Enable BLE notifications
     await _notifyChar!.setNotifyValue(true);
+    debugPrint('[Ring BLE] Notifications enabled');
+    _subscribeRawNotifyLog();
 
-    // Step 1: Set current time on ring (command 0x01)
     await _setTime();
+    debugPrint('[Ring BLE] Time synced (0x01)');
 
-    // Step 2: Set user info (command 0x02)
     final mac = await _getMacAddress();
-    await _setUserInfo(
-      gender: gender,
-      age: age,
-      heightCm: heightCm,
-      weightKg: weightKg,
-    );
+    debugPrint('[Ring BLE] MAC address: $mac');
 
-    // Step 3: Get firmware version (command 0x27)
+    await _setUserInfo(gender: gender, age: age, heightCm: heightCm, weightKg: weightKg);
+    debugPrint('[Ring BLE] User info set (0x02): gender=$gender age=$age h=${heightCm}cm w=${weightKg}kg');
+
     final firmwareVersion = await _getFirmwareVersion();
+    debugPrint('[Ring BLE] Firmware: $firmwareVersion');
 
-    // Step 4: Get battery level (command 0x13)
     final batteryLevel = await _getBatteryLevel();
+    debugPrint('[Ring BLE] Battery: $batteryLevel%');
 
     final macFormatted = mac ?? ring.deviceId;
     final ringName = 'Lumie Ring ${macFormatted.length >= 5 ? macFormatted.substring(macFormatted.length - 5).replaceAll(':', '') : macFormatted}';
 
     _subscribeToConnectionState(device);
+    debugPrint('[Ring BLE] Pairing complete: $ringName');
 
     return RingInfo(
       ringDeviceId: macFormatted,
@@ -162,6 +163,8 @@ class RingBleService {
   }
 
   Future<void> disconnect() async {
+    debugPrint('[Ring BLE] disconnect called');
+    // Cancel connection state subscription first to avoid spurious callbacks
     await _connectionStateSub?.cancel();
     _connectionStateSub = null;
     await _hrStreamSub?.cancel();
@@ -171,21 +174,32 @@ class RingBleService {
     await _notifySubscription?.cancel();
     _notifySubscription = null;
     try {
+      if (_notifyChar != null) {
+        await _notifyChar!.setNotifyValue(false);
+      }
+    } catch (_) {}
+    try {
       await _connectedDevice?.disconnect();
     } catch (_) {}
     _connectedDevice = null;
     _writeChar = null;
     _notifyChar = null;
+    debugPrint('[Ring BLE] Disconnected and cleaned up');
   }
 
   void _subscribeToConnectionState(BluetoothDevice device) {
+    // Cancel previous subscription before creating new one
     _connectionStateSub?.cancel();
     _connectionStateSub = device.connectionState.listen((state) {
+      debugPrint('[Ring BLE] Connection state changed: $state');
       if (state == BluetoothConnectionState.disconnected) {
+        // Cancel subscription BEFORE nulling it, so it's properly disposed
+        _connectionStateSub?.cancel();
         _connectionStateSub = null;
         _writeChar = null;
         _notifyChar = null;
         _connectedDevice = null;
+        debugPrint('[Ring BLE] Unexpected disconnect — notifying provider');
         onDisconnected?.call();
       }
     });
@@ -194,10 +208,16 @@ class RingBleService {
   /// Reconnect to a previously paired ring by device ID (no full handshake).
   /// Discovers GATT, enables notifications, and re-syncs time.
   Future<void> reconnect(String deviceId) async {
+    debugPrint('[Ring BLE] reconnect: $deviceId');
     final device = BluetoothDevice.fromId(deviceId);
-    await device.connect(
-        autoConnect: false, timeout: const Duration(seconds: 10));
+
+    // Cancel stale connection state sub before connecting
+    await _connectionStateSub?.cancel();
+    _connectionStateSub = null;
+
+    await device.connect(autoConnect: false, timeout: const Duration(seconds: 10));
     _connectedDevice = device;
+    debugPrint('[Ring BLE] BLE reconnected to $deviceId');
 
     final services = await device.discoverServices();
     BluetoothService? lumieService;
@@ -208,6 +228,7 @@ class RingBleService {
       }
     }
     if (lumieService == null) {
+      debugPrint('[Ring BLE] ERROR: service not found during reconnect');
       await disconnect();
       throw Exception('Service not found during reconnect');
     }
@@ -219,21 +240,27 @@ class RingBleService {
     }
 
     if (_writeChar == null || _notifyChar == null) {
+      debugPrint('[Ring BLE] ERROR: characteristics not found during reconnect');
       await disconnect();
       throw Exception('Characteristics not found during reconnect');
     }
 
     await _notifyChar!.setNotifyValue(true);
+    _subscribeRawNotifyLog();
     await _setTime();
+    debugPrint('[Ring BLE] Reconnect complete, time synced');
     _subscribeToConnectionState(device);
   }
 
   // ─── Heart Rate ───────────────────────────────────────────────────────────
 
   /// Command 0x55 — Fetch today's stored HR history from the ring.
-  /// Returns a list of [HrDataPoint] recorded today, newest last.
   Future<List<HrDataPoint>> fetchHrHistory() async {
-    if (_notifyChar == null) return [];
+    if (_notifyChar == null) {
+      debugPrint('[Ring BLE] fetchHrHistory: not connected');
+      return [];
+    }
+    debugPrint('[Ring BLE] fetchHrHistory: sending 0x55');
 
     final today = DateTime.now();
     final results = <HrDataPoint>[];
@@ -243,8 +270,8 @@ class RingBleService {
     sub = _notifyChar!.lastValueStream.listen((data) {
       if (data.isEmpty || data[0] != 0x55) return;
 
-      // End-of-data marker: 0x55 0xFF
       if (data.length >= 2 && data[1] == 0xFF) {
+        debugPrint('[Ring BLE] HR history end marker received, ${results.length} records today');
         if (!completer.isCompleted) completer.complete(results);
         return;
       }
@@ -272,13 +299,17 @@ class RingBleService {
     try {
       final payload = List<int>.filled(15, 0);
       payload[0] = 0x55;
-      payload[1] = 0x00; // read latest records
+      payload[1] = 0x00;
       await _writeCommand(payload);
       return await completer.future.timeout(
         const Duration(seconds: 3),
-        onTimeout: () => results,
+        onTimeout: () {
+          debugPrint('[Ring BLE] HR history timeout, got ${results.length} records');
+          return results;
+        },
       );
-    } catch (_) {
+    } catch (e) {
+      debugPrint('[Ring BLE] fetchHrHistory error: $e');
       return results;
     } finally {
       await sub.cancel();
@@ -286,82 +317,93 @@ class RingBleService {
   }
 
   /// Start an on-demand HR measurement.
-  ///
-  /// Sends 0x28 (mode=HR, 60s) to activate the ring's PPG sensor (green LED),
-  /// then enables 0x09 streaming to receive live BPM values.
-  /// Returns a broadcast stream of BPM integers.
+  /// Sends 0x28 (HR mode) then enables 0x09 streaming.
   Stream<int> startHrStreaming() {
-    if (_notifyChar == null) return const Stream.empty();
+    if (_notifyChar == null) {
+      debugPrint('[Ring BLE] startHrStreaming: not connected');
+      return const Stream.empty();
+    }
+    debugPrint('[Ring BLE] startHrStreaming: starting 0x28 + 0x09');
 
     _hrStreamController?.close();
     _hrStreamController = StreamController<int>.broadcast();
 
+    // Capture the notify char reference at subscription time.
+    // If reconnect happens, old sub is cancelled and a new one is created.
+    final notifyChar = _notifyChar!;
+
     _hrStreamSub?.cancel();
-    _hrStreamSub = _notifyChar!.lastValueStream.listen((data) {
+    _hrStreamSub = notifyChar.lastValueStream.listen((data) {
       if (data.isEmpty || data[0] != 0x09) return;
 
       int hr = 0;
       if (data.length == 16) {
-        // Format A: HR at byte 13
         hr = data[13];
       } else if (data.length >= 26) {
-        // Format B: HR at byte 21
         hr = data[21];
       }
 
       if (hr > 0 && hr < 250 && _hrStreamController?.isClosed == false) {
+        debugPrint('[Ring BLE] HR reading: $hr BPM (packet len=${data.length})');
         _hrStreamController!.add(hr);
       }
     });
 
-    // 1. Send 0x28 mode=0x02 to trigger the dedicated HR measurement (green LED on).
-    //    Duration = 60 seconds (minimum per protocol is 30s).
+    // 0x28: Start dedicated HR measurement (green LED), 60s duration
     final measurePayload = List<int>.filled(15, 0);
     measurePayload[0] = 0x28;
     measurePayload[1] = 0x02; // HR mode
     measurePayload[2] = 0x01; // start
-    measurePayload[5] = 60;   // duration_lo: 60 seconds
+    measurePayload[5] = 60;   // duration_lo
     measurePayload[6] = 0x00; // duration_hi
-    _writeCommand(measurePayload).catchError((_) {});
+    _writeCommand(measurePayload).catchError((e) {
+      debugPrint('[Ring BLE] 0x28 write error: $e');
+    });
 
-    // 2. Enable 0x09 streaming so live values flow back to the app.
+    // 0x09: Enable realtime streaming
     final streamPayload = List<int>.filled(15, 0);
     streamPayload[0] = 0x09;
     streamPayload[1] = 0x01; // start
     streamPayload[2] = 0x01; // enable temperature
-    _writeCommand(streamPayload).catchError((_) {});
+    _writeCommand(streamPayload).catchError((e) {
+      debugPrint('[Ring BLE] 0x09 write error: $e');
+    });
 
     return _hrStreamController!.stream;
   }
 
   /// Stop the on-demand HR measurement and streaming.
   Future<void> stopHrStreaming() async {
-    // Stop the 0x28 dedicated measurement (turns off the green LED).
+    debugPrint('[Ring BLE] stopHrStreaming');
     try {
       final measurePayload = List<int>.filled(15, 0);
       measurePayload[0] = 0x28;
-      measurePayload[1] = 0x02; // HR mode
+      measurePayload[1] = 0x02;
       measurePayload[2] = 0x00; // stop
       await _writeCommand(measurePayload);
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('[Ring BLE] 0x28 stop error: $e');
+    }
 
-    // Stop 0x09 streaming.
     try {
       final streamPayload = List<int>.filled(15, 0);
       streamPayload[0] = 0x09;
       streamPayload[1] = 0x00; // stop
       await _writeCommand(streamPayload);
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('[Ring BLE] 0x09 stop error: $e');
+    }
 
     await _hrStreamSub?.cancel();
     _hrStreamSub = null;
     await _hrStreamController?.close();
     _hrStreamController = null;
+    debugPrint('[Ring BLE] HR streaming stopped');
   }
 
   // ─── Commands ────────────────────────────────────────────────────────────
 
-  /// Command 0x01 — Set Time (plain decimal, NOT BCD)
+  /// Command 0x01 — Set Time
   Future<void> _setTime() async {
     final now = DateTime.now();
     final payload = List<int>.filled(15, 0);
@@ -390,7 +432,6 @@ class RingBleService {
     payload[3] = heightCm;
     payload[4] = weightKg;
     payload[5] = stepLen;
-    // ring_id bytes 6–11: "000000" in ASCII
     for (var i = 6; i <= 11; i++) {
       payload[i] = 0x30; // '0'
     }
@@ -402,12 +443,13 @@ class RingBleService {
     try {
       final response = await _sendCommandWithResponse(0x22);
       if (response == null || response.length < 7) return null;
-      if (response[0] == 0xA2) return null; // error
+      if (response[0] == 0xA2) return null;
       final mac = response.sublist(1, 7)
           .map((b) => b.toRadixString(16).padLeft(2, '0').toUpperCase())
           .join(':');
       return mac;
-    } catch (_) {
+    } catch (e) {
+      debugPrint('[Ring BLE] getMacAddress error: $e');
       return null;
     }
   }
@@ -417,13 +459,14 @@ class RingBleService {
     try {
       final response = await _sendCommandWithResponse(0x27);
       if (response == null || response.length < 8) return null;
-      if (response[0] == 0xA7) return null; // error
+      if (response[0] == 0xA7) return null;
       final a = _bcdToDecimal(response[1]);
       final b = _bcdToDecimal(response[2]);
       final c = _bcdToDecimal(response[3]);
       final d = _bcdToDecimal(response[4]);
       return '$a.$b.$c.$d';
-    } catch (_) {
+    } catch (e) {
+      debugPrint('[Ring BLE] getFirmwareVersion error: $e');
       return null;
     }
   }
@@ -433,16 +476,16 @@ class RingBleService {
     try {
       final response = await _sendCommandWithResponse(0x13);
       if (response == null || response.length < 2) return null;
-      if (response[0] == 0x93) return null; // error
+      if (response[0] == 0x93) return null;
       return response[1].clamp(0, 100);
-    } catch (_) {
+    } catch (e) {
+      debugPrint('[Ring BLE] getBatteryLevel error: $e');
       return null;
     }
   }
 
   // ─── Low-level helpers ───────────────────────────────────────────────────
 
-  /// Write a 15-byte payload, appending the CRC byte at position 15.
   Future<void> _writeCommand(List<int> payload) async {
     if (_writeChar == null) throw Exception('Not connected');
     final packet = List<int>.filled(16, 0);
@@ -450,10 +493,10 @@ class RingBleService {
       packet[i] = payload[i];
     }
     packet[15] = _computeCrc(packet.sublist(0, 15));
+    debugPrint('[Ring TX] ${_hexDump(packet)}');
     await _writeChar!.write(packet, withoutResponse: false);
   }
 
-  /// Send a single-byte command and wait for the first matching notify response.
   Future<List<int>?> _sendCommandWithResponse(int cmd) async {
     if (_notifyChar == null) return null;
 
@@ -474,13 +517,25 @@ class RingBleService {
       await _writeCommand(payload);
       return await completer.future.timeout(_responseTimeout);
     } on TimeoutException {
+      debugPrint('[Ring BLE] Timeout waiting for response to cmd 0x${cmd.toRadixString(16).padLeft(2, '0')}');
       return null;
     } finally {
       await sub.cancel();
     }
   }
 
-  /// CRC: sum of bytes[0..14] & 0xFF
+  void _subscribeRawNotifyLog() {
+    _notifySubscription?.cancel();
+    _notifySubscription = _notifyChar!.lastValueStream.listen((data) {
+      if (data.isNotEmpty) {
+        debugPrint('[Ring RX] ${_hexDump(data)}');
+      }
+    });
+  }
+
+  String _hexDump(List<int> bytes) =>
+      bytes.map((b) => b.toRadixString(16).padLeft(2, '0').toUpperCase()).join(' ');
+
   int _computeCrc(List<int> bytes) {
     int sum = 0;
     for (final b in bytes) {
@@ -489,29 +544,24 @@ class RingBleService {
     return sum & 0xFF;
   }
 
-  /// BCD byte to decimal: ((byte >> 4) * 10) + (byte & 0x0F)
   int _bcdToDecimal(int bcd) {
     return ((bcd >> 4) * 10) + (bcd & 0x0F);
   }
 
-  /// Estimate step length from height (rough heuristic: height * 0.415)
   int _estimateStepLength(int heightCm) {
     return ((heightCm * 0.415)).round().clamp(50, 100);
   }
 
   // ─── Bluetooth state helpers ─────────────────────────────────────────────
 
-  /// Check if Bluetooth adapter is on
   static Future<bool> isBluetoothOn() async {
     final state = await FlutterBluePlus.adapterState.first;
     return state == BluetoothAdapterState.on;
   }
 
-  /// Stream of Bluetooth adapter state changes
   static Stream<BluetoothAdapterState> get adapterStateStream =>
       FlutterBluePlus.adapterState;
 
-  /// Whether the device supports BLE
   static Future<bool> get isSupported async =>
       await FlutterBluePlus.isSupported;
 }

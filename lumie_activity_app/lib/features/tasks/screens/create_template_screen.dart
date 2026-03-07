@@ -26,6 +26,15 @@ class _CreateTemplateScreenState extends State<CreateTemplateScreen> {
   TaskType _selectedType = TaskType.medicine;
   List<TimeWindowEditorData> _windows = [TimeWindowEditorData(name: 'Morning')];
   bool _isLoading = false;
+  bool _isLoadingTemplate = false;
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.templateId != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _loadTemplate());
+    }
+  }
 
   @override
   void dispose() {
@@ -45,7 +54,9 @@ class _CreateTemplateScreenState extends State<CreateTemplateScreen> {
         elevation: 0,
         foregroundColor: AppColors.textPrimary,
       ),
-      body: Form(
+      body: _isLoadingTemplate
+          ? const Center(child: CircularProgressIndicator())
+          : Form(
         key: _formKey,
         child: ListView(
           padding: const EdgeInsets.all(16),
@@ -182,9 +193,9 @@ class _CreateTemplateScreenState extends State<CreateTemplateScreen> {
                           strokeWidth: 2,
                         ),
                       )
-                    : const Text(
-                        'Create Template',
-                        style: TextStyle(
+                    : Text(
+                        widget.templateId != null ? 'Save Changes' : 'Create Template',
+                        style: const TextStyle(
                           fontSize: 16,
                           fontWeight: FontWeight.w600,
                         ),
@@ -195,6 +206,46 @@ class _CreateTemplateScreenState extends State<CreateTemplateScreen> {
         ),
       ),
     );
+  }
+
+  Future<void> _loadTemplate() async {
+    setState(() => _isLoadingTemplate = true);
+    try {
+      final template = await context.read<TasksProvider>().getTemplate(widget.templateId!);
+      _nameController.text = template.templateName;
+      _descController.text = template.description ?? '';
+      _intervalController.text = template.minInterval.toString();
+      _selectedType = template.templateType;
+
+      // Convert TimeWindow list to TimeWindowEditorData
+      _windows = template.timeWindowList.map((tw) {
+        final openParts = tw.openTime.split(':');
+        final closeParts = tw.closeTime.split(':');
+        return TimeWindowEditorData(
+          name: tw.name,
+          openTime: TimeOfDay(
+            hour: int.parse(openParts[0]),
+            minute: int.parse(openParts[1]),
+          ),
+          closeTime: TimeOfDay(
+            hour: int.parse(closeParts[0]),
+            minute: int.parse(closeParts[1]),
+          ),
+          isNextDay: tw.isNextDay,
+        );
+      }).toList();
+
+      if (mounted) setState(() {});
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to load template: ${e.toString().replaceFirst('Exception: ', '')}')),
+        );
+        Navigator.of(context).pop();
+      }
+    } finally {
+      if (mounted) setState(() => _isLoadingTemplate = false);
+    }
   }
 
   void _addWindow() {
@@ -229,21 +280,41 @@ class _CreateTemplateScreenState extends State<CreateTemplateScreen> {
         (i) => _windows[i].toJson(i),
       );
 
-      await context.read<TasksProvider>().createTemplate(
-            templateName: _nameController.text.trim(),
-            templateType: _selectedType.apiValue,
-            description: _descController.text.trim().isEmpty
-                ? null
-                : _descController.text.trim(),
-            minInterval: int.tryParse(_intervalController.text) ?? 0,
-            timeWindowList: timeWindowList,
-          );
-
-      if (mounted) {
-        Navigator.of(context).pop();
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Template created successfully')),
+      if (widget.templateId != null) {
+        // Edit mode
+        await context.read<TasksProvider>().updateTemplate(
+          templateId: widget.templateId!,
+          templateName: _nameController.text.trim(),
+          templateType: _selectedType.apiValue,
+          description: _descController.text.trim().isEmpty
+              ? null
+              : _descController.text.trim(),
+          minInterval: int.tryParse(_intervalController.text) ?? 0,
+          timeWindowList: timeWindowList,
         );
+        if (mounted) {
+          Navigator.of(context).pop();
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Template updated successfully')),
+          );
+        }
+      } else {
+        // Create mode
+        await context.read<TasksProvider>().createTemplate(
+          templateName: _nameController.text.trim(),
+          templateType: _selectedType.apiValue,
+          description: _descController.text.trim().isEmpty
+              ? null
+              : _descController.text.trim(),
+          minInterval: int.tryParse(_intervalController.text) ?? 0,
+          timeWindowList: timeWindowList,
+        );
+        if (mounted) {
+          Navigator.of(context).pop();
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Template created successfully')),
+          );
+        }
       }
     } catch (e) {
       if (mounted) {

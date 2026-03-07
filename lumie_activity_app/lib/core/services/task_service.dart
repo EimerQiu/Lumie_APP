@@ -208,6 +208,36 @@ class TaskService {
     _handleError(response, 'get template');
   }
 
+  /// Update an existing template
+  Future<RepeatTaskTemplate> updateTemplate({
+    required String templateId,
+    String? templateName,
+    String? templateType,
+    String? description,
+    int? minInterval,
+    List<Map<String, dynamic>>? timeWindowList,
+  }) async {
+    if (_token == null) throw Exception('Not authenticated');
+
+    final body = <String, dynamic>{};
+    if (templateName != null) body['template_name'] = templateName;
+    if (templateType != null) body['template_type'] = templateType;
+    if (description != null) body['description'] = description;
+    if (minInterval != null) body['min_interval'] = minInterval;
+    if (timeWindowList != null) body['time_window_list'] = timeWindowList;
+
+    final response = await http.put(
+      Uri.parse('${ApiConstants.baseUrl}/tasks/templates/$templateId'),
+      headers: _headers,
+      body: json.encode(body),
+    );
+
+    if (response.statusCode == 200) {
+      return RepeatTaskTemplate.fromJson(json.decode(response.body));
+    }
+    _handleError(response, 'update template');
+  }
+
   /// Delete a template
   Future<void> deleteTemplate(String templateId) async {
     if (_token == null) throw Exception('Not authenticated');
@@ -232,6 +262,7 @@ class TaskService {
     String? teamId,
     String? userId,
     String? taskInfo,
+    String timezone = 'UTC',
   }) async {
     if (_token == null) throw Exception('Not authenticated');
 
@@ -246,6 +277,7 @@ class TaskService {
         if (teamId != null) 'team_id': teamId,
         if (userId != null) 'user_id': userId,
         if (taskInfo != null) 'task_info': taskInfo,
+        'timezone': timezone,
       }),
     );
 
@@ -264,6 +296,7 @@ class TaskService {
     String? teamId,
     String? userId,
     String? taskInfo,
+    String timezone = 'UTC',
   }) async {
     if (_token == null) throw Exception('Not authenticated');
 
@@ -278,6 +311,7 @@ class TaskService {
         if (teamId != null) 'team_id': teamId,
         if (userId != null) 'user_id': userId,
         if (taskInfo != null) 'task_info': taskInfo,
+        'timezone': timezone,
       }),
     );
 

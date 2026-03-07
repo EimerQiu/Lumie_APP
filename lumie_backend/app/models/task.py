@@ -86,6 +86,15 @@ class TemplateCreate(BaseModel):
     time_window_list: List[TimeWindow] = Field(..., min_length=1)
 
 
+class TemplateUpdate(BaseModel):
+    """Request model for updating a template (all fields optional)"""
+    template_name: Optional[str] = Field(None, min_length=1, max_length=200)
+    template_type: Optional[TaskType] = None
+    description: Optional[str] = Field(None, max_length=500)
+    min_interval: Optional[int] = Field(None, ge=0, description="Min interval in minutes")
+    time_window_list: Optional[List[TimeWindow]] = Field(None, min_length=1)
+
+
 class TemplateResponse(BaseModel):
     """Response model for a template"""
     id: str
@@ -117,6 +126,7 @@ class BatchGenerateRequest(BaseModel):
     team_id: Optional[str] = Field(None)
     user_id: Optional[str] = Field(None, description="For team tasks: assigned user")
     task_info: Optional[str] = Field(None, max_length=500)
+    timezone: str = Field(default="UTC", description="User's timezone for time conversion (e.g., America/Los_Angeles)")
 
 
 class BatchGenerateResponse(BaseModel):

@@ -76,6 +76,11 @@ class _TemplatesListScreenState extends State<TemplatesListScreen> {
                   '/tasks/batch',
                   arguments: template.id,
                 ),
+                onEdit: () => Navigator.pushNamed(
+                  context,
+                  '/tasks/templates/edit',
+                  arguments: template.id,
+                ),
                 onDelete: () => _deleteTemplate(template),
               );
             },
@@ -135,11 +140,13 @@ class _TemplatesListScreenState extends State<TemplatesListScreen> {
 class _TemplateCard extends StatelessWidget {
   final RepeatTaskTemplate template;
   final VoidCallback onGenerateTasks;
+  final VoidCallback onEdit;
   final VoidCallback onDelete;
 
   const _TemplateCard({
     required this.template,
     required this.onGenerateTasks,
+    required this.onEdit,
     required this.onDelete,
   });
 
@@ -247,6 +254,11 @@ class _TemplateCard extends StatelessWidget {
                 ),
               ),
               const SizedBox(width: 8),
+              IconButton(
+                onPressed: onEdit,
+                icon: const Icon(Icons.edit_outlined, size: 22),
+                color: AppColors.textSecondary,
+              ),
               IconButton(
                 onPressed: onDelete,
                 icon: const Icon(Icons.delete_outline, size: 22),

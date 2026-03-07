@@ -71,8 +71,11 @@ class RingProvider extends ChangeNotifier {
 
   void _handleDisconnected() {
     if (_ringInfo?.isPaired == true) {
+      debugPrint('[Ring] Disconnected — scheduling auto-reconnect');
       _state = RingProviderState.disconnected;
       notifyListeners();
+      // Auto-reconnect with retry after a short delay
+      _autoReconnectWithRetry();
     }
   }
 
@@ -82,15 +85,52 @@ class RingProvider extends ChangeNotifier {
   Future<void> _tryReconnect() async {
     final deviceId = _ringInfo?.ringDeviceId;
     if (deviceId == null) return;
+    debugPrint('[Ring] tryReconnect: $deviceId');
     try {
       await _bleService.reconnect(deviceId);
       _ringInfo =
           _ringInfo?.copyWith(connectionStatus: RingConnectionStatus.connected);
       _state = RingProviderState.paired;
+      debugPrint('[Ring] Reconnect succeeded');
       notifyListeners();
-    } catch (_) {
+    } catch (e) {
+      debugPrint('[Ring] Reconnect failed: $e');
       _state = RingProviderState.disconnected;
       notifyListeners();
+    }
+  }
+
+  /// Auto-reconnect on unexpected disconnect — retries up to 3 times with
+  /// exponential backoff (2s, 4s, 8s).
+  Future<void> _autoReconnectWithRetry() async {
+    const maxAttempts = 3;
+    for (var attempt = 1; attempt <= maxAttempts; attempt++) {
+      final deviceId = _ringInfo?.ringDeviceId;
+      if (deviceId == null) return; // Ring unpaired while retrying
+      if (_bleService.isConnected) return; // Already reconnected
+
+      final delay = Duration(seconds: 2 * attempt);
+      debugPrint('[Ring] Auto-reconnect attempt $attempt/$maxAttempts in ${delay.inSeconds}s');
+      await Future.delayed(delay);
+
+      // Check again after the delay
+      if (_bleService.isConnected || _ringInfo?.ringDeviceId == null) return;
+
+      try {
+        await _bleService.reconnect(deviceId);
+        _ringInfo = _ringInfo?.copyWith(connectionStatus: RingConnectionStatus.connected);
+        _state = RingProviderState.paired;
+        debugPrint('[Ring] Auto-reconnect succeeded on attempt $attempt');
+        notifyListeners();
+        return;
+      } catch (e) {
+        debugPrint('[Ring] Auto-reconnect attempt $attempt failed: $e');
+        if (attempt == maxAttempts) {
+          debugPrint('[Ring] All reconnect attempts exhausted');
+          _state = RingProviderState.disconnected;
+          notifyListeners();
+        }
+      }
     }
   }
 
