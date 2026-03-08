@@ -83,17 +83,11 @@ class TasksProvider extends ChangeNotifier {
 
   /// Task info text for UI display
   String get taskLimitText {
-    if (_userTier == SubscriptionTier.free) {
-      return '$activeTaskCount tasks (7-day range)';
-    }
     return '$activeTaskCount tasks';
   }
 
   /// Banner message for subscription status
   String? get subscriptionBannerMessage {
-    if (_userTier == SubscriptionTier.free) {
-      return 'Free plan: tasks limited to 7 days from today. Upgrade to Pro for no limits.';
-    }
     return null;
   }
 

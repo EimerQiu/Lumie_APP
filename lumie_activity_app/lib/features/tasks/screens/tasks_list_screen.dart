@@ -14,10 +14,18 @@ class TasksListScreen extends StatefulWidget {
   State<TasksListScreen> createState() => _TasksListScreenState();
 }
 
-class _TasksListScreenState extends State<TasksListScreen> {
+class _TasksListScreenState extends State<TasksListScreen>
+    with TickerProviderStateMixin {
+  late AnimationController _animationController;
+  bool _isMenuExpanded = false;
+
   @override
   void initState() {
     super.initState();
+    _animationController = AnimationController(
+      duration: const Duration(milliseconds: 300),
+      vsync: this,
+    );
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final provider = context.read<TasksProvider>();
       provider.loadTasks();
@@ -27,6 +35,7 @@ class _TasksListScreenState extends State<TasksListScreen> {
 
   @override
   void dispose() {
+    _animationController.dispose();
     // Stop polling when leaving screen
     // Note: provider persists, polling continues if user comes back
     super.dispose();
@@ -47,12 +56,6 @@ class _TasksListScreenState extends State<TasksListScreen> {
             onPressed: () => Navigator.pushNamed(context, '/tasks/admin'),
             icon: const Icon(Icons.admin_panel_settings_outlined),
             tooltip: 'Admin Dashboard',
-          ),
-          // Templates button
-          IconButton(
-            onPressed: () => Navigator.pushNamed(context, '/tasks/templates'),
-            icon: const Icon(Icons.view_list_outlined),
-            tooltip: 'Templates',
           ),
         ],
       ),
@@ -116,17 +119,7 @@ class _TasksListScreenState extends State<TasksListScreen> {
           );
         },
       ),
-      floatingActionButton: Consumer<TasksProvider>(
-        builder: (context, provider, _) {
-          return FloatingActionButton.extended(
-            onPressed: () => _onAddTask(provider),
-            backgroundColor: AppColors.primaryLemonDark,
-            foregroundColor: Colors.white,
-            icon: const Icon(Icons.add),
-            label: const Text('Add Task'),
-          );
-        },
-      ),
+      floatingActionButton: _buildAnimatedFAB(),
     );
   }
 
@@ -210,6 +203,83 @@ class _TasksListScreenState extends State<TasksListScreen> {
     );
   }
 
+  Widget _buildAnimatedFAB() {
+    return Stack(
+      alignment: Alignment.bottomRight,
+      children: [
+        // Menu item 1: Create Task (grows from center outward)
+        _AnimatedMenuButton(
+          animation: _animationController,
+          offset: const Offset(0, 70),
+          icon: Icons.add,
+          label: 'New Task',
+          onTap: () {
+            _toggleMenu();
+            Navigator.pushNamed(context, '/tasks/create');
+          },
+        ),
+        // Menu item 2: Templates (grows from center outward)
+        _AnimatedMenuButton(
+          animation: _animationController,
+          offset: const Offset(0, 130),
+          icon: Icons.view_list_outlined,
+          label: 'From Template',
+          onTap: () {
+            _toggleMenu();
+            Navigator.pushNamed(context, '/tasks/templates');
+          },
+        ),
+        // Main FAB with rotating icon
+        Positioned(
+          bottom: 16,
+          right: 16,
+          child: GestureDetector(
+            onTap: _toggleMenu,
+            child: Container(
+              width: 56,
+              height: 56,
+              decoration: BoxDecoration(
+                color: AppColors.primaryLemonDark,
+                shape: BoxShape.circle,
+                boxShadow: const [
+                  BoxShadow(
+                    color: Color(0x33000000),
+                    blurRadius: 4,
+                    offset: Offset(0, 2),
+                  ),
+                ],
+              ),
+              child: AnimatedBuilder(
+                animation: _animationController,
+                builder: (context, child) {
+                  return Transform.rotate(
+                    angle: _animationController.value * (3.14159 / 2),
+                    child: Icon(
+                      _isMenuExpanded ? Icons.close : Icons.add,
+                      color: Colors.white,
+                      size: 24,
+                    ),
+                  );
+                },
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  void _toggleMenu() {
+    setState(() {
+      _isMenuExpanded = !_isMenuExpanded;
+    });
+    if (_isMenuExpanded) {
+      _animationController.forward();
+    } else {
+      _animationController.reverse();
+    }
+  }
+
   void _onAddTask(TasksProvider provider) {
     // No quantity limit — date-range limit is enforced server-side
     Navigator.pushNamed(context, '/tasks/create');
@@ -275,5 +345,86 @@ class _TasksListScreenState extends State<TasksListScreen> {
         );
       }
     }
+  }
+}
+
+/// Animated menu button that grows out of the main FAB
+class _AnimatedMenuButton extends StatelessWidget {
+  final Animation<double> animation;
+  final Offset offset;
+  final IconData icon;
+  final String label;
+  final VoidCallback onTap;
+
+  const _AnimatedMenuButton({
+    required this.animation,
+    required this.offset,
+    required this.icon,
+    required this.label,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: animation,
+      builder: (context, child) {
+        // Scale from 0 to 1 as menu expands
+        final scale = animation.value;
+        // Slide from center outward based on offset
+        final slideOffset = Offset(offset.dx * scale, offset.dy * scale);
+
+        return Positioned(
+          bottom: 16 + slideOffset.dy,
+          right: 16 + slideOffset.dx,
+          child: Transform.scale(
+            scale: scale,
+            alignment: Alignment.center,
+            child: Opacity(
+              opacity: scale,
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  // Text label
+                  Text(
+                    label,
+                    style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w500,
+                      color: AppColors.primaryLemonDark,
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  // Icon button
+                  GestureDetector(
+                    onTap: onTap,
+                    child: Container(
+                      width: 56,
+                      height: 56,
+                      decoration: BoxDecoration(
+                        color: AppColors.primaryLemonDark,
+                        shape: BoxShape.circle,
+                        boxShadow: [
+                          BoxShadow(
+                            color: const Color(0x33000000),
+                            blurRadius: 4,
+                            offset: const Offset(0, 2),
+                          ),
+                        ],
+                      ),
+                      child: Icon(
+                        icon,
+                        color: Colors.white,
+                        size: 24,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
   }
 }

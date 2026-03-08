@@ -72,6 +72,7 @@ class TaskCard extends StatelessWidget {
         onTap: onTap,
         child: Container(
           margin: const EdgeInsets.only(bottom: 12),
+          height: 55,
           decoration: BoxDecoration(
             color: _cardBase,
             borderRadius: BorderRadius.circular(12),
@@ -113,7 +114,7 @@ class TaskCard extends StatelessWidget {
                   child: Row(
                     children: [
                       // Left: Open time (rotated 90°)
-                      _buildRotatedTime(task.openDatetime),
+                      _buildRotatedTime(task.openDatetime, isEnd: false),
                       // Center: Task name
                       Expanded(
                         child: Column(
@@ -122,7 +123,7 @@ class TaskCard extends StatelessWidget {
                             Text(
                               task.taskName,
                               style: const TextStyle(
-                                fontSize: 18,
+                                fontSize: 14,
                                 fontWeight: FontWeight.w700,
                                 color: Color(0xFF1C1917),
                               ),
@@ -134,7 +135,7 @@ class TaskCard extends StatelessWidget {
                         ),
                       ),
                       // Right: Close time (rotated 90°)
-                      _buildRotatedTime(task.closeDatetime),
+                      _buildRotatedTime(task.closeDatetime, isEnd: true),
                     ],
                   ),
                 ),
@@ -149,7 +150,7 @@ class TaskCard extends StatelessWidget {
   /// Rotated time display (90° like Automom)
   /// Shows time (HH:MM) if today, or date (MM/DD) if not today
   /// Times from backend are in UTC and need to be converted to local time for display
-  Widget _buildRotatedTime(String dateTimeStr) {
+  Widget _buildRotatedTime(String dateTimeStr, {bool isEnd = false}) {
     String timeText;
     try {
       // Parse the UTC time string and convert to local time
@@ -185,9 +186,9 @@ class TaskCard extends StatelessWidget {
           quarterTurns: 1,
           child: Text(
             timeText,
-            style: const TextStyle(
+            style: TextStyle(
               fontSize: 10,
-              color: Colors.white,
+              color: isEnd ? const Color(0xFF666666) : Colors.white,
               fontWeight: FontWeight.w500,
             ),
             textAlign: TextAlign.center,

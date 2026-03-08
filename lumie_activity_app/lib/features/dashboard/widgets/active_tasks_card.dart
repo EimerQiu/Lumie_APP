@@ -56,41 +56,15 @@ class ActiveTasksCard extends StatelessWidget {
   Widget _buildHeader(BuildContext context, int count) {
     return Row(
       children: [
-        Container(
-          padding: const EdgeInsets.all(7),
-          decoration: BoxDecoration(
-            gradient: AppColors.warmGradient,
-            borderRadius: BorderRadius.circular(9),
-          ),
-          child: const Icon(
-            Icons.medication_outlined,
-            size: 18,
-            color: AppColors.textOnYellow,
+        const Text(
+          'Med-Reminder',
+          style: TextStyle(
+            fontSize: 16,
+            fontWeight: FontWeight.w600,
+            color: AppColors.textPrimary,
           ),
         ),
-        const SizedBox(width: 10),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text(
-                'Med-Reminder',
-                style: TextStyle(
-                  fontSize: 14,
-                  fontWeight: FontWeight.w600,
-                  color: AppColors.textPrimary,
-                ),
-              ),
-              Text(
-                '$count active task${count == 1 ? '' : 's'}',
-                style: const TextStyle(
-                  fontSize: 11,
-                  color: AppColors.textSecondary,
-                ),
-              ),
-            ],
-          ),
-        ),
+        const Spacer(),
         TextButton(
           onPressed: () => Navigator.pushNamed(context, '/tasks'),
           style: TextButton.styleFrom(
@@ -145,7 +119,7 @@ class _TaskRowItem extends StatelessWidget {
       onTap: () => Navigator.pushNamed(context, '/tasks'),
       child: Container(
         margin: const EdgeInsets.only(bottom: 12),
-        height: 65,
+        height: 55,
         decoration: BoxDecoration(
           color: _cardBase,
           borderRadius: BorderRadius.circular(12),
@@ -186,7 +160,7 @@ class _TaskRowItem extends StatelessWidget {
                 child: Row(
                   children: [
                     // Left: Open time (rotated 90°)
-                    _buildRotatedTime(task.openDatetime),
+                    _buildRotatedTime(task.openDatetime, isEnd: false),
                     // Center: Task name
                     Expanded(
                       child: Column(
@@ -195,7 +169,7 @@ class _TaskRowItem extends StatelessWidget {
                           Text(
                             task.taskName,
                             style: const TextStyle(
-                              fontSize: 18,
+                              fontSize: 14,
                               fontWeight: FontWeight.w700,
                               color: Color(0xFF1C1917),
                             ),
@@ -207,7 +181,7 @@ class _TaskRowItem extends StatelessWidget {
                       ),
                     ),
                     // Right: Close time (rotated 90°)
-                    _buildRotatedTime(task.closeDatetime),
+                    _buildRotatedTime(task.closeDatetime, isEnd: true),
                   ],
                 ),
               ),
@@ -220,7 +194,7 @@ class _TaskRowItem extends StatelessWidget {
 
   /// Rotated time display (90° like TaskCard)
   /// Shows time (HH:MM) if today, or date (MM/DD) if not today
-  Widget _buildRotatedTime(String dateTimeStr) {
+  Widget _buildRotatedTime(String dateTimeStr, {bool isEnd = false}) {
     String timeText;
     try {
       final utcDateTime =
@@ -254,9 +228,9 @@ class _TaskRowItem extends StatelessWidget {
           quarterTurns: 1,
           child: Text(
             timeText,
-            style: const TextStyle(
+            style: TextStyle(
               fontSize: 10,
-              color: Colors.white,
+              color: isEnd ? const Color(0xFF666666) : Colors.white,
               fontWeight: FontWeight.w500,
             ),
             textAlign: TextAlign.center,
