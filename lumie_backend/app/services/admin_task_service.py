@@ -129,24 +129,40 @@ class AdminTaskService:
         upcoming_offset: int = 0,
     ) -> AdminTaskListResponse:
         """
-        Get global task list for admin dashboard.
-        Shows all tasks across teams the admin manages.
+        Get task list for admin dashboard.
+        - Admins: see all tasks across teams they manage
+        - Members: see only their own tasks
         """
         db = get_database()
-        admin_team_ids = await self._verify_admin_of_any_team(admin_user_id)
+
+        # Check if user is admin of any team
+        try:
+            admin_team_ids = await self._verify_admin_of_any_team(admin_user_id)
+            is_admin = True
+        except HTTPException:
+            # User is not an admin, they can only view their own tasks
+            admin_team_ids = []
+            is_admin = False
 
         # Determine which user_ids to query
         if email:
+            # Only admins can filter by email
+            if not is_admin:
+                return AdminTaskListResponse(previous_tasks=[], upcoming_tasks=[])
             target_user_id = await self._get_user_id_by_email(email)
             if not target_user_id:
                 return AdminTaskListResponse(previous_tasks=[], upcoming_tasks=[])
             user_ids = [target_user_id]
         else:
-            # All members across admin's teams (including admin themselves)
-            user_ids = await self._get_team_member_ids(admin_team_ids)
-            # Also include admin's own tasks
-            if admin_user_id not in user_ids:
-                user_ids.append(admin_user_id)
+            if is_admin:
+                # Admin: show all members across their teams
+                user_ids = await self._get_team_member_ids(admin_team_ids)
+                # Also include admin's own tasks
+                if admin_user_id not in user_ids:
+                    user_ids.append(admin_user_id)
+            else:
+                # Non-admin: show only their own tasks
+                user_ids = [admin_user_id]
 
         # Current time for splitting previous/upcoming
         now_str = current_time or datetime.utcnow().strftime("%Y-%m-%d %H:%M")

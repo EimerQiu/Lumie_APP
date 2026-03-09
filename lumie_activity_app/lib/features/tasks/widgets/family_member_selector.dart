@@ -42,10 +42,12 @@ class FamilyMemberSelector extends StatefulWidget {
 
 class _FamilyMemberSelectorState extends State<FamilyMemberSelector> {
   List<Team> _adminTeams = [];
+  List<Team> _allTeams = []; // All teams user has joined
   List<TeamMember> _teamMembers = [];
   String? _selectedTeamId;
   String? _selectedMemberId;
   bool _isLoadingMembers = false;
+  bool _isAdminMode = false; // Whether user is admin of any team
 
   @override
   void initState() {
@@ -54,10 +56,10 @@ class _FamilyMemberSelectorState extends State<FamilyMemberSelector> {
       _selectedTeamId = widget.initialSelection!.familyId;
       _selectedMemberId = widget.initialSelection!.memberId;
     }
-    _loadAdminTeams();
+    _loadTeams();
   }
 
-  Future<void> _loadAdminTeams() async {
+  Future<void> _loadTeams() async {
     try {
       final teamsProvider = context.read<TeamsProvider>();
       await teamsProvider.loadTeams();
@@ -66,9 +68,13 @@ class _FamilyMemberSelectorState extends State<FamilyMemberSelector> {
           _adminTeams = teamsProvider.teams
               .where((t) => t.role == TeamRole.admin && t.status == MemberStatus.member)
               .toList();
+          _allTeams = teamsProvider.teams
+              .where((t) => t.status == MemberStatus.member)
+              .toList();
+          _isAdminMode = _adminTeams.isNotEmpty;
         });
-        // If a team was pre-selected, load its members
-        if (_selectedTeamId != null) {
+        // If a team was pre-selected, load its members (admin mode only)
+        if (_selectedTeamId != null && _isAdminMode) {
           _loadTeamMembers(_selectedTeamId!);
         }
       }
@@ -103,12 +109,26 @@ class _FamilyMemberSelectorState extends State<FamilyMemberSelector> {
   }
 
   void _selectTeam(Team team) {
-    setState(() {
-      _selectedTeamId = team.teamId;
-      _selectedMemberId = null;
-    });
-    _loadTeamMembers(team.teamId);
-    // Don't fire onChanged yet - need member selection
+    if (_isAdminMode) {
+      // Admin mode: select team and require member selection
+      setState(() {
+        _selectedTeamId = team.teamId;
+        _selectedMemberId = null;
+      });
+      _loadTeamMembers(team.teamId);
+    } else {
+      // Member mode: select team directly without member selection
+      setState(() {
+        _selectedTeamId = team.teamId;
+        _selectedMemberId = null;
+      });
+      widget.onChanged(FamilyMemberSelection(
+        familyId: team.teamId,
+        memberId: null,
+        memberName: null,
+        teamName: team.name,
+      ));
+    }
   }
 
   void _selectMember(TeamMember member) {
@@ -124,14 +144,18 @@ class _FamilyMemberSelectorState extends State<FamilyMemberSelector> {
 
   @override
   Widget build(BuildContext context) {
-    if (_adminTeams.isEmpty) return const SizedBox.shrink();
+    // Show nothing if user has no teams and is not an admin
+    if (_allTeams.isEmpty && _adminTeams.isEmpty) return const SizedBox.shrink();
+
+    // Use appropriate team list based on admin status
+    final teamsToShow = _isAdminMode ? _adminTeams : _allTeams;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const Text(
-          'Assign To',
-          style: TextStyle(
+        Text(
+          _isAdminMode ? 'Assign To' : 'Task Privacy',
+          style: const TextStyle(
             fontSize: 14,
             fontWeight: FontWeight.w500,
             color: AppColors.textSecondary,
@@ -146,28 +170,32 @@ class _FamilyMemberSelectorState extends State<FamilyMemberSelector> {
             scrollDirection: Axis.horizontal,
             children: [
               _FamilyCard(
-                label: 'Personal Tasks',
+                label: _isAdminMode ? 'Personal Tasks' : 'Private',
                 isSelected: _selectedTeamId == null,
                 onTap: _selectPersonal,
                 gradient: const LinearGradient(
                   colors: [Color(0xFFE0E7FF), Color(0xFFC7D2FE)],
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
                 ),
               ),
-              ..._adminTeams.map((team) => _FamilyCard(
-                    label: team.name,
-                    subtitle: '${team.memberCount} members',
-                    isSelected: _selectedTeamId == team.teamId,
-                    onTap: () => _selectTeam(team),
-                    gradient: const LinearGradient(
-                      colors: [Color(0xFFFEF3C7), Color(0xFFFDE68A)],
-                    ),
-                  )),
+              ...teamsToShow.map((team) => _FamilyCard(
+                label: team.name,
+                subtitle: _isAdminMode ? '${team.memberCount} members' : null,
+                isSelected: _selectedTeamId == team.teamId,
+                onTap: () => _selectTeam(team),
+                gradient: const LinearGradient(
+                  colors: [Color(0xFFFEF3C7), Color(0xFFFDE68A)],
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                ),
+              )),
             ],
           ),
         ),
 
-        // Member selection (only when a team is selected)
-        if (_selectedTeamId != null) ...[
+        // Member selection (only when admin mode and team is selected)
+        if (_isAdminMode && _selectedTeamId != null) ...[
           const SizedBox(height: 12),
           const Text(
             'Select Member',

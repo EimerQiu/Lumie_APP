@@ -155,25 +155,33 @@ class TaskService:
         # Determine the assigned user
         assigned_user_id = data.user_id if data.user_id else user_id
 
-        # If team task, verify creator is admin of the team
+        # If team task, verify user is a member of the team and assign to self
         if data.team_id:
-            admin_member = await db.team_members.find_one({
+            # Verify creator is a member of the team
+            team_member = await db.team_members.find_one({
                 "team_id": data.team_id,
                 "user_id": user_id,
-                "role": TeamRole.ADMIN.value,
                 "status": MemberStatus.MEMBER.value
             })
-            if not admin_member:
+            if not team_member:
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
-                    detail="Only team admins can create team tasks"
+                    detail="You must be a member of this team to create team tasks"
                 )
 
-            # Verify assigned user is a member of the team
-            if assigned_user_id != user_id:
+            # For team tasks, always assign to the creator (members can't assign to others)
+            # Only admins can assign to other members (handled separately if needed)
+            is_admin = team_member.get("role") == TeamRole.ADMIN.value
+            if data.user_id and data.user_id != user_id:
+                if not is_admin:
+                    raise HTTPException(
+                        status_code=status.HTTP_403_FORBIDDEN,
+                        detail="Only team admins can assign tasks to other members"
+                    )
+                # Verify assigned user is a member of the team
                 target_member = await db.team_members.find_one({
                     "team_id": data.team_id,
-                    "user_id": assigned_user_id,
+                    "user_id": data.user_id,
                     "status": MemberStatus.MEMBER.value
                 })
                 if not target_member:
@@ -181,6 +189,9 @@ class TaskService:
                         status_code=status.HTTP_404_NOT_FOUND,
                         detail="Assigned user is not a member of this team"
                     )
+            else:
+                # Non-admin or admin without specifying a user: assign to self
+                assigned_user_id = user_id
 
         # Check subscription date-range limit for the assigned user
         subscription_tier, tier_value = await self._get_user_subscription_tier(assigned_user_id)
@@ -733,19 +744,30 @@ class TaskService:
         # Determine assigned user
         assigned_user_id = data.user_id if data.user_id else user_id
 
-        # If team task, verify admin
+        # If team task, verify user is a member of the team
         if data.team_id:
-            admin_member = await db.team_members.find_one({
+            team_member = await db.team_members.find_one({
                 "team_id": data.team_id,
                 "user_id": user_id,
-                "role": TeamRole.ADMIN.value,
                 "status": MemberStatus.MEMBER.value
             })
-            if not admin_member:
+            if not team_member:
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
-                    detail="Only team admins can create team tasks"
+                    detail="You must be a member of this team to create team tasks"
                 )
+
+            # For team tasks, only admins can assign to other members
+            is_admin = team_member.get("role") == TeamRole.ADMIN.value
+            if data.user_id and data.user_id != user_id and not is_admin:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Only team admins can assign tasks to other members"
+                )
+
+            # Non-admin members should have assigned_user_id set to themselves
+            if not is_admin and assigned_user_id != user_id:
+                assigned_user_id = user_id
 
         # Generate task documents
         task_docs = self._generate_tasks_from_template(

@@ -16,6 +16,7 @@ class TaskCard extends StatelessWidget {
   });
 
   /// Color pairs for progress gradient (from Automom)
+  /// 24 diverse gradient pairs ensure good color distribution for multiple tasks created in short duration
   static const List<List<Color>> _gradientPairs = [
     [Color(0xFFFF3B30), Color(0xFFFF2D55)], // Red -> Pink
     [Color(0xFF007AFF), Color(0xFF5AC8FA)], // Blue -> Teal
@@ -33,6 +34,14 @@ class TaskCard extends StatelessWidget {
     [Color(0xFF34C759), Color(0xFF5AC8FA)], // Green -> Teal
     [Color(0xFF5856D6), Color(0xFF007AFF)], // Purple -> Blue
     [Color(0xFFFFCC00), Color(0xFFFF9500)], // Yellow -> Orange
+    [Color(0xFF007AFF), Color(0xFFFF3B30)], // Blue -> Red
+    [Color(0xFF34C759), Color(0xFFFF2D55)], // Green -> Pink
+    [Color(0xFFFF9500), Color(0xFF5856D6)], // Orange -> Purple
+    [Color(0xFF5AC8FA), Color(0xFFFF2D55)], // Teal -> Pink
+    [Color(0xFFFFCC00), Color(0xFF5856D6)], // Yellow -> Purple
+    [Color(0xFF34C759), Color(0xFFFF3B30)], // Green -> Red
+    [Color(0xFFFF2D55), Color(0xFF007AFF)], // Pink -> Blue
+    [Color(0xFF5AC8FA), Color(0xFFFF9500)], // Teal -> Orange
   ];
 
   /// Light grey card base color (adapted for white background)

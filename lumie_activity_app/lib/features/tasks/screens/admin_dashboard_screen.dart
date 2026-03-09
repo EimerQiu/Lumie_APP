@@ -7,6 +7,8 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../shared/models/task_models.dart';
+import '../../../features/auth/providers/auth_provider.dart';
+import '../../../features/teams/providers/teams_provider.dart';
 import '../providers/admin_tasks_provider.dart';
 
 class AdminDashboardScreen extends StatefulWidget {
@@ -28,9 +30,15 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
     super.initState();
     _scrollController.addListener(_onScroll);
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      final provider = context.read<AdminTasksProvider>();
-      provider.loadMemberChips();
-      provider.loadTasks();
+      final teamsProvider = context.read<TeamsProvider>();
+      final tasksProvider = context.read<AdminTasksProvider>();
+
+      // Load teams first (needed to determine admin status for swipe actions)
+      teamsProvider.loadTeams().then((_) {
+        tasksProvider.loadMemberChips();
+        tasksProvider.loadTasks();
+      });
+
       // Initialize scroll tracking positions to prevent accidental loads on first scroll
       _lastScrollPosition = _scrollController.offset;
       _lastLoadPreviousPosition = _scrollController.offset;
@@ -82,21 +90,26 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
     return Scaffold(
       backgroundColor: AppColors.backgroundPaper,
       appBar: AppBar(
-        title: const Text('Admin Dashboard'),
+        title: const Text('All Tasks'),
         backgroundColor: AppColors.backgroundPaper,
         elevation: 0,
         foregroundColor: AppColors.textPrimary,
         actions: [
           IconButton(
             onPressed: () {
-              final provider = context.read<AdminTasksProvider>();
-              final email = provider.filterEmail;
+              final adminProvider = context.read<AdminTasksProvider>();
+              final authProvider = context.read<AuthProvider>();
+
+              // Use selected member email, or default to current user
+              final email = adminProvider.filterEmail ?? authProvider.user?.email;
+
               if (email == null) {
                 ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('Please select a member first')),
+                  const SnackBar(content: Text('Unable to determine user email')),
                 );
                 return;
               }
+
               Navigator.pushNamed(
                 context,
                 '/tasks/reward-calc',
@@ -128,6 +141,11 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
   }
 
   Widget _buildSearchBar(AdminTasksProvider provider) {
+    // Hide search bar for non-admin users
+    if (!provider.isAdmin) {
+      return const SizedBox.shrink();
+    }
+
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
       child: Row(
@@ -302,11 +320,15 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
               title: 'Previous Tasks',
               count: provider.previousTasks.length,
             ),
-            ...provider.previousTasks.map((task) => _AdminTaskCard(
-                  task: task,
-                  onComplete: () => _completeTask(provider, task),
-                  onDelete: () => _deleteTask(provider, task),
-                )),
+            ...provider.previousTasks.map((task) {
+              final isAdmin = _isUserAdminOfTeam(context, task.familyId);
+              return _AdminTaskCard(
+                task: task,
+                isAdmin: isAdmin,
+                onComplete: () => _completeTask(provider, task),
+                onDelete: () => _deleteTask(provider, task),
+              );
+            }),
           ],
 
           // Divider
@@ -319,11 +341,15 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
               title: 'Upcoming Tasks',
               count: provider.upcomingTasks.length,
             ),
-            ...provider.upcomingTasks.map((task) => _AdminTaskCard(
-                  task: task,
-                  onComplete: () => _completeTask(provider, task),
-                  onDelete: () => _deleteTask(provider, task),
-                )),
+            ...provider.upcomingTasks.map((task) {
+              final isAdmin = _isUserAdminOfTeam(context, task.familyId);
+              return _AdminTaskCard(
+                task: task,
+                isAdmin: isAdmin,
+                onComplete: () => _completeTask(provider, task),
+                onDelete: () => _deleteTask(provider, task),
+              );
+            }),
           ],
 
           // Loading indicator for upcoming tasks
@@ -397,6 +423,32 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
       }
     }
   }
+
+  /// Check if current user is admin of a specific team
+  bool _isUserAdminOfTeam(BuildContext context, String? familyId) {
+    if (familyId == null) return false;
+
+    final teamsProvider = context.read<TeamsProvider>();
+
+    // Find the team and check if user is admin
+    try {
+      final team = teamsProvider.teams.firstWhere(
+        (t) => t.teamId == familyId,
+      );
+      // Check if user's role in this team is admin
+      final isAdmin = team.role.name == 'admin';
+      print('DEBUG: Team ${team.name} (ID: $familyId) - User role: ${team.role.name}, isAdmin: $isAdmin');
+      return isAdmin;
+    } catch (e) {
+      // If team not found, default to true (assume admin can view all)
+      // This handles the case where teams list might not be fully populated
+      print('DEBUG: Team not found for familyId: $familyId. TeamsProvider has ${teamsProvider.teams.length} teams');
+      for (var t in teamsProvider.teams) {
+        print('  - Team: ${t.name} (ID: ${t.teamId}), Role: ${t.role.name}');
+      }
+      return true;
+    }
+  }
 }
 
 class _SectionHeader extends StatelessWidget {
@@ -439,11 +491,13 @@ class _SectionHeader extends StatelessWidget {
 
 class _AdminTaskCard extends StatelessWidget {
   final AdminTaskData task;
+  final bool isAdmin;
   final VoidCallback onComplete;
   final VoidCallback onDelete;
 
   const _AdminTaskCard({
     required this.task,
+    required this.isAdmin,
     required this.onComplete,
     required this.onDelete,
   });
@@ -476,6 +530,20 @@ class _AdminTaskCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // If user is not admin, disable swipe actions
+    if (!isAdmin) {
+      return Card(
+        margin: const EdgeInsets.only(bottom: 8),
+        elevation: 0,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(12),
+          side: BorderSide(color: AppColors.surfaceLight),
+        ),
+        child: _buildTaskContent(context),
+      );
+    }
+
+    // If user is admin, enable swipe actions
     return Dismissible(
       key: Key(task.taskId),
       background: Container(
@@ -506,123 +574,125 @@ class _AdminTaskCard extends StatelessWidget {
           borderRadius: BorderRadius.circular(12),
           side: BorderSide(color: AppColors.surfaceLight),
         ),
-        child: Padding(
-          padding: const EdgeInsets.all(12),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
+        child: _buildTaskContent(context),
+      ),
+    );
+  }
+
+  Widget _buildTaskContent(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.all(12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Header: name + status badge
+          Row(
             children: [
-              // Header: name + status badge
-              Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      task.rpttaskName,
-                      style: const TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w600,
-                        color: AppColors.textPrimary,
-                      ),
-                    ),
+              Expanded(
+                child: Text(
+                  task.rpttaskName,
+                  style: const TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w600,
+                    color: AppColors.textPrimary,
                   ),
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                    decoration: BoxDecoration(
-                      color: _statusColor.withValues(alpha: 0.15),
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: Text(
-                      _statusLabel,
-                      style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w600,
-                        color: _statusColor,
-                      ),
-                    ),
-                  ),
-                ],
+                ),
               ),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                decoration: BoxDecoration(
+                  color: _statusColor.withValues(alpha: 0.15),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Text(
+                  _statusLabel,
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                    color: _statusColor,
+                  ),
+                ),
+              ),
+            ],
+          ),
 
-              // Description
-              if (task.rpttaskInfo != null && task.rpttaskInfo!.isNotEmpty) ...[
-                const SizedBox(height: 4),
+          // Description
+          if (task.rpttaskInfo != null && task.rpttaskInfo!.isNotEmpty) ...[
+            const SizedBox(height: 4),
+            Text(
+              task.rpttaskInfo!,
+              style: const TextStyle(fontSize: 13, color: AppColors.textSecondary),
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ],
+
+          const SizedBox(height: 8),
+
+          // Time window
+          Row(
+            children: [
+              const Icon(Icons.schedule, size: 14, color: AppColors.textLight),
+              const SizedBox(width: 4),
+              Text(
+                task.timeWindowText,
+                style: const TextStyle(fontSize: 12, color: AppColors.textSecondary),
+              ),
+            ],
+          ),
+
+          const SizedBox(height: 4),
+
+          // User + team info
+          Row(
+            children: [
+              const Icon(Icons.person_outline, size: 14, color: AppColors.textLight),
+              const SizedBox(width: 4),
+              Text(
+                'User: ${task.username}',
+                style: const TextStyle(fontSize: 12, color: AppColors.textSecondary),
+              ),
+              if (task.familyName != null) ...[
+                const SizedBox(width: 12),
+                const Icon(Icons.group_outlined, size: 14, color: AppColors.textLight),
+                const SizedBox(width: 4),
                 Text(
-                  task.rpttaskInfo!,
-                  style: const TextStyle(fontSize: 13, color: AppColors.textSecondary),
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
+                  'Team: ${task.familyName}',
+                  style: const TextStyle(fontSize: 12, color: AppColors.textSecondary),
                 ),
-              ],
-
-              const SizedBox(height: 8),
-
-              // Time window
-              Row(
-                children: [
-                  const Icon(Icons.schedule, size: 14, color: AppColors.textLight),
-                  const SizedBox(width: 4),
-                  Text(
-                    task.timeWindowText,
-                    style: const TextStyle(fontSize: 12, color: AppColors.textSecondary),
-                  ),
-                ],
-              ),
-
-              const SizedBox(height: 4),
-
-              // User + team info
-              Row(
-                children: [
-                  const Icon(Icons.person_outline, size: 14, color: AppColors.textLight),
-                  const SizedBox(width: 4),
-                  Text(
-                    'User: ${task.username}',
-                    style: const TextStyle(fontSize: 12, color: AppColors.textSecondary),
-                  ),
-                  if (task.familyName != null) ...[
-                    const SizedBox(width: 12),
-                    const Icon(Icons.group_outlined, size: 14, color: AppColors.textLight),
-                    const SizedBox(width: 4),
-                    Text(
-                      'Team: ${task.familyName}',
-                      style: const TextStyle(fontSize: 12, color: AppColors.textSecondary),
-                    ),
-                  ],
-                ],
-              ),
-
-              // Task type
-              if (task.rpttaskType.isNotEmpty) ...[
-                const SizedBox(height: 4),
-                Text(
-                  task.rpttaskType,
-                  style: const TextStyle(fontSize: 11, color: AppColors.textLight),
-                ),
-              ],
-
-              // Subtasks
-              if (task.rpttaskList.isNotEmpty) ...[
-                const SizedBox(height: 8),
-                const Text(
-                  'Subtasks:',
-                  style: TextStyle(fontSize: 12, fontWeight: FontWeight.w500, color: AppColors.textSecondary),
-                ),
-                ...task.rpttaskList.map((sub) {
-                  final openH = sub.openTime ~/ 60;
-                  final openM = sub.openTime % 60;
-                  final closeH = sub.closeTime ~/ 60;
-                  final closeM = sub.closeTime % 60;
-                  return Padding(
-                    padding: const EdgeInsets.only(top: 2),
-                    child: Text(
-                      '  ${sub.name}: ${openH.toString().padLeft(2, '0')}:${openM.toString().padLeft(2, '0')} - ${closeH.toString().padLeft(2, '0')}:${closeM.toString().padLeft(2, '0')}',
-                      style: const TextStyle(fontSize: 12, color: AppColors.textLight),
-                    ),
-                  );
-                }),
               ],
             ],
           ),
-        ),
+
+          // Task type
+          if (task.rpttaskType.isNotEmpty) ...[
+            const SizedBox(height: 4),
+            Text(
+              task.rpttaskType,
+              style: const TextStyle(fontSize: 11, color: AppColors.textLight),
+            ),
+          ],
+
+          // Admin-only notice
+          if (!isAdmin) ...[
+            const SizedBox(height: 8),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              decoration: BoxDecoration(
+                color: AppColors.info.withValues(alpha: 0.15),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Text(
+                'View only - you must be a team admin to edit',
+                style: TextStyle(
+                  fontSize: 11,
+                  color: AppColors.info,
+                  fontStyle: FontStyle.italic,
+                ),
+              ),
+            ),
+          ],
+        ],
       ),
     );
   }

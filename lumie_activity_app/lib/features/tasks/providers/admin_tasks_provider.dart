@@ -87,40 +87,44 @@ class AdminTasksProvider extends ChangeNotifier {
   }
 
   /// Load team member chips for quick-filter
+  /// For admins: shows all team members from teams they admin
+  /// For members: shows only their own info
   Future<void> loadMemberChips() async {
     try {
       final teamsResponse = await _teamService.getTeams();
-      final adminTeams = teamsResponse.teams
-          .where((t) => t.role == TeamRole.admin && t.status == MemberStatus.member)
+      final allTeams = teamsResponse.teams
+          .where((t) => t.status == MemberStatus.member)
+          .toList();
+
+      final adminTeams = allTeams
+          .where((t) => t.role == TeamRole.admin)
           .toList();
 
       _isAdmin = adminTeams.isNotEmpty;
 
-      if (!_isAdmin) {
-        _memberChips = [];
-        notifyListeners();
-        return;
-      }
-
-      // Fetch members for each admin team
       final seenEmails = <String>{};
       final chips = <TeamMemberChip>[];
 
-      for (final team in adminTeams) {
-        final membersResponse = await _teamService.getTeamMembers(team.teamId);
-        for (final member in membersResponse.members) {
-          if (member.status == MemberStatus.member && !seenEmails.contains(member.email)) {
-            seenEmails.add(member.email);
-            chips.add(TeamMemberChip(
-              userId: member.userId,
-              name: member.name,
-              email: member.email,
-              teamId: team.teamId,
-              teamName: team.name,
-            ));
+      if (_isAdmin) {
+        // Admin: Fetch members for each admin team
+        for (final team in adminTeams) {
+          final membersResponse = await _teamService.getTeamMembers(team.teamId);
+          for (final member in membersResponse.members) {
+            if (member.status == MemberStatus.member && !seenEmails.contains(member.email)) {
+              seenEmails.add(member.email);
+              chips.add(TeamMemberChip(
+                userId: member.userId,
+                name: member.name,
+                email: member.email,
+                teamId: team.teamId,
+                teamName: team.name,
+              ));
+            }
           }
         }
       }
+      // Non-admin members: chips will be empty - they view their own tasks by default
+      // Admin members can use chips to filter other team members' tasks
 
       _memberChips = chips;
       notifyListeners();

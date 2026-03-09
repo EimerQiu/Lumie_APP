@@ -51,11 +51,11 @@ class _TasksListScreenState extends State<TasksListScreen>
         elevation: 0,
         foregroundColor: AppColors.textPrimary,
         actions: [
-          // Admin Dashboard button
+          // All Tasks button
           IconButton(
             onPressed: () => Navigator.pushNamed(context, '/tasks/admin'),
-            icon: const Icon(Icons.admin_panel_settings_outlined),
-            tooltip: 'Admin Dashboard',
+            icon: const Icon(Icons.checklist),
+            tooltip: 'All Tasks',
           ),
         ],
       ),
@@ -167,7 +167,7 @@ class _TasksListScreenState extends State<TasksListScreen>
             ),
             const SizedBox(height: 8),
             Text(
-              'Check the Admin Dashboard for all previous\nand upcoming tasks, or tap + to create one.',
+              'Check All Tasks for all previous\nand upcoming tasks, or tap + to create one.',
               style: TextStyle(
                 fontSize: 14,
                 color: AppColors.textLight,
@@ -177,8 +177,8 @@ class _TasksListScreenState extends State<TasksListScreen>
             const SizedBox(height: 16),
             TextButton.icon(
               onPressed: () => Navigator.pushNamed(context, '/tasks/admin'),
-              icon: const Icon(Icons.admin_panel_settings, size: 18),
-              label: const Text('Open Admin Dashboard'),
+              icon: const Icon(Icons.checklist, size: 18),
+              label: const Text('Open All Tasks'),
             ),
           ],
         ),
@@ -212,7 +212,7 @@ class _TasksListScreenState extends State<TasksListScreen>
           animation: _animationController,
           offset: const Offset(0, 70),
           icon: Icons.add,
-          label: 'New Task',
+          label: 'Create a New Task',
           onTap: () {
             _toggleMenu();
             Navigator.pushNamed(context, '/tasks/create');
@@ -223,7 +223,7 @@ class _TasksListScreenState extends State<TasksListScreen>
           animation: _animationController,
           offset: const Offset(0, 130),
           icon: Icons.view_list_outlined,
-          label: 'From Template',
+          label: 'Create Tasks from Template',
           onTap: () {
             _toggleMenu();
             Navigator.pushNamed(context, '/tasks/templates');
@@ -278,11 +278,6 @@ class _TasksListScreenState extends State<TasksListScreen>
     } else {
       _animationController.reverse();
     }
-  }
-
-  void _onAddTask(TasksProvider provider) {
-    // No quantity limit — date-range limit is enforced server-side
-    Navigator.pushNamed(context, '/tasks/create');
   }
 
   void _showCompleteDialog(Task task) {
@@ -377,26 +372,26 @@ class _AnimatedMenuButton extends StatelessWidget {
         return Positioned(
           bottom: 16 + slideOffset.dy,
           right: 16 + slideOffset.dx,
-          child: Transform.scale(
-            scale: scale,
-            alignment: Alignment.center,
-            child: Opacity(
-              opacity: scale,
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  // Text label
-                  Text(
-                    label,
-                    style: TextStyle(
-                      fontSize: 14,
-                      fontWeight: FontWeight.w500,
-                      color: AppColors.primaryLemonDark,
-                    ),
+          child: Opacity(
+            opacity: scale,
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // Text label
+                Text(
+                  label,
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w500,
+                    color: AppColors.primaryLemonDark,
                   ),
-                  const SizedBox(width: 12),
-                  // Icon button
-                  GestureDetector(
+                ),
+                const SizedBox(width: 12),
+                // Icon button (only this scales)
+                Transform.scale(
+                  scale: scale,
+                  alignment: Alignment.center,
+                  child: GestureDetector(
                     onTap: onTap,
                     child: Container(
                       width: 56,
@@ -419,8 +414,8 @@ class _AnimatedMenuButton extends StatelessWidget {
                       ),
                     ),
                   ),
-                ],
-              ),
+                ),
+              ],
             ),
           ),
         );

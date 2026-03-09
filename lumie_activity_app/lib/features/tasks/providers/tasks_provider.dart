@@ -55,27 +55,45 @@ class TasksProvider extends ChangeNotifier {
       // Try to get the timezone name from the timezone package
       String tzName = tz.local.name;
       // If it's just 'UTC', try to get a more specific timezone
-      if (tzName == 'UTC' || tzName.isEmpty) {
-        // Get UTC offset from DateTime
-        final now = DateTime.now();
-        final offset = now.timeZoneOffset;
-
-        // Map common offsets to IANA timezone names
-        final offsetHours = offset.inHours;
-        final Map<int, String> offsetMap = {
-          -8: 'America/Los_Angeles',
-          -7: 'America/Denver',
-          -6: 'America/Chicago',
-          -5: 'America/New_York',
-          0: 'UTC',
-          1: 'Europe/London',
-          8: 'Asia/Shanghai',
-          9: 'Asia/Tokyo',
-        };
-
-        return offsetMap[offsetHours] ?? 'UTC';
+      if (tzName.isNotEmpty && tzName != 'UTC') {
+        return tzName;
       }
-      return tzName;
+
+      // If local timezone is UTC or unknown, try to detect by offset
+      final now = DateTime.now();
+      final offset = now.timeZoneOffset;
+      final offsetHours = offset.inHours;
+
+      // Map common offsets to IANA timezone names (UTC format)
+      final Map<int, String> offsetMap = {
+        -12: 'Etc/GMT+12',
+        -11: 'Etc/GMT+11',
+        -10: 'Etc/GMT+10',
+        -9: 'Etc/GMT+9',
+        -8: 'Etc/GMT+8',
+        -7: 'Etc/GMT+7',
+        -6: 'Etc/GMT+6',
+        -5: 'Etc/GMT+5',
+        -4: 'Etc/GMT+4',
+        -3: 'Etc/GMT+3',
+        -2: 'Etc/GMT+2',
+        -1: 'Etc/GMT+1',
+        0: 'UTC',
+        1: 'Etc/GMT-1',
+        2: 'Etc/GMT-2',
+        3: 'Etc/GMT-3',
+        4: 'Etc/GMT-4',
+        5: 'Etc/GMT-5',
+        6: 'Etc/GMT-6',
+        7: 'Etc/GMT-7',
+        8: 'Etc/GMT-8',
+        9: 'Etc/GMT-9',
+        10: 'Etc/GMT-10',
+        11: 'Etc/GMT-11',
+        12: 'Etc/GMT-12',
+      };
+
+      return offsetMap[offsetHours] ?? 'UTC';
     } catch (e) {
       return 'UTC';
     }

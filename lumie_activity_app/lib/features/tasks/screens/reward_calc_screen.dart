@@ -5,10 +5,12 @@
 /// Calculation is entirely client-side.
 
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 import 'package:timezone/timezone.dart' as tz;
 import '../../../core/services/task_service.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../shared/models/task_models.dart';
+import '../providers/admin_tasks_provider.dart';
 
 class RewardCalcScreen extends StatefulWidget {
   const RewardCalcScreen({super.key});
@@ -22,6 +24,34 @@ class _RewardCalcScreenState extends State<RewardCalcScreen> {
   final _rewardController = TextEditingController(text: '1.00');
   final _fineController = TextEditingController(text: '0.50');
   final _taskService = TaskService();
+
+  /// Gradient color pairs matching TaskCard (24 diverse pairs)
+  static const List<List<Color>> _gradientPairs = [
+    [Color(0xFFFF3B30), Color(0xFFFF2D55)], // Red -> Pink
+    [Color(0xFF007AFF), Color(0xFF5AC8FA)], // Blue -> Teal
+    [Color(0xFFFF3B30), Color(0xFFFF9500)], // Red -> Orange
+    [Color(0xFF34C759), Color(0xFFFFCC00)], // Green -> Yellow
+    [Color(0xFFFF2D55), Color(0xFF5856D6)], // Pink -> Purple
+    [Color(0xFF5AC8FA), Color(0xFF34C759)], // Teal -> Green
+    [Color(0xFF007AFF), Color(0xFF5856D6)], // Blue -> Purple
+    [Color(0xFFFF9500), Color(0xFFFFCC00)], // Orange -> Yellow
+    [Color(0xFFFF2D55), Color(0xFFFF3B30)], // Pink -> Red
+    [Color(0xFF5AC8FA), Color(0xFF007AFF)], // Teal -> Blue
+    [Color(0xFFFF9500), Color(0xFFFF3B30)], // Orange -> Red
+    [Color(0xFFFFCC00), Color(0xFF34C759)], // Yellow -> Green
+    [Color(0xFF5856D6), Color(0xFFFF2D55)], // Purple -> Pink
+    [Color(0xFF34C759), Color(0xFF5AC8FA)], // Green -> Teal
+    [Color(0xFF5856D6), Color(0xFF007AFF)], // Purple -> Blue
+    [Color(0xFFFFCC00), Color(0xFFFF9500)], // Yellow -> Orange
+    [Color(0xFF007AFF), Color(0xFFFF3B30)], // Blue -> Red
+    [Color(0xFF34C759), Color(0xFFFF2D55)], // Green -> Pink
+    [Color(0xFFFF9500), Color(0xFF5856D6)], // Orange -> Purple
+    [Color(0xFF5AC8FA), Color(0xFFFF2D55)], // Teal -> Pink
+    [Color(0xFFFFCC00), Color(0xFF5856D6)], // Yellow -> Purple
+    [Color(0xFF34C759), Color(0xFFFF3B30)], // Green -> Red
+    [Color(0xFFFF2D55), Color(0xFF007AFF)], // Pink -> Blue
+    [Color(0xFF5AC8FA), Color(0xFFFF9500)], // Teal -> Orange
+  ];
 
   List<AdminTaskData> _tasks = [];
   final Set<String> _selectedTaskIds = {};
@@ -155,43 +185,50 @@ class _RewardCalcScreenState extends State<RewardCalcScreen> {
         elevation: 0,
         foregroundColor: AppColors.textPrimary,
       ),
-      body: Column(
-        children: [
-          // Email search
-          Padding(
-            padding: const EdgeInsets.all(16),
-            child: Row(
-              children: [
-                Expanded(
-                  child: TextField(
-                    controller: _emailController,
-                    decoration: InputDecoration(
-                      hintText: 'Member email',
-                      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-                    ),
-                    onSubmitted: (_) => _loadTasks(),
+      body: Consumer<AdminTasksProvider>(
+        builder: (context, provider, _) {
+          final isAdmin = provider.isAdmin;
+
+          return Column(
+            children: [
+              // Email search (only for admins)
+              if (isAdmin)
+                Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: TextField(
+                          controller: _emailController,
+                          decoration: InputDecoration(
+                            hintText: 'Member email',
+                            contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                            border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                          ),
+                          onSubmitted: (_) => _loadTasks(),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      IconButton(
+                        onPressed: () => _loadTasks(),
+                        icon: const Icon(Icons.search),
+                        style: IconButton.styleFrom(
+                          backgroundColor: AppColors.primaryLemonDark,
+                          foregroundColor: Colors.white,
+                        ),
+                      ),
+                    ],
                   ),
                 ),
-                const SizedBox(width: 8),
-                IconButton(
-                  onPressed: () => _loadTasks(),
-                  icon: const Icon(Icons.search),
-                  style: IconButton.styleFrom(
-                    backgroundColor: AppColors.primaryLemonDark,
-                    foregroundColor: Colors.white,
-                  ),
-                ),
-              ],
-            ),
-          ),
 
-          // Range info + reward settings
-          _buildRewardPanel(),
+              // Range info + reward settings
+              _buildRewardPanel(),
 
-          // Task list
-          Expanded(child: _buildTaskList()),
-        ],
+              // Task list
+              Expanded(child: _buildTaskList()),
+            ],
+          );
+        },
       ),
     );
   }
