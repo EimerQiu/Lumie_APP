@@ -1,9 +1,10 @@
-/// Tasks List Screen - Main task list with pull-to-refresh and swipe actions
+// Tasks List Screen - Main task list with pull-to-refresh and swipe actions
 
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../shared/models/task_models.dart';
+import '../../../shared/widgets/animated_fab.dart';
 import '../providers/tasks_provider.dart';
 import '../widgets/task_card.dart';
 
@@ -14,31 +15,15 @@ class TasksListScreen extends StatefulWidget {
   State<TasksListScreen> createState() => _TasksListScreenState();
 }
 
-class _TasksListScreenState extends State<TasksListScreen>
-    with TickerProviderStateMixin {
-  late AnimationController _animationController;
-  bool _isMenuExpanded = false;
-
+class _TasksListScreenState extends State<TasksListScreen> {
   @override
   void initState() {
     super.initState();
-    _animationController = AnimationController(
-      duration: const Duration(milliseconds: 300),
-      vsync: this,
-    );
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final provider = context.read<TasksProvider>();
       provider.loadTasks();
       provider.startPolling();
     });
-  }
-
-  @override
-  void dispose() {
-    _animationController.dispose();
-    // Stop polling when leaving screen
-    // Note: provider persists, polling continues if user comes back
-    super.dispose();
   }
 
   @override
@@ -119,7 +104,20 @@ class _TasksListScreenState extends State<TasksListScreen>
           );
         },
       ),
-      floatingActionButton: _buildAnimatedFAB(),
+      floatingActionButton: AnimatedFAB(
+        items: [
+          FABMenuItem(
+            icon: Icons.add,
+            label: 'Create a New Task',
+            onTap: () => Navigator.pushNamed(context, '/tasks/create'),
+          ),
+          FABMenuItem(
+            icon: Icons.view_list_outlined,
+            label: 'Create Tasks from Template',
+            onTap: () => Navigator.pushNamed(context, '/tasks/templates'),
+          ),
+        ],
+      ),
     );
   }
 
@@ -203,83 +201,6 @@ class _TasksListScreenState extends State<TasksListScreen>
     );
   }
 
-  Widget _buildAnimatedFAB() {
-    return Stack(
-      alignment: Alignment.bottomRight,
-      children: [
-        // Menu item 1: Create Task (grows from center outward)
-        _AnimatedMenuButton(
-          animation: _animationController,
-          offset: const Offset(0, 70),
-          icon: Icons.add,
-          label: 'Create a New Task',
-          onTap: () {
-            _toggleMenu();
-            Navigator.pushNamed(context, '/tasks/create');
-          },
-        ),
-        // Menu item 2: Templates (grows from center outward)
-        _AnimatedMenuButton(
-          animation: _animationController,
-          offset: const Offset(0, 130),
-          icon: Icons.view_list_outlined,
-          label: 'Create Tasks from Template',
-          onTap: () {
-            _toggleMenu();
-            Navigator.pushNamed(context, '/tasks/templates');
-          },
-        ),
-        // Main FAB with rotating icon
-        Positioned(
-          bottom: 16,
-          right: 16,
-          child: GestureDetector(
-            onTap: _toggleMenu,
-            child: Container(
-              width: 56,
-              height: 56,
-              decoration: BoxDecoration(
-                color: AppColors.primaryLemonDark,
-                shape: BoxShape.circle,
-                boxShadow: const [
-                  BoxShadow(
-                    color: Color(0x33000000),
-                    blurRadius: 4,
-                    offset: Offset(0, 2),
-                  ),
-                ],
-              ),
-              child: AnimatedBuilder(
-                animation: _animationController,
-                builder: (context, child) {
-                  return Transform.rotate(
-                    angle: _animationController.value * (3.14159 / 2),
-                    child: Icon(
-                      _isMenuExpanded ? Icons.close : Icons.add,
-                      color: Colors.white,
-                      size: 24,
-                    ),
-                  );
-                },
-              ),
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-
-  void _toggleMenu() {
-    setState(() {
-      _isMenuExpanded = !_isMenuExpanded;
-    });
-    if (_isMenuExpanded) {
-      _animationController.forward();
-    } else {
-      _animationController.reverse();
-    }
-  }
-
   void _showCompleteDialog(Task task) {
     showDialog(
       context: context,
@@ -343,83 +264,3 @@ class _TasksListScreenState extends State<TasksListScreen>
   }
 }
 
-/// Animated menu button that grows out of the main FAB
-class _AnimatedMenuButton extends StatelessWidget {
-  final Animation<double> animation;
-  final Offset offset;
-  final IconData icon;
-  final String label;
-  final VoidCallback onTap;
-
-  const _AnimatedMenuButton({
-    required this.animation,
-    required this.offset,
-    required this.icon,
-    required this.label,
-    required this.onTap,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return AnimatedBuilder(
-      animation: animation,
-      builder: (context, child) {
-        // Scale from 0 to 1 as menu expands
-        final scale = animation.value;
-        // Slide from center outward based on offset
-        final slideOffset = Offset(offset.dx * scale, offset.dy * scale);
-
-        return Positioned(
-          bottom: 16 + slideOffset.dy,
-          right: 16 + slideOffset.dx,
-          child: Opacity(
-            opacity: scale,
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                // Text label
-                Text(
-                  label,
-                  style: TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w500,
-                    color: AppColors.primaryLemonDark,
-                  ),
-                ),
-                const SizedBox(width: 12),
-                // Icon button (only this scales)
-                Transform.scale(
-                  scale: scale,
-                  alignment: Alignment.center,
-                  child: GestureDetector(
-                    onTap: onTap,
-                    child: Container(
-                      width: 56,
-                      height: 56,
-                      decoration: BoxDecoration(
-                        color: AppColors.primaryLemonDark,
-                        shape: BoxShape.circle,
-                        boxShadow: [
-                          BoxShadow(
-                            color: const Color(0x33000000),
-                            blurRadius: 4,
-                            offset: const Offset(0, 2),
-                          ),
-                        ],
-                      ),
-                      child: Icon(
-                        icon,
-                        color: Colors.white,
-                        size: 24,
-                      ),
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        );
-      },
-    );
-  }
-}
