@@ -7,6 +7,7 @@ import '../widgets/team_card.dart';
 import '../widgets/invitation_card.dart';
 import '../widgets/upgrade_prompt_sheet.dart';
 import '../../../shared/models/subscription_error.dart';
+import '../../../core/theme/app_colors.dart';
 
 class TeamsListScreen extends StatefulWidget {
   const TeamsListScreen({super.key});
@@ -171,14 +172,6 @@ class _TeamsListScreenState extends State<TeamsListScreen> {
             child: ListView(
               padding: const EdgeInsets.only(top: 16, bottom: 88),
               children: [
-                // Subscription banner (if applicable)
-                if (teamsProvider.subscriptionBannerMessage != null)
-                  _buildSubscriptionBanner(
-                    context,
-                    teamsProvider.subscriptionBannerMessage!,
-                    teamsProvider.hasReachedTeamLimit,
-                  ),
-
                 // Pending invitations section
                 if (hasInvitations) ...[
                   Padding(
@@ -231,12 +224,24 @@ class _TeamsListScreenState extends State<TeamsListScreen> {
           );
         },
       ),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: _handleCreateTeamTap,
-        icon: const Icon(Icons.add),
-        label: const Text('Create Team'),
-        backgroundColor: Colors.blue[600],
-        foregroundColor: Colors.white,
+      floatingActionButton: GestureDetector(
+        onTap: _handleCreateTeamTap,
+        child: Container(
+          width: 56,
+          height: 56,
+          decoration: BoxDecoration(
+            color: AppColors.primaryLemonDark,
+            shape: BoxShape.circle,
+            boxShadow: const [
+              BoxShadow(
+                color: Color(0x33000000),
+                blurRadius: 4,
+                offset: Offset(0, 2),
+              ),
+            ],
+          ),
+          child: const Icon(Icons.add, color: Colors.white, size: 24),
+        ),
       ),
     );
   }
@@ -294,55 +299,4 @@ class _TeamsListScreenState extends State<TeamsListScreen> {
     );
   }
 
-  Widget _buildSubscriptionBanner(
-    BuildContext context,
-    String message,
-    bool isLimitReached,
-  ) {
-    return Container(
-      margin: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: isLimitReached ? Colors.orange[50] : Colors.blue[50],
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(
-          color: isLimitReached ? Colors.orange[200]! : Colors.blue[200]!,
-        ),
-      ),
-      child: Row(
-        children: [
-          Icon(
-            isLimitReached ? Icons.warning_amber : Icons.info_outline,
-            color: isLimitReached ? Colors.orange[700] : Colors.blue[700],
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Text(
-              message,
-              style: TextStyle(
-                fontSize: 14,
-                color: isLimitReached ? Colors.orange[900] : Colors.blue[900],
-              ),
-            ),
-          ),
-          if (isLimitReached) ...[
-            const SizedBox(width: 12),
-            TextButton(
-              onPressed: () {
-                Navigator.pushNamed(context, '/subscription/upgrade');
-              },
-              style: TextButton.styleFrom(
-                foregroundColor: Colors.orange[700],
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-              ),
-              child: const Text(
-                'Upgrade',
-                style: TextStyle(fontWeight: FontWeight.w600),
-              ),
-            ),
-          ],
-        ],
-      ),
-    );
-  }
 }

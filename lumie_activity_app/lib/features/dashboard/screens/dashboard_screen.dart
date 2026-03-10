@@ -1,4 +1,5 @@
 import 'dart:math' as math;
+import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../../core/theme/app_colors.dart';
@@ -108,8 +109,20 @@ class _DashboardScreenState extends State<DashboardScreen>
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: AppColors.backgroundPaper,
+    return Stack(
+      children: [
+        // Blurred lemon bokeh background
+        Positioned.fill(
+          child: ImageFiltered(
+            imageFilter: ImageFilter.blur(sigmaX: 4, sigmaY: 4),
+            child: Image.asset(
+              'assets/lemon_bokeh_background.png',
+              fit: BoxFit.cover,
+            ),
+          ),
+        ),
+        Scaffold(
+      backgroundColor: Colors.transparent,
       drawer: _buildDrawer(context),
       body: CustomScrollView(
         slivers: [
@@ -152,6 +165,8 @@ class _DashboardScreenState extends State<DashboardScreen>
           ),
         ],
       ),
+    ),
+      ],
     );
   }
 
@@ -203,6 +218,7 @@ class _DashboardScreenState extends State<DashboardScreen>
       padding: const EdgeInsets.symmetric(horizontal: 16),
       child: GradientCard(
         gradient: AppColors.cardGradient,
+        opacity: 0.70,
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -297,7 +313,7 @@ class _DashboardScreenState extends State<DashboardScreen>
             child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
               decoration: BoxDecoration(
-                color: AppColors.backgroundWhite,
+                color: AppColors.backgroundWhite.withValues(alpha: 0.70),
                 borderRadius: BorderRadius.circular(16),
                 boxShadow: AppColors.cardShadow,
               ),
@@ -355,7 +371,7 @@ class _DashboardScreenState extends State<DashboardScreen>
     return SliverAppBar(
       expandedHeight: 60,
       floating: true,
-      backgroundColor: AppColors.backgroundPaper,
+      backgroundColor: Colors.transparent,
       elevation: 0,
       scrolledUnderElevation: 0,
       leading: Builder(
@@ -485,6 +501,7 @@ class _DashboardScreenState extends State<DashboardScreen>
   Widget _buildMainActivityRing() {
     return GradientCard(
       gradient: AppColors.cardGradient,
+      opacity: 0.70,
       padding: const EdgeInsets.all(24),
       child: Column(
         children: [

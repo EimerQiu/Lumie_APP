@@ -292,16 +292,28 @@ class AdminTaskService:
         Get tasks for reward calculation view.
         Returns only closed/expired tasks (where close_datetime <= now) for reward/fine calculation.
         Sorted by close_datetime descending (newest closed first).
+        Admins can query any member's email; non-admins can only query their own.
         """
         db = get_database()
 
-        await self._verify_admin_of_any_team(admin_user_id)
+        try:
+            await self._verify_admin_of_any_team(admin_user_id)
+            is_admin = True
+        except HTTPException:
+            is_admin = False
 
         target_user_id = await self._get_user_id_by_email(email)
         if not target_user_id:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="User not found with that email",
+            )
+
+        # Non-admins can only access their own tasks
+        if not is_admin and target_user_id != admin_user_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You can only view your own reward calculations",
             )
 
         # Return tasks eligible for reward calculation:

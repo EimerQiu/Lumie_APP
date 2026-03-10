@@ -28,11 +28,24 @@ class _TasksListScreenState extends State<TasksListScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: AppColors.backgroundPaper,
+    return Stack(
+      children: [
+        Positioned.fill(
+          child: Container(
+            decoration: const BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [Color(0xFFFEF3C7), Color(0xFFFFFFFF)],
+              ),
+            ),
+          ),
+        ),
+        Scaffold(
+      backgroundColor: Colors.transparent,
       appBar: AppBar(
         title: const Text('Med-Reminder'),
-        backgroundColor: AppColors.backgroundPaper,
+        backgroundColor: Colors.transparent,
         elevation: 0,
         foregroundColor: AppColors.textPrimary,
         actions: [
@@ -118,6 +131,8 @@ class _TasksListScreenState extends State<TasksListScreen> {
           ),
         ],
       ),
+    ),
+      ],
     );
   }
 

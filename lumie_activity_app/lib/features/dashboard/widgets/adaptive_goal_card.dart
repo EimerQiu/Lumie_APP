@@ -37,6 +37,7 @@ class AdaptiveGoalCard extends StatelessWidget {
               colors: [Color(0xFFF3E5F5), Color(0xFFE1BEE7)],
             )
           : AppColors.cardGradient,
+      opacity: 0.70,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [

@@ -87,11 +87,24 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: AppColors.backgroundPaper,
+    return Stack(
+      children: [
+        Positioned.fill(
+          child: Container(
+            decoration: const BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [Color(0xFFFEF3C7), Color(0xFFFFFFFF)],
+              ),
+            ),
+          ),
+        ),
+        Scaffold(
+      backgroundColor: Colors.transparent,
       appBar: AppBar(
         title: const Text('All Tasks'),
-        backgroundColor: AppColors.backgroundPaper,
+        backgroundColor: Colors.transparent,
         elevation: 0,
         foregroundColor: AppColors.textPrimary,
         actions: [
@@ -137,6 +150,8 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
           );
         },
       ),
+    ),
+      ],
     );
   }
 
@@ -535,6 +550,7 @@ class _AdminTaskCard extends StatelessWidget {
       return Card(
         margin: const EdgeInsets.only(bottom: 8),
         elevation: 0,
+        color: Colors.white.withValues(alpha: 0.70),
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(12),
           side: BorderSide(color: AppColors.surfaceLight),

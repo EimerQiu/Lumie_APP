@@ -149,22 +149,9 @@ class _RewardCalcScreenState extends State<RewardCalcScreen> {
     }
   }
 
-  // Range calculation
-  int get _startIndex {
-    if (_selectedTaskIds.length < 2) return -1;
-    return _tasks.indexWhere((t) => _selectedTaskIds.contains(t.taskId));
-  }
-
-  int get _endIndex {
-    if (_selectedTaskIds.length < 2) return -1;
-    return _tasks.lastIndexWhere((t) => _selectedTaskIds.contains(t.taskId));
-  }
-
   List<AdminTaskData> get _tasksInRange {
-    final start = _startIndex;
-    final end = _endIndex;
-    if (start < 0 || end < 0) return [];
-    return _tasks.sublist(start, end + 1);
+    if (_selectedTaskIds.length < 2) return [];
+    return _tasks.where((t) => _selectedTaskIds.contains(t.taskId)).toList();
   }
 
   int get _completedCount => _tasksInRange.where((t) => t.isCompleted).length;
@@ -177,11 +164,24 @@ class _RewardCalcScreenState extends State<RewardCalcScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: AppColors.backgroundPaper,
+    return Stack(
+      children: [
+        Positioned.fill(
+          child: Container(
+            decoration: const BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [Color(0xFFFEF3C7), Color(0xFFFFFFFF)],
+              ),
+            ),
+          ),
+        ),
+        Scaffold(
+      backgroundColor: Colors.transparent,
       appBar: AppBar(
         title: const Text('Reward Calculator'),
-        backgroundColor: AppColors.backgroundPaper,
+        backgroundColor: Colors.transparent,
         elevation: 0,
         foregroundColor: AppColors.textPrimary,
       ),
@@ -230,6 +230,8 @@ class _RewardCalcScreenState extends State<RewardCalcScreen> {
           );
         },
       ),
+    ),
+      ],
     );
   }
 
@@ -242,7 +244,7 @@ class _RewardCalcScreenState extends State<RewardCalcScreen> {
       margin: const EdgeInsets.symmetric(horizontal: 16),
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
-        color: AppColors.backgroundLight,
+        color: AppColors.backgroundLight.withValues(alpha: 0.70),
         borderRadius: BorderRadius.circular(12),
       ),
       child: Column(
@@ -362,9 +364,6 @@ class _RewardCalcScreenState extends State<RewardCalcScreen> {
       );
     }
 
-    final startIdx = _startIndex;
-    final endIdx = _endIndex;
-
     return ListView.builder(
       padding: const EdgeInsets.all(16),
       itemCount: _tasks.length + (_hasMore ? 1 : 0),
@@ -388,12 +387,11 @@ class _RewardCalcScreenState extends State<RewardCalcScreen> {
         final taskIndex = _hasMore ? index - 1 : index;
         final task = _tasks[taskIndex];
         final isSelected = _selectedTaskIds.contains(task.taskId);
-        final inRange = startIdx >= 0 && endIdx >= 0 && taskIndex >= startIdx && taskIndex <= endIdx;
 
         return Container(
           margin: const EdgeInsets.only(bottom: 6),
           decoration: BoxDecoration(
-            color: inRange ? const Color(0xFFEFF6FF) : AppColors.cardBackground,
+            color: isSelected ? const Color(0xFFEFF6FF).withValues(alpha: 0.70) : AppColors.cardBackground.withValues(alpha: 0.70),
             borderRadius: BorderRadius.circular(10),
             border: Border.all(color: isSelected ? AppColors.info : AppColors.surfaceLight),
           ),
@@ -406,10 +404,9 @@ class _RewardCalcScreenState extends State<RewardCalcScreen> {
 
                   // If this is the second task, auto-select all tasks in range
                   if (_selectedTaskIds.length == 2) {
-                    final startIdx = _startIndex;
-                    final endIdx = _endIndex;
+                    final startIdx = _tasks.indexWhere((t) => _selectedTaskIds.contains(t.taskId));
+                    final endIdx = _tasks.lastIndexWhere((t) => _selectedTaskIds.contains(t.taskId));
                     if (startIdx >= 0 && endIdx >= 0) {
-                      // Add all tasks between start and end (inclusive)
                       for (int i = startIdx; i <= endIdx; i++) {
                         _selectedTaskIds.add(_tasks[i].taskId);
                       }

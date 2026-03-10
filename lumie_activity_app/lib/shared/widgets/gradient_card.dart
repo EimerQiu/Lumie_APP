@@ -9,6 +9,8 @@ class GradientCard extends StatelessWidget {
   final EdgeInsetsGeometry? margin;
   final double borderRadius;
   final VoidCallback? onTap;
+  /// Opacity applied to gradient colors only (0.0–1.0). Content stays fully opaque.
+  final double opacity;
 
   const GradientCard({
     super.key,
@@ -18,14 +20,30 @@ class GradientCard extends StatelessWidget {
     this.margin,
     this.borderRadius = 16,
     this.onTap,
+    this.opacity = 1.0,
   });
+
+  Gradient _applyOpacity(Gradient g) {
+    if (opacity >= 1.0) return g;
+    if (g is LinearGradient) {
+      return LinearGradient(
+        begin: g.begin,
+        end: g.end,
+        colors: g.colors.map((c) => c.withValues(alpha: opacity)).toList(),
+        stops: g.stops,
+        tileMode: g.tileMode,
+      );
+    }
+    return g;
+  }
 
   @override
   Widget build(BuildContext context) {
+    final effectiveGradient = _applyOpacity(gradient ?? AppColors.cardGradient);
     return Container(
       margin: margin ?? const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
       decoration: BoxDecoration(
-        gradient: gradient ?? AppColors.cardGradient,
+        gradient: effectiveGradient,
         borderRadius: BorderRadius.circular(borderRadius),
         boxShadow: AppColors.cardShadow,
       ),
