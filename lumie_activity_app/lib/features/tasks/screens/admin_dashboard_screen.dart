@@ -290,7 +290,11 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
       );
     }
 
-    final allEmpty = provider.previousTasks.isEmpty && provider.upcomingTasks.isEmpty;
+    // Filter tasks: only show tasks the user can access
+    final filteredPreviousTasks = provider.previousTasks.where((task) => _canViewTask(context, task)).toList();
+    final filteredUpcomingTasks = provider.upcomingTasks.where((task) => _canViewTask(context, task)).toList();
+
+    final allEmpty = filteredPreviousTasks.isEmpty && filteredUpcomingTasks.isEmpty;
     if (allEmpty) {
       return const Center(
         child: Column(
@@ -330,16 +334,16 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
             ),
 
           // Previous Tasks section
-          if (provider.previousTasks.isNotEmpty) ...[
+          if (filteredPreviousTasks.isNotEmpty) ...[
             _SectionHeader(
               title: 'Previous Tasks',
-              count: provider.previousTasks.length,
+              count: filteredPreviousTasks.length,
             ),
-            ...provider.previousTasks.map((task) {
-              final isAdmin = _isUserAdminOfTeam(context, task.familyId);
+            ...filteredPreviousTasks.map((task) {
+              final canManage = _canManageTask(context, task);
               return _AdminTaskCard(
                 task: task,
-                isAdmin: isAdmin,
+                isAdmin: canManage,
                 onComplete: () => _completeTask(provider, task),
                 onDelete: () => _deleteTask(provider, task),
               );
@@ -347,20 +351,20 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
           ],
 
           // Divider
-          if (provider.previousTasks.isNotEmpty && provider.upcomingTasks.isNotEmpty)
+          if (filteredPreviousTasks.isNotEmpty && filteredUpcomingTasks.isNotEmpty)
             const Divider(height: 32),
 
           // Upcoming Tasks section
-          if (provider.upcomingTasks.isNotEmpty) ...[
+          if (filteredUpcomingTasks.isNotEmpty) ...[
             _SectionHeader(
               title: 'Upcoming Tasks',
-              count: provider.upcomingTasks.length,
+              count: filteredUpcomingTasks.length,
             ),
-            ...provider.upcomingTasks.map((task) {
-              final isAdmin = _isUserAdminOfTeam(context, task.familyId);
+            ...filteredUpcomingTasks.map((task) {
+              final canManage = _canManageTask(context, task);
               return _AdminTaskCard(
                 task: task,
-                isAdmin: isAdmin,
+                isAdmin: canManage,
                 onComplete: () => _completeTask(provider, task),
                 onDelete: () => _deleteTask(provider, task),
               );
@@ -439,28 +443,53 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
     }
   }
 
-  /// Check if current user is admin of a specific team
-  bool _isUserAdminOfTeam(BuildContext context, String? familyId) {
-    if (familyId == null) return false;
+  /// Check if current user can view a task (access control filter)
+  /// Can view if: team admin OR personal task (no team) and task owner
+  bool _canViewTask(BuildContext context, AdminTaskData task) {
+    final authProvider = context.read<AuthProvider>();
+    final currentUserId = authProvider.user?.userId;
 
+    // Personal task (no team) - only visible to task owner
+    if (task.familyId == null || task.familyId!.isEmpty) {
+      return currentUserId == task.userId;
+    }
+
+    // Team task - visible if user is admin of the team
     final teamsProvider = context.read<TeamsProvider>();
 
-    // Find the team and check if user is admin
     try {
       final team = teamsProvider.teams.firstWhere(
-        (t) => t.teamId == familyId,
+        (t) => t.teamId == task.familyId,
       );
-      // Check if user's role in this team is admin
+      return team.role.name == 'admin';
+    } catch (e) {
+      // If team not found, don't show the task
+      return false;
+    }
+  }
+
+  /// Check if current user can manage a task
+  /// Can manage if: team admin OR personal task (no team) and task owner
+  bool _canManageTask(BuildContext context, AdminTaskData task) {
+    final authProvider = context.read<AuthProvider>();
+    final currentUserId = authProvider.user?.userId;
+
+    // Personal task (no team) - user can manage if they own it
+    if (task.familyId == null || task.familyId!.isEmpty) {
+      return currentUserId == task.userId;
+    }
+
+    // Team task - user can manage if they're admin of the team
+    final teamsProvider = context.read<TeamsProvider>();
+
+    try {
+      final team = teamsProvider.teams.firstWhere(
+        (t) => t.teamId == task.familyId,
+      );
       final isAdmin = team.role.name == 'admin';
-      print('DEBUG: Team ${team.name} (ID: $familyId) - User role: ${team.role.name}, isAdmin: $isAdmin');
       return isAdmin;
     } catch (e) {
       // If team not found, default to true (assume admin can view all)
-      // This handles the case where teams list might not be fully populated
-      print('DEBUG: Team not found for familyId: $familyId. TeamsProvider has ${teamsProvider.teams.length} teams');
-      for (var t in teamsProvider.teams) {
-        print('  - Team: ${t.name} (ID: ${t.teamId}), Role: ${t.role.name}');
-      }
       return true;
     }
   }
@@ -541,6 +570,15 @@ class _AdminTaskCard extends StatelessWidget {
       default:
         return task.status;
     }
+  }
+
+  String _getViewOnlyMessage(AdminTaskData task) {
+    // If task has a team, user must be team admin to edit
+    if (task.familyId != null && task.familyId!.isNotEmpty) {
+      return 'View only - you must be a ${task.familyName ?? "team"} admin to edit';
+    }
+    // If task is personal, it belongs to another user
+    return 'View only - this is another user\'s personal task';
   }
 
   @override
@@ -699,7 +737,7 @@ class _AdminTaskCard extends StatelessWidget {
                 borderRadius: BorderRadius.circular(8),
               ),
               child: Text(
-                'View only - you must be a team admin to edit',
+                _getViewOnlyMessage(task),
                 style: TextStyle(
                   fontSize: 11,
                   color: AppColors.info,

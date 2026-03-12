@@ -23,8 +23,9 @@ import os
 import time
 import json
 import jwt
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
+from zoneinfo import ZoneInfo
 
 import httpx
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -41,6 +42,10 @@ APNS_KEY_ID = os.getenv("APNS_KEY_ID", "")
 APNS_TEAM_ID = os.getenv("APNS_TEAM_ID", "")
 APNS_TOPIC = os.getenv("APNS_TOPIC", "")
 APNS_USE_SANDBOX = os.getenv("APNS_USE_SANDBOX", "true").lower() == "true"
+
+# Task times timezone (e.g., "America/Los_Angeles", "Asia/Bangkok")
+# If not set, assumes UTC
+TASK_TIMEZONE = os.getenv("TASK_TIMEZONE", "UTC")
 
 POLL_INTERVAL = 60  # seconds
 
@@ -170,9 +175,15 @@ def _get_phase(progress: float, duration_s: float) -> Optional[tuple[str, float,
 
 async def poll_once(db, client: httpx.AsyncClient) -> None:
     """One poll iteration: find eligible tasks and send notifications."""
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)  # Timezone-aware UTC
     now_ts = now.timestamp()
     now_str = now.strftime("%Y-%m-%d %H:%M")
+
+    # Get task timezone for parsing task times
+    try:
+        task_tz = ZoneInfo(TASK_TIMEZONE)
+    except Exception:
+        task_tz = ZoneInfo("UTC")
 
     # Find all tasks where done field does not exist (not yet completed)
     cursor = db.tasks.find({"done": {"$exists": False}})
@@ -183,8 +194,13 @@ async def poll_once(db, client: httpx.AsyncClient) -> None:
         close_str = task.get("close_datetime", "")
 
         try:
-            open_dt = datetime.strptime(open_str, "%Y-%m-%d %H:%M")
-            close_dt = datetime.strptime(close_str, "%Y-%m-%d %H:%M")
+            # Parse task times as if they're in TASK_TIMEZONE, then convert to UTC
+            open_dt_naive = datetime.strptime(open_str, "%Y-%m-%d %H:%M")
+            close_dt_naive = datetime.strptime(close_str, "%Y-%m-%d %H:%M")
+
+            # Localize to task timezone, then convert to UTC for comparison
+            open_dt = open_dt_naive.replace(tzinfo=task_tz).astimezone(timezone.utc)
+            close_dt = close_dt_naive.replace(tzinfo=task_tz).astimezone(timezone.utc)
         except (ValueError, TypeError):
             continue
 
@@ -220,6 +236,7 @@ async def poll_once(db, client: httpx.AsyncClient) -> None:
 
         # Resolve task name and body
         task_name = task.get("task_name", "Task")
+        task_type = task.get("task_type", "Task").lower()  # e.g., "medicine", "task", "exercise"
         body_text = task.get("task_info") or ""
 
         # For template tasks, look up rpttask_info
@@ -230,7 +247,49 @@ async def poll_once(db, client: httpx.AsyncClient) -> None:
                 body_text = template.get("description") or ""
 
         if not body_text:
-            body_text = "No specific information provided"
+            # Default message: show when the task closes (in user's local timezone)
+            try:
+                # Convert close_dt (UTC) back to task timezone for display
+                close_dt_local = close_dt.astimezone(task_tz)
+                now_local = now.replace(tzinfo=timezone.utc).astimezone(task_tz)
+
+                # Choose action verb based on task type
+                if "medicine" in task_type or "med" in task_type or "medication" in task_type:
+                    action_today = "Take it by"
+                    action_future = "Take your meds by"
+                elif "exercise" in task_type or "workout" in task_type:
+                    action_today = "Get moving by"
+                    action_future = "Do your workout by"
+                else:
+                    action_today = "Wrap up by"
+                    action_future = "Finish by"
+
+                days_until = (close_dt_local.date() - now_local.date()).days
+                if days_until == 0:
+                    # Today: warm encouragement with time remaining
+                    close_time = close_dt_local.strftime("%I:%M %p").lstrip("0")  # e.g., "3:30 PM"
+                    time_left = close_dt_local - now_local
+                    hours, remainder = divmod(int(time_left.total_seconds()), 3600)
+                    minutes = remainder // 60
+                    if hours > 0:
+                        time_str = f"{hours}h {minutes}m"
+                    else:
+                        time_str = f"{minutes}m"
+                    body_text = f"You've got {time_str} left! 💪 {action_today} {close_time}"
+                elif days_until == 1:
+                    # Tomorrow: gentle reminder
+                    close_time = close_dt_local.strftime("%I:%M %p").lstrip("0")
+                    body_text = f"Don't forget tomorrow! {action_future} {close_time} 🌟"
+                elif days_until < 7:
+                    # This week: encouraging note
+                    close_time = close_dt_local.strftime("%a %I:%M %p").lstrip("0")  # e.g., "Mon 3:30 PM"
+                    body_text = f"You can do it! {action_future} {close_time} 💪"
+                else:
+                    # Beyond this week: relaxed, friendly
+                    close_time = close_dt_local.strftime("%b %d, %I:%M %p").lstrip("0")  # e.g., "Mar 22, 3:30 PM"
+                    body_text = f"No rush, but remember: {close_time} 😊"
+            except:
+                body_text = "Don't forget!"
 
         title = f"{task_name} {title_suffix}"
 

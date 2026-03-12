@@ -167,18 +167,37 @@ class AdminTaskService:
         # Current time for splitting previous/upcoming
         now_str = current_time or datetime.utcnow().strftime("%Y-%m-%d %H:%M")
 
+        # When admin searches for another user's tasks: only show team tasks (not personal)
+        # When admin views their own dashboard: show all tasks
+        if email and is_admin and target_user_id != admin_user_id:
+            # Searching for another user: only team tasks from admin's teams
+            prev_filter = {
+                "user_id": target_user_id,
+                "team_id": {"$in": admin_team_ids},
+                "open_datetime": {"$lte": now_str},
+            }
+            up_filter = {
+                "user_id": target_user_id,
+                "team_id": {"$in": admin_team_ids},
+                "open_datetime": {"$gt": now_str},
+            }
+        else:
+            # Normal case: all tasks for the user_ids
+            prev_filter = {
+                "user_id": {"$in": user_ids},
+                "open_datetime": {"$lte": now_str},
+            }
+            up_filter = {
+                "user_id": {"$in": user_ids},
+                "open_datetime": {"$gt": now_str},
+            }
+
         # Previous tasks (open_datetime <= now), sorted descending (newest first), paginated
-        prev_cursor = db.tasks.find({
-            "user_id": {"$in": user_ids},
-            "open_datetime": {"$lte": now_str},
-        }).sort("open_datetime", -1).skip(previous_offset).limit(PAGE_SIZE)
+        prev_cursor = db.tasks.find(prev_filter).sort("open_datetime", -1).skip(previous_offset).limit(PAGE_SIZE)
         prev_tasks = await prev_cursor.to_list(length=PAGE_SIZE)
 
         # Upcoming tasks (open_datetime > now), sorted ascending, paginated
-        up_cursor = db.tasks.find({
-            "user_id": {"$in": user_ids},
-            "open_datetime": {"$gt": now_str},
-        }).sort("open_datetime", 1).skip(upcoming_offset).limit(PAGE_SIZE)
+        up_cursor = db.tasks.find(up_filter).sort("open_datetime", 1).skip(upcoming_offset).limit(PAGE_SIZE)
         up_tasks = await up_cursor.to_list(length=PAGE_SIZE)
 
         # Enrich all tasks

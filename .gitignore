@@ -9,3 +9,5 @@ i-informatics-486804-r1-771f79351173.json
 .env.*
 **/.env
 **/.env.*
+
+/tmp

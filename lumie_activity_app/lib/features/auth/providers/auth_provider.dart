@@ -305,6 +305,14 @@ class AuthProvider extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Clear all cached data (to be called from logout screen/route)
+  void clearCachedData() {
+    _user = null;
+    _profile = null;
+    _state = AuthState.unauthenticated;
+    notifyListeners();
+  }
+
   /// Clear error
   void clearError() {
     _errorMessage = null;

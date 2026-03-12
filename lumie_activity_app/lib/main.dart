@@ -883,7 +883,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
           TextButton(
             onPressed: () {
               Navigator.of(context).pop();
+              // Clear all cached data from providers
               context.read<RingProvider>().clearOnLogout();
+              context.read<TasksProvider>().reset();
+              context.read<TeamsProvider>().reset();
               context.read<AuthProvider>().logout();
             },
             style: TextButton.styleFrom(
