@@ -43,10 +43,6 @@ APNS_TEAM_ID = os.getenv("APNS_TEAM_ID", "")
 APNS_TOPIC = os.getenv("APNS_TOPIC", "")
 APNS_USE_SANDBOX = os.getenv("APNS_USE_SANDBOX", "true").lower() == "true"
 
-# Task times timezone (e.g., "America/Los_Angeles", "Asia/Bangkok")
-# If not set, assumes UTC
-TASK_TIMEZONE = os.getenv("TASK_TIMEZONE", "UTC")
-
 POLL_INTERVAL = 60  # seconds
 
 logging.basicConfig(
@@ -179,12 +175,6 @@ async def poll_once(db, client: httpx.AsyncClient) -> None:
     now_ts = now.timestamp()
     now_str = now.strftime("%Y-%m-%d %H:%M")
 
-    # Get task timezone for parsing task times
-    try:
-        task_tz = ZoneInfo(TASK_TIMEZONE)
-    except Exception:
-        task_tz = ZoneInfo("UTC")
-
     # Find all tasks where done field does not exist (not yet completed)
     cursor = db.tasks.find({"done": {"$exists": False}})
     tasks = await cursor.to_list(length=None)
@@ -194,13 +184,10 @@ async def poll_once(db, client: httpx.AsyncClient) -> None:
         close_str = task.get("close_datetime", "")
 
         try:
-            # Parse task times as if they're in TASK_TIMEZONE, then convert to UTC
-            open_dt_naive = datetime.strptime(open_str, "%Y-%m-%d %H:%M")
-            close_dt_naive = datetime.strptime(close_str, "%Y-%m-%d %H:%M")
-
-            # Localize to task timezone, then convert to UTC for comparison
-            open_dt = open_dt_naive.replace(tzinfo=task_tz).astimezone(timezone.utc)
-            close_dt = close_dt_naive.replace(tzinfo=task_tz).astimezone(timezone.utc)
+            # Task times in DB are already UTC (backend converts local→UTC on creation)
+            # Parse directly as UTC for comparison
+            open_dt = datetime.strptime(open_str, "%Y-%m-%d %H:%M").replace(tzinfo=timezone.utc)
+            close_dt = datetime.strptime(close_str, "%Y-%m-%d %H:%M").replace(tzinfo=timezone.utc)
         except (ValueError, TypeError):
             continue
 
@@ -225,7 +212,7 @@ async def poll_once(db, client: httpx.AsyncClient) -> None:
         if (now_ts - last) < interval_s:
             continue
 
-        # Look up user device token
+        # Look up user device token and fetch user profile timezone for display
         user = await db.users.find_one(
             {"user_id": user_id},
             {"device_token": 1, "_id": 0},
@@ -233,6 +220,17 @@ async def poll_once(db, client: httpx.AsyncClient) -> None:
         device_token = (user or {}).get("device_token")
         if not device_token:
             continue
+
+        # Get user's timezone from profile for notification message display
+        profile = await db.profiles.find_one(
+            {"user_id": user_id},
+            {"timezone": 1, "_id": 0},
+        )
+        profile_tz_str = (profile or {}).get("timezone", "UTC")
+        try:
+            display_tz = ZoneInfo(profile_tz_str)
+        except Exception:
+            display_tz = ZoneInfo("UTC")
 
         # Resolve task name and body
         task_name = task.get("task_name", "Task")
@@ -249,9 +247,9 @@ async def poll_once(db, client: httpx.AsyncClient) -> None:
         if not body_text:
             # Default message: show when the task closes (in user's local timezone)
             try:
-                # Convert close_dt (UTC) back to task timezone for display
-                close_dt_local = close_dt.astimezone(task_tz)
-                now_local = now.replace(tzinfo=timezone.utc).astimezone(task_tz)
+                # Convert close_dt (UTC) back to user's display timezone
+                close_dt_local = close_dt.astimezone(display_tz)
+                now_local = now.astimezone(display_tz)
 
                 # Choose action verb based on task type
                 if "medicine" in task_type or "med" in task_type or "medication" in task_type:
