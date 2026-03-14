@@ -21,14 +21,11 @@ class AdminDashboardScreen extends StatefulWidget {
 class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
   final _emailController = TextEditingController();
   final _scrollController = ScrollController();
-  double _lastLoadPreviousPosition = 0;
-  double _lastLoadUpcomingPosition = 0;
-  double _lastScrollPosition = 0;
+  double _overscrollAccumulation = 0;
 
   @override
   void initState() {
     super.initState();
-    _scrollController.addListener(_onScroll);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final teamsProvider = context.read<TeamsProvider>();
       final tasksProvider = context.read<AdminTasksProvider>();
@@ -38,11 +35,6 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
         tasksProvider.loadMemberChips();
         tasksProvider.loadTasks();
       });
-
-      // Initialize scroll tracking positions to prevent accidental loads on first scroll
-      _lastScrollPosition = _scrollController.offset;
-      _lastLoadPreviousPosition = _scrollController.offset;
-      _lastLoadUpcomingPosition = _scrollController.offset;
     });
   }
 
@@ -51,38 +43,6 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
     _emailController.dispose();
     _scrollController.dispose();
     super.dispose();
-  }
-
-  void _onScroll() {
-    final provider = context.read<AdminTasksProvider>();
-    if (!_scrollController.hasClients) return;
-
-    final maxScroll = _scrollController.position.maxScrollExtent;
-    final currentScroll = _scrollController.offset;
-    final scrollDirection = currentScroll - _lastScrollPosition;
-    _lastScrollPosition = currentScroll;
-
-    // Load more upcoming tasks when scrolling DOWN near bottom
-    // Only trigger if actively scrolling down (positive direction) AND within 800px of bottom
-    if (scrollDirection > 0 &&
-        currentScroll >= maxScroll - 800 &&
-        provider.hasMoreUpcoming &&
-        !provider.isLoadingMoreUpcoming &&
-        (currentScroll - _lastLoadUpcomingPosition).abs() >= 400) {
-      _lastLoadUpcomingPosition = currentScroll;
-      provider.loadMoreUpcoming();
-    }
-
-    // Load more previous tasks when scrolling UP near top
-    // Only trigger if actively scrolling up (negative direction) AND within 200px of top
-    if (scrollDirection < 0 &&
-        currentScroll <= 200 &&
-        provider.hasMorePrevious &&
-        !provider.isLoadingMorePrevious &&
-        (_lastLoadPreviousPosition - currentScroll).abs() >= 400) {
-      _lastLoadPreviousPosition = currentScroll;
-      provider.loadMorePrevious();
-    }
   }
 
   @override
@@ -316,8 +276,38 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
       );
     }
 
-    return RefreshIndicator(
-      onRefresh: () => provider.loadTasks(email: provider.filterEmail),
+    return NotificationListener<ScrollNotification>(
+      onNotification: (notification) {
+        final metrics = notification.metrics;
+
+        if (notification is ScrollUpdateNotification) {
+          // iOS overscroll appears as out-of-bounds pixels, not OverscrollNotification
+          if (metrics.pixels < 0) {
+            // Pulling DOWN past top boundary
+            _overscrollAccumulation = metrics.pixels;
+
+            if (_overscrollAccumulation <= -150 &&
+                provider.hasMorePrevious &&
+                !provider.isLoadingMorePrevious) {
+              _overscrollAccumulation = 0;
+              provider.loadMorePrevious();
+            }
+          } else if (metrics.pixels > metrics.maxScrollExtent) {
+            // Pulling UP past bottom boundary
+            _overscrollAccumulation = metrics.pixels - metrics.maxScrollExtent;
+
+            if (_overscrollAccumulation >= 150 &&
+                provider.hasMoreUpcoming &&
+                !provider.isLoadingMoreUpcoming) {
+              _overscrollAccumulation = 0;
+              provider.loadMoreUpcoming();
+            }
+          }
+        } else if (notification is ScrollEndNotification) {
+          _overscrollAccumulation = 0;
+        }
+        return false;
+      },
       child: ListView(
         controller: _scrollController,
         padding: const EdgeInsets.symmetric(horizontal: 16),
@@ -325,10 +315,8 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
           // Loading indicator for previous tasks
           if (provider.isLoadingMorePrevious)
             const Padding(
-              padding: EdgeInsets.symmetric(vertical: 8),
-              child: SizedBox(
-                height: 20,
-                width: 20,
+              padding: EdgeInsets.symmetric(vertical: 16),
+              child: Center(
                 child: CircularProgressIndicator(strokeWidth: 2),
               ),
             ),
@@ -374,10 +362,8 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
           // Loading indicator for upcoming tasks
           if (provider.isLoadingMoreUpcoming)
             const Padding(
-              padding: EdgeInsets.symmetric(vertical: 8),
-              child: SizedBox(
-                height: 20,
-                width: 20,
+              padding: EdgeInsets.symmetric(vertical: 16),
+              child: Center(
                 child: CircularProgressIndicator(strokeWidth: 2),
               ),
             ),

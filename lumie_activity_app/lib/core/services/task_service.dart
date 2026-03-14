@@ -415,4 +415,22 @@ class TaskService {
     }
     _handleError(response, 'get reward calc tasks');
   }
+
+  // ============ AI Tips ============
+
+  /// Fetch a personalised AI tip based on task completion history.
+  Future<AiTip> getAiTips({int daysBack = 30, String timeZone = 'UTC'}) async {
+    if (_token == null) throw Exception('Not authenticated');
+
+    final response = await http.post(
+      Uri.parse('${ApiConstants.baseUrl}/tasks/ai-tips'),
+      headers: _headers,
+      body: json.encode({'days_back': daysBack, 'time_zone': timeZone}),
+    );
+
+    if (response.statusCode == 200) {
+      return AiTip.fromJson(json.decode(response.body));
+    }
+    _handleError(response, 'get AI tips');
+  }
 }

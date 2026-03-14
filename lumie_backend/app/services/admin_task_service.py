@@ -182,15 +182,33 @@ class AdminTaskService:
                 "open_datetime": {"$gt": now_str},
             }
         else:
-            # Normal case: all tasks for the user_ids
-            prev_filter = {
-                "user_id": {"$in": user_ids},
-                "open_datetime": {"$lte": now_str},
-            }
-            up_filter = {
-                "user_id": {"$in": user_ids},
-                "open_datetime": {"$gt": now_str},
-            }
+            if is_admin:
+                # Admin default view: team tasks for all members + admin's own tasks (including personal)
+                other_user_ids = [uid for uid in user_ids if uid != admin_user_id]
+                prev_filter = {
+                    "$or": [
+                        # Team tasks of all members
+                        {"user_id": {"$in": other_user_ids}, "team_id": {"$in": admin_team_ids}, "open_datetime": {"$lte": now_str}},
+                        # All tasks (including personal) of the admin themselves
+                        {"user_id": admin_user_id, "open_datetime": {"$lte": now_str}},
+                    ]
+                }
+                up_filter = {
+                    "$or": [
+                        {"user_id": {"$in": other_user_ids}, "team_id": {"$in": admin_team_ids}, "open_datetime": {"$gt": now_str}},
+                        {"user_id": admin_user_id, "open_datetime": {"$gt": now_str}},
+                    ]
+                }
+            else:
+                # Non-admin: only their own tasks
+                prev_filter = {
+                    "user_id": admin_user_id,
+                    "open_datetime": {"$lte": now_str},
+                }
+                up_filter = {
+                    "user_id": admin_user_id,
+                    "open_datetime": {"$gt": now_str},
+                }
 
         # Previous tasks (open_datetime <= now), sorted descending (newest first), paginated
         prev_cursor = db.tasks.find(prev_filter).sort("open_datetime", -1).skip(previous_offset).limit(PAGE_SIZE)

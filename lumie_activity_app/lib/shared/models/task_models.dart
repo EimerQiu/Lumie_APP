@@ -467,3 +467,45 @@ class AdminTaskListResponse {
     );
   }
 }
+
+// ============ AI Tips Models ============
+
+class AiTaskStats {
+  final int totalTasks;
+  final int completedTasks;
+  final int expiredTasks;
+  final int pendingTasks;
+  final double completionRate;
+
+  const AiTaskStats({
+    required this.totalTasks,
+    required this.completedTasks,
+    required this.expiredTasks,
+    required this.pendingTasks,
+    required this.completionRate,
+  });
+
+  factory AiTaskStats.fromJson(Map<String, dynamic> json) {
+    return AiTaskStats(
+      totalTasks: json['total_tasks'] as int,
+      completedTasks: json['completed_tasks'] as int,
+      expiredTasks: json['expired_tasks'] as int,
+      pendingTasks: json['pending_tasks'] as int,
+      completionRate: (json['completion_rate'] as num).toDouble(),
+    );
+  }
+}
+
+class AiTip {
+  final String tip;
+  final AiTaskStats taskStats;
+
+  const AiTip({required this.tip, required this.taskStats});
+
+  factory AiTip.fromJson(Map<String, dynamic> json) {
+    return AiTip(
+      tip: json['tip'] as String,
+      taskStats: AiTaskStats.fromJson(json['task_stats'] as Map<String, dynamic>),
+    );
+  }
+}

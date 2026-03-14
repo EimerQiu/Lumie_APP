@@ -199,7 +199,7 @@ class _CreateTaskScreenState extends State<CreateTaskScreen> {
             const SizedBox(height: 8),
             ScrollDateTimePicker(
               value: _startDateTime,
-              minimumDate: DateTime.now().subtract(const Duration(days: 1)),
+              minimumDate: DateTime(2000),
               maximumDate: DateTime.now().add(const Duration(days: 365)),
               onChanged: (dt) {
                 setState(() {
@@ -220,9 +220,14 @@ class _CreateTaskScreenState extends State<CreateTaskScreen> {
             const SizedBox(height: 8),
             ScrollDateTimePicker(
               value: _endDateTime,
-              minimumDate: DateTime.now().subtract(const Duration(days: 1)),
+              minimumDate: DateTime.now(),
               maximumDate: DateTime.now().add(const Duration(days: 365)),
-              onChanged: (dt) => setState(() => _endDateTime = dt),
+              onChanged: (dt) {
+                setState(() {
+                  final now = DateTime.now();
+                  _endDateTime = dt.isBefore(now) ? now : dt;
+                });
+              },
             ),
             const SizedBox(height: 24),
 

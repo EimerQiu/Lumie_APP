@@ -7,10 +7,12 @@ from typing import Optional
 
 from ..services.auth_service import get_current_user_id
 from ..services.task_service import task_service
+from ..services.ai_tips_service import get_ai_tips
 from ..models.task import (
     TaskCreate, TaskResponse, TaskListResponse,
     TemplateCreate, TemplateUpdate, TemplateResponse, TemplateListResponse,
     BatchGenerateRequest, BatchGenerateResponse,
+    AiTipsRequest, AiTipsResponse,
 )
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
@@ -174,3 +176,23 @@ async def delete_task(
     - Assigned user or task creator can delete
     """
     return await task_service.delete_task(task_id, user_id)
+
+
+# ---- AI Tips ----
+
+@router.post("/ai-tips", response_model=AiTipsResponse)
+async def ai_tips(
+    data: AiTipsRequest,
+    user_id: str = Depends(get_current_user_id),
+):
+    """
+    Generate a personalised AI tip based on task completion history.
+
+    - Analyses tasks from the past `days_back` days (default 30, max 90)
+    - Returns a single motivating sentence and task statistics
+    """
+    return await get_ai_tips(
+        user_id=user_id,
+        days_back=data.days_back,
+        time_zone=data.time_zone,
+    )

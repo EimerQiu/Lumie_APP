@@ -175,3 +175,25 @@ class AdminTaskCompleteRequest(BaseModel):
     """Request to complete a task as admin"""
     task_id: str
     time_zone: str = "UTC"
+
+
+# ============ AI Tips Models ============
+
+class AiTipsRequest(BaseModel):
+    """Request model for AI tips generation"""
+    days_back: int = Field(default=30, ge=1, le=90, description="Analysis window in days")
+    time_zone: str = Field(default="UTC", description="User's IANA timezone")
+
+
+class TaskStats(BaseModel):
+    total_tasks: int
+    completed_tasks: int
+    expired_tasks: int
+    pending_tasks: int
+    completion_rate: float
+
+
+class AiTipsResponse(BaseModel):
+    """Response model for AI tips"""
+    tip: str
+    task_stats: TaskStats
