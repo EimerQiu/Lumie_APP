@@ -3,7 +3,10 @@ import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/services/advisor_service.dart';
+import '../../../core/services/analysis_service.dart';
+import '../../../shared/models/analysis_models.dart';
 import '../../../shared/widgets/gradient_card.dart';
+import '../widgets/analysis_result_card.dart';
 
 class AdvisorScreen extends StatefulWidget {
   const AdvisorScreen({super.key});
@@ -81,6 +84,7 @@ class _ChatTabState extends State<_ChatTab> {
   final TextEditingController _input = TextEditingController();
   final ScrollController _scroll = ScrollController();
   final AdvisorService _advisor = AdvisorService();
+  final AnalysisService _analysisService = AnalysisService();
   final List<_Message> _messages = [
     _Message(
       text:
@@ -94,6 +98,7 @@ class _ChatTabState extends State<_ChatTab> {
   /// excluding the initial greeting.
   List<ChatMessage> get _history => _messages
       .skip(1) // skip the opening greeting
+      .where((m) => !m.isAnalyzing) // skip analyzing placeholders
       .map(
         (m) =>
             ChatMessage(role: m.isUser ? 'user' : 'assistant', content: m.text),
@@ -111,14 +116,53 @@ class _ChatTabState extends State<_ChatTab> {
     });
     _scrollToBottom();
 
-    final reply = await _advisor.sendMessage(text, history: _history);
+    final response = await _advisor.sendMessage(text, history: _history);
     if (!mounted) return;
 
-    setState(() {
-      _messages.add(_Message(text: reply, isUser: false));
-      _isTyping = false;
-    });
-    _scrollToBottom();
+    if (response.type == 'analysis' && response.jobId != null) {
+      // Slow path: show "analyzing" placeholder, then poll for result
+      setState(() {
+        _messages.add(_Message(
+          text: response.reply,
+          isUser: false,
+          isAnalyzing: true,
+          jobId: response.jobId,
+        ));
+        _isTyping = false;
+      });
+      _scrollToBottom();
+
+      // Poll for result
+      final result = await _analysisService.pollJobResult(response.jobId!);
+      if (!mounted) return;
+
+      setState(() {
+        final idx = _messages.lastIndexWhere((m) => m.jobId == response.jobId);
+        if (idx >= 0) {
+          if (result.isSuccess && result.result != null) {
+            _messages[idx] = _Message(
+              text: result.result!.summary,
+              isUser: false,
+              analysisResult: result.result,
+            );
+          } else {
+            _messages[idx] = _Message(
+              text: result.error ?? 'Analysis failed. Please try again.',
+              isUser: false,
+              isAnalysisFailed: true,
+            );
+          }
+        }
+      });
+      _scrollToBottom();
+    } else {
+      // Fast path: direct reply
+      setState(() {
+        _messages.add(_Message(text: response.reply, isUser: false));
+        _isTyping = false;
+      });
+      _scrollToBottom();
+    }
   }
 
   void _scrollToBottom() {
@@ -221,7 +265,19 @@ class _ChatTabState extends State<_ChatTab> {
 class _Message {
   final String text;
   final bool isUser;
-  const _Message({required this.text, required this.isUser});
+  final bool isAnalyzing;
+  final bool isAnalysisFailed;
+  final String? jobId;
+  final AnalysisResult? analysisResult;
+
+  const _Message({
+    required this.text,
+    required this.isUser,
+    this.isAnalyzing = false,
+    this.isAnalysisFailed = false,
+    this.jobId,
+    this.analysisResult,
+  });
 }
 
 class _ChatBubble extends StatelessWidget {
@@ -270,34 +326,96 @@ class _ChatBubble extends StatelessWidget {
                 ),
                 boxShadow: AppColors.cardShadow,
               ),
-              child: message.isUser
-                  ? Text(
-                      message.text,
-                      style: const TextStyle(
-                        fontSize: 14,
-                        color: Colors.white,
-                        height: 1.4,
-                      ),
-                    )
-                  : MarkdownBody(
-                      data: message.text,
-                      styleSheet: MarkdownStyleSheet(
-                        p: const TextStyle(
-                          fontSize: 14,
-                          color: AppColors.textPrimary,
-                          height: 1.4,
-                        ),
-                        strong: const TextStyle(
-                          fontSize: 14,
-                          color: AppColors.textPrimary,
-                          fontWeight: FontWeight.bold,
-                          height: 1.4,
-                        ),
-                      ),
-                    ),
+              child: _buildContent(),
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  Widget _buildContent() {
+    // User message
+    if (message.isUser) {
+      return Text(
+        message.text,
+        style: const TextStyle(
+          fontSize: 14,
+          color: Colors.white,
+          height: 1.4,
+        ),
+      );
+    }
+
+    // Analyzing state — show text + spinner
+    if (message.isAnalyzing) {
+      return Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const SizedBox(
+            width: 14,
+            height: 14,
+            child: CircularProgressIndicator(
+              strokeWidth: 2,
+              color: AppColors.primaryLemonDark,
+            ),
+          ),
+          const SizedBox(width: 10),
+          Flexible(
+            child: Text(
+              message.text,
+              style: const TextStyle(
+                fontSize: 14,
+                color: AppColors.textSecondary,
+                height: 1.4,
+              ),
+            ),
+          ),
+        ],
+      );
+    }
+
+    // Analysis failed
+    if (message.isAnalysisFailed) {
+      return Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Icon(Icons.error_outline, size: 16, color: Colors.redAccent),
+          const SizedBox(width: 8),
+          Flexible(
+            child: Text(
+              message.text,
+              style: const TextStyle(
+                fontSize: 14,
+                color: AppColors.textSecondary,
+                height: 1.4,
+              ),
+            ),
+          ),
+        ],
+      );
+    }
+
+    // Analysis result — use the rich card
+    if (message.analysisResult != null) {
+      return AnalysisResultCard(result: message.analysisResult!);
+    }
+
+    // Normal assistant message — markdown
+    return MarkdownBody(
+      data: message.text,
+      styleSheet: MarkdownStyleSheet(
+        p: const TextStyle(
+          fontSize: 14,
+          color: AppColors.textPrimary,
+          height: 1.4,
+        ),
+        strong: const TextStyle(
+          fontSize: 14,
+          color: AppColors.textPrimary,
+          fontWeight: FontWeight.bold,
+          height: 1.4,
+        ),
       ),
     );
   }

@@ -1,0 +1,86 @@
+{
+  "database": "lumie_db",
+  "collections": [
+    {
+      "name": "profiles",
+      "description": "User profiles containing age, height/weight, ICD-10 diagnosis code",
+      "fields": {
+        "user_id": "string, unique user identifier",
+        "name": "string, user name",
+        "age": "number, age",
+        "role": "string, teen or parent",
+        "height": "object, {value: number, unit: 'cm'|'ft'}",
+        "weight": "object, {value: number, unit: 'kg'|'lbs'}",
+        "icd10_code": "string, ICD-10 diagnosis code (e.g., E10 = Type 1 Diabetes)",
+        "advisor_name": "string, AI advisor nickname",
+        "timezone": "string, user timezone (e.g., America/Los_Angeles)",
+        "created_at": "string, ISO datetime"
+      }
+    },
+    {
+      "name": "activities",
+      "description": "Activity records (from smart ring or manual entry)",
+      "fields": {
+        "user_id": "string",
+        "activity_type_id": "string, activity type ID (see activity_types)",
+        "activity_type_name": "string, e.g., walking, running, yoga",
+        "times": "number, activity count",
+        "duration_minutes": "number, duration in minutes",
+        "intensity": "string, low|moderate|high",
+        "source": "string, ring|manual",
+        "avg_heart_rate": "number, average heart rate BPM",
+        "max_heart_rate": "number, maximum heart rate BPM",
+        "start_time": "string, ISO datetime (UTC)",
+        "created_at": "string, ISO datetime"
+      },
+      "notes": "13 activity types: walking, running, cycling, swimming, yoga, stretching, dancing, basketball, soccer, tennis, hiking, gym, other"
+    },
+    {
+      "name": "walk_tests",
+      "description": "6-minute walk test results for assessing cardiopulmonary function",
+      "fields": {
+        "user_id": "string",
+        "date": "string, test date YYYY-MM-DD",
+        "distance_meters": "number, walking distance (meters)",
+        "duration_seconds": "number, duration in seconds",
+        "avg_heart_rate": "number",
+        "max_heart_rate": "number",
+        "recovery_heart_rate": "number, recovery heart rate",
+        "created_at": "string, ISO datetime"
+      }
+    },
+    {
+      "name": "tasks",
+      "description": "Med-Reminder tasks (medication reminders, lifestyle habits, etc.)",
+      "fields": {
+        "task_id": "string, unique task ID",
+        "user_id": "string, task assignee",
+        "created_by": "string, creator ID",
+        "team_id": "string, optional, used for team tasks",
+        "task_name": "string, task name",
+        "task_type": "string, Medicine|Life|Study|Exercise|Work|Meditation|Love",
+        "open_datetime": "string, start time 'YYYY-MM-DD HH:mm' (e.g. '2026-03-06 16:00', no Z suffix)",
+        "close_datetime": "string, end time 'YYYY-MM-DD HH:mm' (same format as open_datetime)",
+        "done": "ISODate (MongoDB datetime) if task is completed, field is ABSENT if not completed",
+        "rpttask_id": "string, associated template ID (optional)",
+        "task_info": "string, notes (optional)",
+        "created_at": "string, ISO datetime"
+      },
+      "notes": "CRITICAL — task status is NOT stored. It is computed: (1) done field present → completed; (2) done absent AND close_datetime < now → expired; (3) done absent AND close_datetime >= now → pending. To query by status: completed={\"done\":{\"$exists\":true}}, pending={\"done\":{\"$exists\":false},\"close_datetime\":{\"$gte\":now_str}}, expired={\"done\":{\"$exists\":false},\"close_datetime\":{\"$lt\":now_str}}. open_datetime/close_datetime are plain strings — filter with string comparison: {\"open_datetime\":{\"$gte\":\"2026-03-01 00:00\",\"$lt\":\"2026-04-01 00:00\"}}"
+    },
+    {
+      "name": "task_templates",
+      "description": "Reusable task templates for batch task generation",
+      "fields": {
+        "id": "string, unique template ID",
+        "created_by": "string, creator ID",
+        "template_name": "string",
+        "template_type": "string, Medicine|Life|Study|Exercise|Work|Meditation|Love",
+        "description": "string, optional",
+        "time_window_list": "array of TimeWindow objects",
+        "min_interval": "number, minimum interval in minutes",
+        "created_at": "string, ISO datetime"
+      }
+    }
+  ]
+}

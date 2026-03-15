@@ -77,6 +77,11 @@ async def create_indexes():
     await db.db.task_templates.create_index("id", unique=True)
     await db.db.task_templates.create_index("created_by")
 
+    # Analysis jobs collection indexes
+    await db.db.analysis_jobs.create_index("job_id", unique=True)
+    await db.db.analysis_jobs.create_index([("user_id", 1), ("created_at", -1)])
+    await db.db.analysis_jobs.create_index("status")
+
 
 def get_database() -> AsyncIOMotorDatabase:
     """Get database instance."""

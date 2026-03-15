@@ -1,4 +1,4 @@
-"""Advisor API routes — AI chat endpoint."""
+"""Advisor API routes — AI chat endpoint with intelligent routing."""
 import logging
 from typing import Optional
 
@@ -23,10 +23,14 @@ class HistoryMessage(BaseModel):
 class AdvisorChatRequest(BaseModel):
     message: str
     history: list[HistoryMessage] = []
+    target_user_id: Optional[str] = None
+    team_id: Optional[str] = None
 
 
 class AdvisorChatResponse(BaseModel):
+    type: str = "direct"        # "direct" or "analysis"
     reply: str
+    job_id: Optional[str] = None
 
 
 # ── Endpoint ──────────────────────────────────────────────────────────────────
@@ -39,12 +43,13 @@ async def advisor_chat(
     """
     Send a message to the Lumie AI Advisor and receive a reply.
 
-    - **message**: The user's latest message.
-    - **history**: Prior conversation turns (oldest first), each with a `role`
-      ("user" or "assistant") and `content` field.
+    The advisor intelligently routes between:
+    - **Direct reply** (fast path): general questions, greetings, health advice
+    - **Data analysis** (slow path): questions requiring user data lookup
 
-    The advisor is personalised using the authenticated user's profile
-    (condition, age, advisor name).
+    Response includes a `type` field:
+    - `"direct"`: read `reply` and display immediately
+    - `"analysis"`: show `reply` as placeholder, use `job_id` to poll for results
     """
     if not body.message.strip():
         raise HTTPException(
@@ -54,12 +59,18 @@ async def advisor_chat(
 
     try:
         history = [{"role": m.role, "content": m.content} for m in body.history]
-        reply = await get_advisor_reply(
+        result = await get_advisor_reply(
             user_id=user_id,
             message=body.message,
             history=history,
+            target_user_id=body.target_user_id,
+            team_id=body.team_id,
         )
-        return AdvisorChatResponse(reply=reply)
+        return AdvisorChatResponse(
+            type=result.get("type", "direct"),
+            reply=result["reply"],
+            job_id=result.get("job_id"),
+        )
     except RuntimeError as e:
         # ANTHROPIC_API_KEY not configured
         logger.error(f"Advisor config error: {e}")

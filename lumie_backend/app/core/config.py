@@ -24,6 +24,9 @@ class Settings(BaseSettings):
     # Anthropic
     ANTHROPIC_API_KEY: str = os.getenv("ANTHROPIC_API_KEY", "")
 
+    # Sandbox (AI data analysis)
+    SANDBOX_MONGO_URI: str = os.getenv("SANDBOX_MONGO_URI", "")
+
     # CORS
     CORS_ORIGINS: list[str] = ["*"]
 

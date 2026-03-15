@@ -6,7 +6,7 @@ After=network.target mongodb.service
 Type=simple
 User=ubuntu
 WorkingDirectory=/home/ubuntu/lumie_backend
-Environment="PATH=/home/ubuntu/lumie_backend/venv/bin"
+Environment="PATH=/home/ubuntu/lumie_backend/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 EnvironmentFile=/home/ubuntu/lumie_backend/.env
 ExecStart=/home/ubuntu/lumie_backend/venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 4
 Restart=always
@@ -14,7 +14,7 @@ RestartSec=10
 
 # Security
 NoNewPrivileges=true
-PrivateTmp=true
+PrivateTmp=false
 
 # Logging
 StandardOutput=journal

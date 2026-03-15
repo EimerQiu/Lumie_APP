@@ -23,6 +23,9 @@ class ApiConstants {
   // Advisor
   static const String advisorChat = '/advisor/chat';
 
+  // Analysis
+  static const String analysisJobs = '/analysis/jobs';
+
   // Tasks / Med-Reminder
   static const String tasks = '/tasks';
   static const String taskTemplates = '/tasks/templates';
