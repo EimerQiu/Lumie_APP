@@ -1,0 +1,1589 @@
+# Lumie AI 数据分析系统
+
+后端架构与开发需求设计说明书
+
+**版本**: v3.0
+**更新日期**: 2026-03-14
+**适用项目**: Lumie Activity App (lumie_backend)
+
+---
+
+## 目标
+
+将 Lumie App 的 Advisor Chat **从纯对话升级为智能路由系统**。
+
+用户在 Advisor Chat 中发送任何消息 → 后端调用 Claude（带 tool_use）→ Claude 自行判断：
+
+- **直接回答**：闲聊、健康建议、一般问题 → 立即返回文字回复（和现在一样快）
+- **数据分析**：需要查询用户数据的问题 → Claude 调用 `run_data_analysis` tool → 后端启动分析 job → 生成代码 → Docker sandbox 执行 → 返回结论 + 图表
+
+用户无需知道系统内部走了哪条路径。对用户来说，和 Advisor 聊天就是一个统一的体验。
+
+### 典型场景
+
+直接回答（快速路径）：
+
+- "你好" → 直接回复
+- "什么是 ICD-10？" → 直接回复
+- "我今天不太想运动" → 鼓励 + 建议，直接回复
+- "糖尿病患者可以做什么运动？" → 健康建议，直接回复
+
+触发数据分析（慢路径）：
+
+- "我这个月的活动量变化趋势是什么？" → 需要查 activities → 分析
+- "我上周的服药完成率是多少？" → 需要查 tasks → 分析
+- "帮我分析最近两周的心率数据" → 需要查 activities 心率字段 → 分析
+- "我的 6 分钟步行测试成绩有进步吗？" → 需要查 walk_tests → 分析
+- 家长问："我孩子这周的任务完成情况怎么样？" → 需要查 tasks（目标用户是孩子）→ 分析
+
+### 系统必须保证
+
+- 直接回答的响应速度和现有 Advisor 一样（1-3 秒）
+- 数据分析不阻塞 API（异步执行 + 前端轮询）
+- AI 生成的代码 **不能修改** 业务数据（只读访问）
+- 执行环境完全隔离（Docker 容器）
+- 遵守 Lumie 的 **teen-safe** 设计原则（不输出卡路里、BMI、体重排名等）
+- 遵守 Lumie 的订阅等级限制
+- LLM 拥有完整的 Lumie 数据库 schema 与领域术语上下文
+
+---
+
+# 1 系统架构
+
+```
+Flutter App (Advisor Chat)
+     │
+     │  POST /api/v1/advisor/chat  (沿用现有端点，升级内部逻辑)
+     ▼
+FastAPI — advisor_service.py (升级版)
+     │
+     ├── Claude API (带 tool_use)
+     │     │
+     │     ├── 无 tool call → 直接返回 reply（快速路径）
+     │     │
+     │     └── 调用 run_data_analysis tool → 创建 analysis job
+     │           │
+     │           ▼
+     │     AsyncIO Task Runner
+     │           │
+     │           ├── Claude API (代码生成，独立调用)
+     │           │
+     │           ▼
+     │     Docker Sandbox Container
+     │           │
+     │           ├── 只读 MongoDB 连接
+     │           │
+     │           ▼
+     │     结果写入 /output → 回写 MongoDB
+     │
+     ▼
+Response → Flutter
+     │
+     ├── type: "direct"   → 直接显示 reply
+     └── type: "analysis" → 显示"分析中..."，开始轮询 job 状态
+```
+
+### 组件职责
+
+| 组件 | 职责 |
+| --- | --- |
+| FastAPI | API 路由 + JWT 鉴权 + 智能路由 |
+| advisor_service.py (升级) | Claude tool_use 调用 + 路由判断 + job 创建 |
+| MongoDB (lumie_db) | job 元数据存储 + 业务数据源 |
+| AsyncIO Task | 异步 job 执行（代替 Celery，保持架构简单） |
+| Docker Sandbox | 隔离执行 AI 生成的 Python 代码 |
+| Claude API | 路由判断(tool_use) + 代码生成(独立调用) |
+
+### 关键设计决策
+
+**为什么用 tool_use 而不是两次 LLM 调用？**
+
+不需要先调一次 Claude "判断是否需要分析"，再调一次执行。Claude 的 tool_use 原生支持这种路由：给它一个 `run_data_analysis` tool，它会自己决定要不要用。一次调用同时完成路由和直接回答。
+
+**为什么不用 Celery + Redis？**
+
+Lumie 当前部署在单台 Ubuntu 服务器上（54.177.85.124），使用 systemd 管理服务，不使用 Redis。引入 Celery + Redis 会显著增加运维复杂度。对于当前用户规模，使用 Python asyncio + `asyncio.create_subprocess_exec` 管理 Docker 容器即可满足并发需求。未来用户量增长后可以迁移到 Celery。
+
+---
+
+# 2 技术栈
+
+在现有 lumie_backend 基础上新增：
+
+```
+新增 Python packages:
+  docker          # Docker SDK for Python
+
+已有（直接复用）:
+  fastapi
+  uvicorn
+  motor           # async MongoDB
+  pydantic
+  anthropic       # Claude API (已有 advisor_service 使用)
+```
+
+服务器新增：
+
+```
+Docker Engine    # 需要在 54.177.85.124 上安装
+```
+
+---
+
+# 3 MongoDB 新增 Collection
+
+### collection: `analysis_jobs`
+
+```json
+{
+  "_id": ObjectId,
+  "job_id": "uuid string",
+  "user_id": "发起用户 ID",
+  "team_id": "可选，家长查看孩子数据时需要",
+  "target_user_id": "被分析的用户 ID（默认等于 user_id，家长场景下为孩子的 ID）",
+
+  "prompt": "用户的自然语言问题",
+
+  "status": "pending | generating | running | success | failed | cancelled",
+
+  "generated_code": "Claude 生成的 Python 代码",
+
+  "result": {
+    "summary": "分析结论（文本）",
+    "data": {},
+    "chart_base64": "可选，图表的 base64 PNG"
+  },
+
+  "stdout": "",
+  "stderr": "",
+  "error": "",
+
+  "created_at": "datetime (UTC)",
+  "started_at": "datetime (UTC)",
+  "finished_at": "datetime (UTC)",
+
+  "timeout_sec": 30,
+  "docker_container_id": "",
+
+  "model": "claude-haiku-4-5-20251001",
+  "token_usage": {
+    "input_tokens": 0,
+    "output_tokens": 0
+  }
+}
+```
+
+### 索引
+
+```python
+await db.db.analysis_jobs.create_index("job_id", unique=True)
+await db.db.analysis_jobs.create_index([("user_id", 1), ("created_at", -1)])
+await db.db.analysis_jobs.create_index("status")
+```
+
+索引代码添加到 `lumie_backend/app/core/database.py` 的 `create_indexes()` 函数中。
+
+---
+
+# 4 API 端点
+
+所有端点使用已有的 JWT 鉴权（`get_current_user_id` 依赖注入），遵循 `/api/v1/` 前缀。
+
+## 4.1 Advisor Chat（升级版，智能路由入口）
+
+```
+POST /api/v1/advisor/chat  ← 沿用现有端点 URL，升级内部逻辑
+```
+
+Headers:
+
+```
+Authorization: Bearer {jwt_token}
+```
+
+Request Body（向后兼容，新增可选字段）：
+
+```json
+{
+  "message": "我这个月的活动量变化趋势是什么？",
+  "history": [
+    {"role": "user", "content": "..."},
+    {"role": "assistant", "content": "..."}
+  ],
+  "target_user_id": "可选，家长分析孩子数据时填写",
+  "team_id": "可选，家长场景需要"
+}
+```
+
+### 后端处理流程
+
+```python
+async def advisor_chat(request, user_id):
+    # 1. 获取用户 profile（和现有逻辑一样）
+    profile = await get_profile(user_id)
+
+    # 2. 构建 system prompt（升级版，包含 tool 定义）
+    system_prompt = build_advisor_system_prompt(profile)
+
+    # 3. 定义 run_data_analysis tool
+    tools = [RUN_DATA_ANALYSIS_TOOL]
+
+    # 4. 调用 Claude（带 tool_use）
+    response = await client.messages.create(
+        model="claude-sonnet-4-20250514",
+        system=system_prompt,
+        messages=[...history, {"role": "user", "content": message}],
+        tools=tools,
+        max_tokens=800,
+    )
+
+    # 5. 检查 response：Claude 是直接回答还是调用了 tool？
+    if response.stop_reason == "end_turn":
+        # 快速路径：直接回答
+        return {"type": "direct", "reply": extract_text(response)}
+
+    elif response.stop_reason == "tool_use":
+        # 慢路径：需要数据分析
+        tool_input = extract_tool_input(response)
+
+        # 5a. 检查订阅限制（仅分析路径需要检查）
+        check_analysis_quota(user_id, subscription_tier)
+
+        # 5b. 检查家长权限（如果有 target_user_id）
+        if target_user_id:
+            verify_team_admin_access(user_id, target_user_id, team_id)
+
+        # 5c. 创建 analysis job
+        job_id = create_analysis_job(
+            user_id=user_id,
+            prompt=tool_input["question"],
+            target_user_id=target_user_id or user_id,
+        )
+
+        # 5d. 启动异步执行
+        asyncio.create_task(run_analysis_job(job_id))
+
+        # 5e. 返回分析中响应
+        return {
+            "type": "analysis",
+            "reply": "正在分析您的数据，请稍候...",
+            "job_id": job_id,
+        }
+```
+
+### Response 格式（升级版，两种类型）
+
+**直接回答（快速路径）：**
+
+```json
+{
+  "type": "direct",
+  "reply": "您好！我是您的 Lumie 健康顾问..."
+}
+```
+
+**数据分析（慢路径）：**
+
+```json
+{
+  "type": "analysis",
+  "reply": "正在分析您的数据，请稍候...",
+  "job_id": "uuid"
+}
+```
+
+### 向后兼容
+
+旧版 Flutter 客户端不认识 `type` 字段时，会直接读取 `reply` 字段显示——行为和之前一模一样。升级后的 Flutter 检查 `type` 字段来决定是否启动轮询。
+
+### run_data_analysis Tool 定义
+
+```python
+RUN_DATA_ANALYSIS_TOOL = {
+    "name": "run_data_analysis",
+    "description": (
+        "当用户的问题需要查询他们的个人健康数据才能回答时，调用此工具。"
+        "例如：活动量趋势、服药完成率、心率分析、步行测试对比等。"
+        "不要用于可以直接回答的一般健康知识问题。"
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "question": {
+                "type": "string",
+                "description": "需要分析的具体数据问题（中文），会传递给数据分析系统"
+            },
+            "data_types": {
+                "type": "array",
+                "items": {"type": "string", "enum": [
+                    "activities", "tasks", "walk_tests", "profile"
+                ]},
+                "description": "需要查询的数据类型"
+            },
+            "time_range": {
+                "type": "string",
+                "description": "时间范围描述，如 '最近7天'、'本月'、'过去30天'"
+            }
+        },
+        "required": ["question"]
+    }
+}
+```
+
+### 订阅限制（仅分析路径）
+
+直接回答不消耗分析配额。只有触发 `run_data_analysis` tool 时才检查：
+
+| 等级 | 每日分析次数 |
+| --- | --- |
+| free | 3 |
+| monthly (Pro) | 20 |
+| annual (Pro) | 20 |
+
+超出限制时，不返回 403 错误（因为是在已有的 chat 端点内），而是：
+
+```json
+{
+  "type": "direct",
+  "reply": "您今天的数据分析次数已用完（3/3）。升级到 Pro 可以每天分析 20 次。如果您有其他不需要查数据的问题，我仍然可以帮助您。"
+}
+```
+
+这样用户体验更自然——Advisor 用对话方式告知限制，而不是返回一个错误。
+
+---
+
+## 4.2 查询分析 Job 状态
+
+```
+GET /api/v1/analysis/jobs/{job_id}
+```
+
+Response:
+
+```json
+{
+  "job_id": "uuid",
+  "status": "success",
+  "prompt": "我这个月的活动量变化趋势是什么？",
+  "result": {
+    "summary": "您本月的活动量呈上升趋势...",
+    "data": { "dates": ["..."], "minutes": ["..."] },
+    "chart_base64": "iVBORw0KGgo..."
+  },
+  "created_at": "2026-03-14T10:00:00",
+  "finished_at": "2026-03-14T10:00:12"
+}
+```
+
+权限：只有 job 创建者（user_id 匹配）可以查询。
+
+Flutter 使用轮询方式查询状态（每 2 秒一次，最多轮询 60 秒）。
+
+---
+
+## 4.3 取消分析 Job
+
+```
+POST /api/v1/analysis/jobs/{job_id}/cancel
+```
+
+逻辑：
+
+```
+1. 验证 JWT + 权限（只有创建者可取消）
+2. 如果 Docker container 正在运行 → docker kill
+3. 更新 status = cancelled
+```
+
+---
+
+## 4.4 查询历史分析 Jobs
+
+```
+GET /api/v1/analysis/jobs
+```
+
+Query Params:
+
+```
+limit: int (默认 10，最大 50)
+offset: int (默认 0)
+```
+
+返回当前用户的分析历史，按 created_at 倒序。
+
+---
+
+# 5 Job 状态流
+
+```
+pending → generating → running → success
+                                → failed
+                   → failed (代码生成失败)
+         → cancelled (任意阶段可取消)
+```
+
+状态只能单向变化，不可回退。
+
+---
+
+# 6 异步执行机制
+
+使用 `asyncio.create_task` + `asyncio.create_subprocess_exec` 替代 Celery。
+
+```python
+# 在 analysis_service.py 中
+async def run_analysis_job(job_id: str):
+    """异步执行分析 job，由 create_task 调度"""
+    try:
+        # 1. 更新状态 → generating
+        # 2. 组装 prompt，调用 Claude
+        # 3. 安全扫描生成的代码
+        # 4. 更新状态 → running
+        # 5. 启动 Docker sandbox
+        # 6. 等待执行完成（带 timeout）
+        # 7. 读取结果，更新状态 → success
+    except Exception as e:
+        # 更新状态 → failed
+```
+
+### 并发限制
+
+使用 `asyncio.Semaphore` 控制同时运行的 sandbox 数量：
+
+```python
+_sandbox_semaphore = asyncio.Semaphore(3)  # 最多 3 个并发 sandbox
+
+async def run_analysis_job(job_id: str):
+    async with _sandbox_semaphore:
+        ...
+```
+
+---
+
+# 7 Worker 执行流程
+
+```
+1. 从 MongoDB 读取 job 记录
+
+2. status → generating
+
+3. 加载 Lumie schema (resources/schema/lumie_schema.json)
+4. 加载 glossary (resources/glossary.md)
+5. 加载用户 profile (从 profiles collection)
+
+6. 组装 prompt（schema + glossary + profile 上下文 + 用户问题）
+
+7. 调用 Claude API 生成 Python 代码
+
+8. 安全扫描代码（见第 15 节）
+
+9. 将代码写入临时目录 /tmp/lumie_sandbox/{job_id}/main.py
+10. 将连接配置写入 /tmp/lumie_sandbox/{job_id}/config.json
+
+11. status → running
+
+12. 启动 Docker sandbox 容器
+
+13. 等待容器退出（带 timeout 监控）
+
+14. 读取 /tmp/lumie_sandbox/{job_id}/output/result.json
+
+15. 将结果写入 analysis_jobs.result
+
+16. status → success (或 failed)
+
+17. 清理临时目录
+```
+
+---
+
+# 8 Prompt 上下文组装（两层）
+
+本系统有两层 LLM 调用，各自需要不同的 prompt。
+
+## 8.1 第一层：Advisor Chat（路由层）
+
+由升级后的 `advisor_service.py` 组装。这层的 system prompt 基于现有 advisor 的 prompt 扩展，增加 tool 使用指引。
+
+```python
+async def build_advisor_system_prompt(profile: dict) -> str:
+    name = profile.get("name", "the user")
+    age = profile.get("age")
+    icd10 = profile.get("icd10_code")
+    advisor_name = profile.get("advisor_name")
+
+    return f"""You are Lumie, a compassionate AI health advisor built into the Lumie app.
+Lumie helps teens and young adults with chronic health conditions stay active safely.
+
+User profile:
+- Name: {name}
+- Age: {age or 'unknown'}
+- Medical condition (ICD-10): {icd10 or 'No condition on file'}
+{f'- Their healthcare advisor/coach is {advisor_name}' if advisor_name else ''}
+
+## When to use the run_data_analysis tool
+Call run_data_analysis ONLY when the user asks a question that requires querying their personal data:
+- Activity trends, totals, or comparisons over time
+- Task/medication completion rates or statistics
+- Heart rate analysis
+- Walk test progress
+- Any question that begins with "我的..." or asks about specific numbers/trends
+
+Do NOT call the tool for:
+- General health advice or tips
+- Greetings or small talk
+- Questions about medical conditions (answer from knowledge)
+- Emotional support or encouragement
+- Questions you can answer without data
+
+## Response guidelines
+- Keep replies concise: 2–4 sentences unless a detailed explanation is clearly needed.
+- Always acknowledge the user's condition and energy levels.
+- Encourage consistency over intensity.
+- Never replace medical advice — remind the user to check with their care team for anything clinical.
+- Use warm, supportive language. Avoid being preachy.
+- TEEN-SAFE: Never output calories, BMI, weight comparisons, or performance rankings.
+- You may use **bold** to emphasise key words, but do not use bullet points, numbered lists, or headers."""
+```
+
+**模型选择**：第一层使用 `claude-sonnet-4-20250514`（需要 tool_use 能力 + 快速响应，Sonnet 是最佳平衡点。现有 advisor 使用 Opus 太慢，Haiku 的 tool_use 判断不够准确）。
+
+**max_tokens**：800（比现有的 400 略高，因为 tool_use response 可能包含 tool call JSON）。
+
+## 8.2 第二层：代码生成（分析层）
+
+由 `analysis_prompt_service.py` 组装。仅在分析路径触发时使用。
+
+```python
+async def build_analysis_prompt(
+    question: str,
+    target_user_id: str,
+    user_profile: dict
+) -> str:
+    schema = load_schema()       # 从文件读取
+    glossary = load_glossary()   # 从文件读取
+    return PROMPT_TEMPLATE.format(
+        schema=schema,
+        glossary=glossary,
+        user_age=user_profile.get("age", "unknown"),
+        user_condition=user_profile.get("icd10_code", "none"),
+        target_user_id=target_user_id,
+        question=question
+    )
+```
+
+**模型选择**：第二层使用 `claude-haiku-4-5-20251001`（只需要生成 Python 代码，Haiku 速度快、成本低）。
+
+**schema 和 glossary 由后端维护。不能让 LLM 自己探索数据库结构。**
+
+---
+
+# 9 Lumie 数据库 Schema 文件
+
+存储位置：
+
+```
+lumie_backend/app/resources/schema/lumie_schema.json
+```
+
+内容（基于 Lumie 实际 collections）：
+
+```json
+{
+  "database": "lumie_db",
+  "collections": [
+    {
+      "name": "profiles",
+      "description": "用户档案，包含年龄、身高体重、ICD-10 诊断码",
+      "fields": {
+        "user_id": "string, 用户唯一标识",
+        "name": "string, 用户姓名",
+        "age": "number, 年龄",
+        "role": "string, teen 或 parent",
+        "height": "object, {value: number, unit: 'cm'|'ft'}",
+        "weight": "object, {value: number, unit: 'kg'|'lbs'}",
+        "icd10_code": "string, ICD-10 诊断码（如 E10 = 1型糖尿病）",
+        "advisor_name": "string, AI 顾问昵称",
+        "timezone": "string, 用户时区（如 America/Los_Angeles）",
+        "created_at": "string, ISO datetime"
+      }
+    },
+    {
+      "name": "activities",
+      "description": "活动记录（来自智能戒指或手动输入）",
+      "fields": {
+        "user_id": "string",
+        "activity_type_id": "string, 活动类型 ID（见 activity_types）",
+        "activity_type_name": "string, 如 walking, running, yoga",
+        "times": "number, 活动次数",
+        "duration_minutes": "number, 持续分钟数",
+        "intensity": "string, low|moderate|high",
+        "source": "string, ring|manual",
+        "avg_heart_rate": "number, 平均心率 BPM",
+        "max_heart_rate": "number, 最大心率 BPM",
+        "start_time": "string, ISO datetime (UTC)",
+        "created_at": "string, ISO datetime"
+      },
+      "notes": "活动类型共 13 种：walking, running, cycling, swimming, yoga, stretching, dancing, basketball, soccer, tennis, hiking, gym, other"
+    },
+    {
+      "name": "walk_tests",
+      "description": "6 分钟步行测试结果，用于评估心肺功能",
+      "fields": {
+        "user_id": "string",
+        "date": "string, 测试日期 YYYY-MM-DD",
+        "distance_meters": "number, 步行距离（米）",
+        "duration_seconds": "number, 持续秒数",
+        "avg_heart_rate": "number",
+        "max_heart_rate": "number",
+        "recovery_heart_rate": "number, 恢复心率",
+        "created_at": "string, ISO datetime"
+      }
+    },
+    {
+      "name": "tasks",
+      "description": "Med-Reminder 任务（服药提醒、生活习惯等）",
+      "fields": {
+        "task_id": "string, 任务唯一 ID",
+        "user_id": "string, 任务负责人",
+        "created_by": "string, 创建者 ID",
+        "team_id": "string, 可选，团队任务时使用",
+        "task_name": "string, 任务名称",
+        "task_type": "string, Medicine|Life|Study|Exercise|Work|Meditation|Love",
+        "status": "string, pending|completed|expired",
+        "open_datetime": "string, 开始时间 'YYYY-MM-DD HH:mm'（注意：无 Z 后缀，存储为当地时间）",
+        "close_datetime": "string, 结束时间",
+        "completed_at": "string, 完成时间 ISO datetime (可选)",
+        "rpttask_id": "string, 关联模板 ID (可选)",
+        "task_info": "string, 备注信息 (可选)",
+        "created_at": "string, ISO datetime"
+      },
+      "notes": "status 由查询时动态计算：close_datetime 已过且未完成 → expired"
+    },
+    {
+      "name": "task_templates",
+      "description": "可复用的任务模板，用于批量生成任务",
+      "fields": {
+        "id": "string, 模板唯一 ID",
+        "created_by": "string, 创建者 ID",
+        "template_name": "string",
+        "template_type": "string, Medicine|Life|Study|Exercise|Work|Meditation|Love",
+        "description": "string, 可选",
+        "time_window_list": "array of TimeWindow objects",
+        "min_interval": "number, 最小间隔分钟数",
+        "created_at": "string, ISO datetime"
+      }
+    },
+    {
+      "name": "teams",
+      "description": "家庭/团队记录",
+      "fields": {
+        "team_id": "string",
+        "name": "string, 团队名称",
+        "description": "string",
+        "created_by": "string, 创建者 user_id",
+        "is_deleted": "boolean, 软删除标记",
+        "created_at": "string, ISO datetime"
+      }
+    },
+    {
+      "name": "team_members",
+      "description": "团队成员关系",
+      "fields": {
+        "team_id": "string",
+        "user_id": "string",
+        "role": "string, admin|member",
+        "status": "string, pending|member",
+        "invited_by": "string",
+        "invited_at": "string, ISO datetime",
+        "joined_at": "string, ISO datetime"
+      }
+    }
+  ]
+}
+```
+
+---
+
+# 10 Lumie 领域术语表 (Glossary)
+
+存储位置：
+
+```
+lumie_backend/app/resources/glossary.md
+```
+
+内容：
+
+```markdown
+# Lumie 领域术语表
+
+## 活动相关
+- 活动量 / activity level = activities collection 中的 duration_minutes 汇总
+- 运动时间 / active minutes = 每日活动总分钟数
+- 活动目标 / daily goal = 自适应目标（由后端根据健康数据计算）
+- 活动强度 = intensity 字段: low(低), moderate(中), high(高)
+- 活动来源 = source 字段: ring(智能戒指), manual(手动输入)
+
+## 任务相关
+- 服药提醒 / Med-Reminder = tasks collection 中 task_type = Medicine
+- 任务完成率 / completion rate = completed / total tasks (指定时间段)
+- 过期任务 / expired = close_datetime 已过且 status != completed
+- 活跃任务 / active = 当前时间在 open_datetime 和 close_datetime 之间
+- 待完成 / pending = open_datetime 未到或已到但未完成且未过期
+
+## 健康数据相关
+- 心率 / heart rate = avg_heart_rate 或 max_heart_rate（BPM）
+- 6 分钟步行测试 / 6MWT / walk test = walk_tests collection
+- 步行距离 = walk_tests.distance_meters
+- 恢复心率 = walk_tests.recovery_heart_rate
+
+## 团队相关
+- 家庭 / 团队 = teams collection
+- 管理员 / admin = team_members.role = admin
+- 家长 / parent = profiles.role = parent
+- 孩子 / 青少年 / teen = profiles.role = teen
+
+## 时间相关
+- 这周 / this week = 当前自然周（周一至周日）
+- 这个月 / this month = 当前自然月
+- 最近 N 天 = 过去 N 个自然日（含今天）
+
+## Teen-Safe 规则（LLM 必须遵守）
+- 禁止输出卡路里、BMI、体重排名
+- 禁止进行体重相关的比较或排名
+- 禁止生成性能排行榜
+- 活动数据用「分钟数」而非「卡路里消耗」表达
+```
+
+---
+
+# 11 Prompt 模板
+
+Worker 使用固定 prompt 模板调用 Claude：
+
+```
+You are a data analyst for Lumie, a health activity tracking app for teens with chronic conditions.
+
+Your job: Generate Python code to answer the user's question by querying MongoDB.
+
+## CRITICAL SAFETY RULES
+- Database access is READ-ONLY. Never use insert, update, delete, drop, or any write operation.
+- TEEN-SAFE: Never output calories, BMI, weight comparisons, or performance rankings.
+- Never use subprocess, os.system, eval, exec, or __import__.
+- Never access the filesystem except writing to /output/.
+- Never make network requests (no urllib, requests, socket, etc.).
+
+## Environment
+- Python 3.11 with pymongo, pandas, matplotlib, numpy pre-installed
+- MongoDB connection string is in environment variable MONGO_URI
+- Database name: lumie_db
+- The target user's ID is in environment variable TARGET_USER_ID
+
+## Database Schema
+{schema}
+
+## Domain Glossary
+{glossary}
+
+## User Context
+- User age: {user_age}
+- User health condition (ICD-10): {user_condition}
+- Timezone: {user_timezone}
+
+## Task
+Answer this question: {question}
+
+## Output Requirements
+1. Query the database using pymongo (read-only).
+2. Analyze the data using pandas if needed.
+3. Save a JSON result to /output/result.json with this structure:
+   {{
+     "summary": "一段简洁的中文分析结论（2-4 句话）",
+     "data": {{ ... relevant data ... }}
+   }}
+4. If a chart would help, use matplotlib to save a PNG to /output/chart.png.
+   - Use clean, simple style. Dark background (#1C1C1E) with white text for Lumie's dark theme.
+   - Labels in Chinese.
+5. Print progress to stdout for logging.
+
+## Code Format
+Return ONLY valid Python code. No markdown fencing, no explanation.
+```
+
+---
+
+# 12 Claude API 调用（两层模型策略）
+
+复用已有的 `ANTHROPIC_API_KEY` 环境变量。
+
+### 第一层：路由判断（advisor_service.py，升级）
+
+```python
+model = "claude-sonnet-4-20250514"     # tool_use 判断准确 + 响应快
+temperature = 0.3                       # 对话需要一点变化
+max_tokens = 800
+tools = [RUN_DATA_ANALYSIS_TOOL]
+```
+
+### 第二层：代码生成（analysis_llm_service.py，新增）
+
+```python
+model = "claude-haiku-4-5-20251001"    # 代码生成够用，速度快，成本低
+temperature = 0                         # 确定性输出
+max_tokens = 4000                       # 分析代码通常较长
+```
+
+返回必须为 **纯 Python 代码**。Worker 必须 strip markdown 代码块标记（` ```python ` 等）。
+
+如果 Claude 返回内容不是有效 Python 代码，job status → failed，error = "code_generation_failed"。
+
+### 成本估算
+
+| 路径 | 模型 | 预估 tokens/次 | 成本/次 |
+| --- | --- | --- | --- |
+| 直接回答 | Sonnet | ~1500 input + ~200 output | ~$0.006 |
+| 数据分析 | Sonnet + Haiku | ~1500 + ~3000 input, ~100 + ~2000 output | ~$0.015 |
+
+直接回答路径的成本和现有 Advisor (Opus) 相比反而更低（Sonnet 比 Opus 便宜约 5 倍）。
+
+---
+
+# 13 LLM 调用频率限制
+
+使用内存中的速率计数器（per user_id）：
+
+```python
+# 每用户每分钟最多 2 次 LLM 调用
+# 全局每秒最多 5 次 LLM 调用（保护 Anthropic API quota）
+```
+
+超出频率限制返回 429 Too Many Requests。
+
+---
+
+# 14 Docker Sandbox
+
+### Sandbox 镜像
+
+镜像名：`lumie-analysis-sandbox`
+
+Dockerfile（新建 `lumie_backend/sandbox/Dockerfile`）：
+
+```dockerfile
+FROM python:3.11-slim
+
+RUN pip install --no-cache-dir \
+    pymongo==4.7.0 \
+    pandas==2.2.0 \
+    matplotlib==3.9.0 \
+    numpy==1.26.0
+
+RUN adduser --disabled-password --no-create-home sandbox
+
+RUN mkdir -p /app /output && chown sandbox:sandbox /output
+
+WORKDIR /app
+
+USER sandbox
+
+CMD ["python", "main.py"]
+```
+
+### 构建镜像
+
+```bash
+cd lumie_backend/sandbox
+docker build -t lumie-analysis-sandbox .
+```
+
+此操作在部署时执行一次，镜像缓存在服务器上。
+
+---
+
+# 15 Docker 安全策略
+
+启动容器：
+
+```python
+container = docker_client.containers.run(
+    image="lumie-analysis-sandbox",
+    command=["python", "main.py"],
+    detach=True,
+    mem_limit="256m",
+    cpu_quota=50000,          # 0.5 CPU
+    pids_limit=32,
+    network_mode="bridge",    # 需要访问 MongoDB，但限制其他网络
+    read_only=True,
+    volumes={
+        f"/tmp/lumie_sandbox/{job_id}/main.py": {
+            "bind": "/app/main.py", "mode": "ro"
+        },
+        f"/tmp/lumie_sandbox/{job_id}/output": {
+            "bind": "/output", "mode": "rw"
+        }
+    },
+    environment={
+        "MONGO_URI": SANDBOX_MONGO_URI,       # 只读用户连接
+        "TARGET_USER_ID": target_user_id,
+    },
+    tmpfs={"/tmp": "size=64m,noexec"},
+)
+```
+
+### 网络策略
+
+容器需要访问 MongoDB（通过 Docker bridge network），但必须使用 **只读 MongoDB 用户**（见第 16 节）。
+
+禁止：
+
+```
+--privileged
+--network=host
+```
+
+容器必须：
+
+```
+non-root user (sandbox)
+read-only root filesystem
+resource limits (memory, CPU, PIDs)
+```
+
+---
+
+# 16 MongoDB 只读访问策略
+
+### 创建只读用户
+
+在 MongoDB 中创建专用只读用户，供 sandbox 使用：
+
+```javascript
+use lumie_db
+db.createUser({
+  user: "analysis_reader",
+  pwd: "生成一个强密码",
+  roles: [{ role: "read", db: "lumie_db" }]
+})
+```
+
+### Sandbox 连接串
+
+```
+SANDBOX_MONGO_URI = "mongodb://analysis_reader:密码@host.docker.internal:27017/lumie_db?authSource=lumie_db"
+```
+
+注意：使用 `host.docker.internal`（Docker Desktop）或容器宿主 IP（Linux）访问宿主机 MongoDB。
+
+### 白名单 Collections
+
+sandbox 代码只应查询以下 collections：
+
+```
+profiles          (用户档案)
+activities        (活动记录)
+walk_tests        (步行测试)
+tasks             (任务记录)
+task_templates    (任务模板)
+```
+
+以下 collections **禁止** sandbox 访问：
+
+```
+users             (包含密码哈希和 token)
+teams             (team 管理数据)
+team_members      (成员关系)
+pending_invitations (邀请数据)
+```
+
+虽然 MongoDB `read` 角色会授予所有 collections 的读权限，但通过 prompt 指令和代码安全扫描来限制实际访问的 collections。
+
+### 数据范围限制
+
+sandbox 代码中所有查询必须包含 `user_id` 过滤条件（等于 `TARGET_USER_ID`），确保只能访问目标用户的数据。这通过 prompt 指令和代码安全扫描双重保证。
+
+---
+
+# 17 Sandbox 目录结构
+
+```
+/tmp/lumie_sandbox/
+   /{job_id}/
+       main.py              # AI 生成的分析代码（只读挂载）
+       output/
+           result.json      # 分析结果（必须）
+           chart.png        # 图表（可选）
+           stdout.log       # 标准输出
+           stderr.log       # 标准错误
+```
+
+规则：
+
+```
+main.py     → 只读
+/output     → 当前 job 可写
+其他路径    → 不可写（read-only root filesystem）
+```
+
+Job 完成后清理临时目录：
+
+```python
+import shutil
+shutil.rmtree(f"/tmp/lumie_sandbox/{job_id}", ignore_errors=True)
+```
+
+---
+
+# 18 代码安全扫描
+
+Worker 在将代码放入 sandbox 前，进行静态安全检查。
+
+### 禁止的关键词/模式
+
+**数据库写操作：**
+
+```
+insert_one, insert_many
+update_one, update_many
+delete_one, delete_many
+replace_one
+drop, drop_collection, drop_database
+create_index, drop_index
+bulk_write
+aggregate.*\$out, aggregate.*\$merge
+```
+
+**文件删除/覆盖：**
+
+```
+os.remove, os.unlink
+shutil.rmtree, shutil.move
+open(.*['\"]w['\"])    # 仅允许对 /output 路径的写入
+```
+
+**系统调用：**
+
+```
+subprocess, os.system, os.popen
+eval, exec, compile
+__import__
+importlib
+```
+
+**网络访问：**
+
+```
+urllib, requests, httpx, aiohttp
+socket, http.client
+```
+
+**访问敏感 collections：**
+
+```
+\.users[.\[]
+\.pending_invitations[.\[]
+password, hashed_password
+device_token
+```
+
+发现任何违规：
+
+```python
+status = "failed"
+error = "security_violation: {matched_pattern}"
+```
+
+---
+
+# 19 Timeout 控制
+
+```python
+timeout_sec = job["timeout_sec"]  # 默认 30 秒，最大 60 秒
+
+try:
+    result = await asyncio.wait_for(
+        wait_container(container),
+        timeout=timeout_sec
+    )
+except asyncio.TimeoutError:
+    container.kill()
+    # status → failed, error = "timeout"
+```
+
+---
+
+# 20 并发控制
+
+```python
+# 最大同时运行的 sandbox 容器数
+MAX_CONCURRENT_SANDBOXES = 3
+
+_sandbox_semaphore = asyncio.Semaphore(MAX_CONCURRENT_SANDBOXES)
+```
+
+当所有 slot 被占用时，新 job 保持 pending 状态等待。
+
+---
+
+# 21 后端目录结构
+
+新增和修改的文件集成到现有 `lumie_backend/app/` 结构中：
+
+```
+lumie_backend/app/
+ ├── api/
+ │   ├── advisor_routes.py           ← 修改：升级 response 模型
+ │   └── analysis_routes.py          ← 新增：分析 job 查询/取消路由
+ │
+ ├── services/
+ │   ├── advisor_service.py          ← 修改：加入 tool_use + 路由逻辑
+ │   ├── analysis_service.py         ← 新增：Job 管理 + 执行流程
+ │   ├── analysis_llm_service.py     ← 新增：Claude 代码生成（第二层）
+ │   ├── analysis_prompt_service.py  ← 新增：Prompt 上下文组装
+ │   ├── analysis_sandbox_service.py ← 新增：Docker 容器管理
+ │   └── analysis_security_service.py← 新增：代码安全扫描
+ │
+ ├── models/
+ │   ├── advisor.py                  ← 修改：升级 response 模型（加 type + job_id）
+ │   └── analysis.py                 ← 新增：分析 job Pydantic 模型
+ │
+ ├── resources/
+ │   ├── schema/
+ │   │   └── lumie_schema.json       ← 新增：Lumie 数据库 schema
+ │   └── glossary.md                 ← 新增：领域术语表
+ │
+ └── main.py                         ← 修改：注册 analysis_routes
+
+lumie_backend/sandbox/
+ └── Dockerfile                      ← 新增：Sandbox 镜像定义
+```
+
+---
+
+# 22 Pydantic 模型
+
+文件：`lumie_backend/app/models/analysis.py`
+
+```python
+from pydantic import BaseModel, Field
+from typing import Optional, Dict, Any
+from enum import Enum
+from datetime import datetime
+
+
+class AnalysisJobStatus(str, Enum):
+    PENDING = "pending"
+    GENERATING = "generating"
+    RUNNING = "running"
+    SUCCESS = "success"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
+class AnalysisJobCreate(BaseModel):
+    prompt: str = Field(..., min_length=2, max_length=500)
+    target_user_id: Optional[str] = None
+    team_id: Optional[str] = None
+    timeout: int = Field(default=30, ge=10, le=60)
+
+
+class AnalysisResult(BaseModel):
+    summary: str
+    data: Optional[Dict[str, Any]] = None
+    chart_base64: Optional[str] = None
+
+
+class AnalysisJobResponse(BaseModel):
+    job_id: str
+    status: AnalysisJobStatus
+    prompt: str
+    result: Optional[AnalysisResult] = None
+    error: Optional[str] = None
+    created_at: str
+    started_at: Optional[str] = None
+    finished_at: Optional[str] = None
+
+
+class AnalysisJobListResponse(BaseModel):
+    jobs: list[AnalysisJobResponse]
+    has_more: bool
+```
+
+---
+
+# 23 路由注册
+
+修改 `lumie_backend/app/main.py`：
+
+```python
+from app.api.analysis_routes import router as analysis_router
+
+# 在已有路由注册后添加：
+app.include_router(analysis_router, prefix="/api/v1/analysis", tags=["analysis"])
+```
+
+---
+
+# 24 Flutter 前端集成
+
+### 设计原则
+
+前端改动尽量小。用户体验从"和 Advisor 聊天"变成"和更聪明的 Advisor 聊天"，UI 流程不变。
+
+### 修改文件
+
+```
+lumie_activity_app/lib/
+ ├── core/services/
+ │   ├── advisor_service.dart         ← 修改：处理新的 response type
+ │   └── analysis_service.dart        ← 新增：分析 job 轮询
+ │
+ ├── shared/models/
+ │   └── analysis_models.dart         ← 新增：分析相关 Dart 模型
+ │
+ └── features/advisor/
+     ├── screens/
+     │   └── advisor_screen.dart      ← 修改：支持分析中状态 + 结果展示
+     └── widgets/
+         └── analysis_result_card.dart ← 新增：分析结果卡片 widget
+```
+
+### advisor_service.dart 修改
+
+```dart
+class AdvisorService {
+  /// 发送消息，返回可能是直接回复或分析 job
+  Future<AdvisorResponse> sendMessage(
+    String message, {
+    List<ChatMessage> history = const [],
+  }) async {
+    final response = await http.post(
+      Uri.parse('${ApiConstants.baseUrl}${ApiConstants.advisorChat}'),
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer ${_authService.token}',
+      },
+      body: json.encode({
+        'message': message,
+        'history': history.map((m) => m.toJson()).toList(),
+      }),
+    ).timeout(const Duration(seconds: 15));
+
+    final data = json.decode(response.body);
+    final type = data['type'] ?? 'direct';  // 向后兼容
+
+    if (type == 'analysis') {
+      return AdvisorResponse.analysis(
+        reply: data['reply'],
+        jobId: data['job_id'],
+      );
+    } else {
+      return AdvisorResponse.direct(reply: data['reply']);
+    }
+  }
+}
+
+/// 统一的 Advisor 响应类型
+class AdvisorResponse {
+  final String type;     // "direct" 或 "analysis"
+  final String reply;
+  final String? jobId;
+
+  AdvisorResponse.direct({required this.reply})
+      : type = 'direct', jobId = null;
+
+  AdvisorResponse.analysis({required this.reply, required this.jobId})
+      : type = 'analysis';
+}
+```
+
+### advisor_screen.dart 修改
+
+Chat tab 的 `_send()` 方法升级：
+
+```dart
+Future<void> _send() async {
+  final text = _input.text.trim();
+  if (text.isEmpty) return;
+
+  // 1. 添加用户消息
+  setState(() {
+    _messages.add(_Message(text: text, isUser: true));
+    _isTyping = true;
+  });
+
+  // 2. 发送到后端
+  final response = await _advisor.sendMessage(text, history: _history);
+
+  if (response.type == 'direct') {
+    // 快速路径：直接显示回复
+    setState(() {
+      _messages.add(_Message(text: response.reply, isUser: false));
+      _isTyping = false;
+    });
+  } else if (response.type == 'analysis') {
+    // 慢路径：显示"分析中"，开始轮询
+    setState(() {
+      _messages.add(_Message(
+        text: response.reply,  // "正在分析您的数据..."
+        isUser: false,
+        isAnalyzing: true,
+        jobId: response.jobId,
+      ));
+      _isTyping = false;
+    });
+
+    // 3. 轮询分析结果
+    final result = await _analysisService.pollJobResult(response.jobId!);
+
+    // 4. 替换"分析中"消息为结果
+    setState(() {
+      final idx = _messages.lastIndexWhere((m) => m.jobId == response.jobId);
+      if (idx >= 0) {
+        _messages[idx] = _Message(
+          text: result.summary,
+          isUser: false,
+          analysisResult: result,  // 包含 data + chart_base64
+        );
+      }
+    });
+  }
+}
+```
+
+### _Message 类升级
+
+```dart
+class _Message {
+  final String text;
+  final bool isUser;
+  final bool isAnalyzing;        // 新增：是否正在分析中
+  final String? jobId;            // 新增：关联的 job ID
+  final AnalysisResult? analysisResult;  // 新增：分析结果
+
+  _Message({
+    required this.text,
+    required this.isUser,
+    this.isAnalyzing = false,
+    this.jobId,
+    this.analysisResult,
+  });
+}
+```
+
+### Chat 中的展示
+
+消息气泡根据 `_Message` 的状态渲染不同 UI：
+
+- **普通消息**：和现在一样（Markdown 渲染的文字气泡）
+- **分析中**：显示 reply 文字 + 旋转动画指示器
+- **分析完成**：
+  - summary 文字正常显示在气泡中
+  - 如果有 `chart_base64`，显示为内联图片（`Image.memory(base64Decode(...))`）
+  - 如果有 `data`，显示为可折叠的简洁数据卡片
+- **分析失败**：显示错误提示 + "重试"按钮
+
+---
+
+# 25 部署步骤
+
+### 25.1 在服务器上安装 Docker
+
+```bash
+ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.177.85.124
+
+# 安装 Docker
+sudo apt-get update
+sudo apt-get install -y docker.io
+sudo systemctl enable docker
+sudo systemctl start docker
+
+# 将 ubuntu 用户加入 docker 组
+sudo usermod -aG docker ubuntu
+# 重新登录使组权限生效
+```
+
+### 25.2 构建 Sandbox 镜像
+
+```bash
+cd /home/ubuntu/lumie_backend/sandbox
+sudo docker build -t lumie-analysis-sandbox .
+```
+
+### 25.3 创建 MongoDB 只读用户
+
+```bash
+mongosh lumie_db
+
+db.createUser({
+  user: "analysis_reader",
+  pwd: "生成强密码并记录到 .env",
+  roles: [{ role: "read", db: "lumie_db" }]
+})
+```
+
+### 25.4 更新环境变量
+
+在 `/home/ubuntu/lumie_backend/.env` 中添加：
+
+```
+SANDBOX_MONGO_URI=mongodb://analysis_reader:密码@172.17.0.1:27017/lumie_db?authSource=lumie_db
+```
+
+注意：`172.17.0.1` 是 Docker 默认的宿主机 IP（docker0 bridge）。
+
+### 25.5 配置 MongoDB 监听地址
+
+确保 MongoDB 监听 Docker bridge 网络：
+
+```bash
+# 编辑 /etc/mongod.conf
+# bindIp: 127.0.0.1,172.17.0.1
+sudo systemctl restart mongod
+```
+
+### 25.6 部署后端代码
+
+使用现有的 `deploy.sh` 脚本部署更新后的后端：
+
+```bash
+cd lumie_backend
+bash deploy.sh
+```
+
+### 25.7 重启服务
+
+```bash
+ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.177.85.124
+sudo systemctl restart lumie-api
+```
+
+---
+
+# 26 Teen-Safe 安全约束
+
+所有分析输出必须遵守 Lumie 的 teen-safe 原则：
+
+**禁止输出：**
+
+- 卡路里消耗量
+- BMI 计算
+- 体重比较或排名
+- 性能排行榜（"谁完成最多任务"）
+- MET 值
+- 任何可能触发饮食障碍或过度运动的内容
+
+**必须使用：**
+
+- "活动分钟数" 代替 "卡路里"
+- "活动趋势" 代替 "体重变化"
+- 积极鼓励的语气
+- 简洁的中文分析结论
+
+这些约束通过 prompt 模板中的 CRITICAL SAFETY RULES 段落强制执行，并在代码安全扫描中检查。
+
+---
+
+# 27 必须实现的功能清单
+
+### 后端（Python / FastAPI）
+
+```
+修改现有文件：
+1.  advisor_service.py      — 升级：加入 tool_use + 智能路由逻辑
+2.  advisor_routes.py       — 升级：response 模型加 type + job_id
+3.  advisor.py (models)     — 升级：AdvisorChatResponse 加新字段
+4.  database.py             — 新增 analysis_jobs 索引
+5.  main.py                 — 注册 analysis_routes
+
+新增文件：
+6.  analysis_routes.py      — 3 个 API 端点（查询/取消/历史）
+7.  analysis_service.py     — Job 生命周期管理 + asyncio 执行
+8.  analysis_llm_service.py — Claude 代码生成（第二层 LLM 调用）
+9.  analysis_prompt_service.py — Schema + Glossary + Profile 组装
+10. analysis_sandbox_service.py — Docker 容器创建/监控/清理
+11. analysis_security_service.py — 代码安全静态扫描
+12. analysis.py (models)    — 分析 job Pydantic 模型
+13. lumie_schema.json       — Lumie 数据库 schema 定义
+14. glossary.md             — 领域术语映射表
+15. sandbox/Dockerfile      — Sandbox 镜像定义
+16. 订阅限制检查           — Free: 3次/天, Pro: 20次/天（仅分析路径）
+17. 权限检查               — 家长查看孩子数据需 team admin 权限
+```
+
+### 前端（Flutter / Dart）
+
+```
+修改现有文件：
+1.  advisor_service.dart    — 处理新的 response type（direct / analysis）
+2.  advisor_screen.dart     — _send() 升级：支持两种响应路径
+3.  _Message 类             — 新增 isAnalyzing、jobId、analysisResult 字段
+
+新增文件：
+4.  analysis_service.dart   — 分析 job 轮询逻辑
+5.  analysis_models.dart    — AnalysisResult、AnalysisJob Dart 模型
+6.  analysis_result_card.dart — 分析结果卡片 widget（文本 + 图表 + 数据）
+```
+
+### 部署
+
+```
+1.  服务器安装 Docker
+2.  构建 sandbox 镜像
+3.  创建 MongoDB 只读用户
+4.  更新 .env 环境变量
+5.  配置 MongoDB 网络
+6.  部署后端代码
+```
+
+### 系统完成后的用户体验
+
+```
+用户和 Advisor 聊天 → 系统自动判断：
+  → 一般问题：1-3 秒内直接回复（和现在一样快）
+  → 数据问题：显示"分析中..."→ 10-30 秒后返回分析结论 + 图表
+用户无需手动触发分析，无需切换界面，无需理解底层机制。
+```
+
+---
+
+# 28 开发优先级
+
+| 优先级 | 功能 | 说明 |
+| --- | --- | --- |
+| P0 | advisor_service.py 升级（tool_use 路由） | 整个系统的入口 |
+| P0 | analysis_service.py + 执行流程 | 分析 job 核心 |
+| P0 | 代码生成 + 安全扫描 | 安全底线 |
+| P0 | Docker sandbox | 隔离执行 |
+| P0 | Schema + Glossary | LLM 上下文 |
+| P1 | Flutter advisor_screen 升级 | 前端双路径支持 |
+| P1 | Flutter 分析结果展示 | 图表 + 数据卡片 |
+| P1 | 订阅限制 | 商业逻辑 |
+| P1 | 家长权限检查 | 团队数据访问 |
+| P2 | 分析历史查询 | 用户体验 |
+
+---
+
+# 29 与现有系统的关系
+
+| 现有模块 | 关系 |
+| --- | --- |
+| Advisor Chat (`advisor_service.py`) | **直接升级**：从纯对话变为智能路由，是本次改动的核心文件 |
+| Advisor Routes (`advisor_routes.py`) | **修改**：response 模型扩展，端点 URL 不变 |
+| AI Tips (`ai_tips_service.py`) | 互补：Tips 提供简单统计（快速、轻量），分析系统处理自定义问题 |
+| Team System (`team_service.py`) | 复用团队权限检查逻辑，家长可分析孩子数据 |
+| Subscription (`subscription_helpers.py`) | 复用订阅等级检查（仅分析路径计数） |
+| Auth (`security.py`) | 复用 JWT 鉴权和 `get_current_user_id` |
+| Profile (`profile_service.py`) | 读取用户 profile 作为两层 LLM 的上下文 |
+
+### 模型使用变化
+
+| 场景 | 改动前 | 改动后 |
+| --- | --- | --- |
+| Advisor 对话 | Opus (`claude-opus-4-6`), max_tokens=400 | Sonnet (`claude-sonnet-4-20250514`), max_tokens=800, 带 tool_use |
+| AI Tips | Haiku, max_tokens=150 | 不变 |
+| 数据分析代码生成 | 不存在 | Haiku, max_tokens=4000 |
+
+Advisor 从 Opus 降级到 Sonnet 是有意为之：Sonnet 的 tool_use 判断足够准确，响应速度更快（~1s vs ~3s），成本更低（约 1/5）。对话质量在 Sonnet 级别已经足够好。
