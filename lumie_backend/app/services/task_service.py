@@ -687,6 +687,16 @@ class TaskService:
                 open_datetime = self._convert_local_to_utc(open_datetime_local, timezone)
                 close_datetime = self._convert_local_to_utc(close_datetime_local, timezone)
 
+                now_str = now.strftime("%Y-%m-%d %H:%M")
+
+                # Skip windows that have already closed
+                if close_datetime <= now_str:
+                    continue
+
+                # If the window is already open, start it from now
+                if open_datetime < now_str:
+                    open_datetime = now_str
+
                 full_task_name = f"{task_name} - {window_name}"
 
                 task_doc = {
@@ -829,28 +839,35 @@ class TaskService:
                 detail="Template not found"
             )
 
-        assigned_user_id = data.user_id if data.user_id else user_id
+        # Build preview using local times so the user sees their own timezone
+        from datetime import datetime as dt
+        start = dt.strptime(data.start_date, "%Y-%m-%d")
+        end = dt.strptime(data.end_date, "%Y-%m-%d")
+        now_str = datetime.utcnow().strftime("%Y-%m-%d %H:%M")
 
-        task_docs = self._generate_tasks_from_template(
-            template=template,
-            task_name=data.task_name,
-            start_date=data.start_date,
-            end_date=data.end_date,
-            user_id=assigned_user_id,
-            created_by=user_id,
-            team_id=data.team_id,
-            task_info=data.task_info,
-            timezone=data.timezone,
-        )
+        preview_tasks = []
+        current_date = start
+        while current_date <= end:
+            date_str = current_date.strftime("%Y-%m-%d")
+            for window in template.get("time_window_list", []):
+                open_local = f"{date_str} {window['open_time']}"
+                if window.get("is_next_day", False):
+                    next_day = current_date + timedelta(days=1)
+                    close_local = f"{next_day.strftime('%Y-%m-%d')} {window['close_time']}"
+                else:
+                    close_local = f"{date_str} {window['close_time']}"
 
-        preview_tasks = [
-            {
-                "task_name": t["task_name"],
-                "open_datetime": t["open_datetime"],
-                "close_datetime": t["close_datetime"],
-            }
-            for t in task_docs
-        ]
+                # Skip windows that would already be past by the time they're created
+                close_utc = self._convert_local_to_utc(close_local, data.timezone)
+                if close_utc <= now_str:
+                    continue
+
+                preview_tasks.append({
+                    "task_name": f"{data.task_name} - {window['name']}",
+                    "open_datetime": open_local,
+                    "close_datetime": close_local,
+                })
+            current_date += timedelta(days=1)
 
         return {
             "template_id": data.template_id,

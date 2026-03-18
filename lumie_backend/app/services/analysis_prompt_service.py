@@ -73,9 +73,41 @@ Answer this question: {question}
 2. Analyze the data using pandas if needed.
 3. Save a JSON result to /output/result.json with this structure:
    {{
-     "summary": "A concise analysis conclusion (2-4 sentences)",
-     "data": {{ ... relevant data ... }}
+     "summary": "A friendly, conversational analysis written for the user (2-4 sentences). Use their name if available. Give specific numbers and actionable insights, not raw data.",
+     "data": {{ ... structured, human-readable data ... }}
    }}
+
+   ### CRITICAL: summary and data must be USER-FRIENDLY
+   - **summary**: Write as if speaking to the teen. Example: "You have 2 medications due right now: **Afternoon Meds** and **Iron**. You also have 5 more coming up later today — great job staying on track!"
+   - **data**: Use human-readable keys and values. NEVER include internal IDs (task_id, user_id, created_by, _id, ObjectId). Instead, extract meaningful fields:
+     - For tasks/medications: use task_name, task_type, open_datetime, close_datetime, task_info
+     - For activities: use activity_type_name, duration_minutes, intensity, start_time
+     - For walk tests: use date, distance_meters, avg_heart_rate
+   - Structure data as simple objects the frontend can display nicely:
+     ```
+     Good:  {{"medications_due_now": [{{"name": "Afternoon Meds", "window": "7:00 PM - 9:00 PM"}}]}}
+     Bad:   {{"active_medications": "Task Id: 52b5dcb3-..., Task Name: Meds - Afternoon Meds, ..."}}
+     ```
+   - Format times in a friendly way (e.g., "7:00 PM - 9:00 PM" instead of "2026-03-15 19:00")
+
+   IMPORTANT: MongoDB returns datetime and ObjectId objects that are not JSON-serializable.
+   Always use this encoder when writing result.json:
+   ```python
+   import json
+   from datetime import datetime
+   from bson import ObjectId
+
+   class _Encoder(json.JSONEncoder):
+       def default(self, obj):
+           if isinstance(obj, datetime):
+               return obj.isoformat()
+           if isinstance(obj, ObjectId):
+               return str(obj)
+           return super().default(obj)
+
+   with open("/output/result.json", "w") as f:
+       json.dump(output, f, indent=2, cls=_Encoder)
+   ```
 4. If a chart would help, use matplotlib to save a PNG to /output/chart.png.
    - Use clean, simple style. Dark background (#1C1C1E) with white text for Lumie's dark theme.
    - Use #F59E0B (amber) as the primary accent color for bars/lines.

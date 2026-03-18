@@ -62,29 +62,20 @@ class TimeWindowEditor extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Header with delete button
-          Row(
-            children: [
-              Text(
-                'Window ${index + 1}',
-                style: const TextStyle(
-                  fontSize: 14,
-                  fontWeight: FontWeight.w600,
-                  color: AppColors.textSecondary,
-                ),
+          // Delete button
+          if (onDelete != null) ...[
+            Align(
+              alignment: Alignment.centerRight,
+              child: IconButton(
+                onPressed: onDelete,
+                icon: const Icon(Icons.close, size: 20),
+                color: AppColors.textSecondary,
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(),
               ),
-              const Spacer(),
-              if (onDelete != null)
-                IconButton(
-                  onPressed: onDelete,
-                  icon: const Icon(Icons.close, size: 20),
-                  color: AppColors.textSecondary,
-                  padding: EdgeInsets.zero,
-                  constraints: const BoxConstraints(),
-                ),
-            ],
-          ),
-          const SizedBox(height: 8),
+            ),
+            const SizedBox(height: 4),
+          ],
 
           // Window name
           TextField(
@@ -183,8 +174,9 @@ class _TimePickerButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final timeStr =
-        '${time.hour.toString().padLeft(2, '0')}:${time.minute.toString().padLeft(2, '0')}';
+    final hour12 = time.hour == 0 ? 12 : (time.hour > 12 ? time.hour - 12 : time.hour);
+    final ampm = time.hour < 12 ? 'AM' : 'PM';
+    final timeStr = '$hour12:${time.minute.toString().padLeft(2, '0')} $ampm';
 
     return GestureDetector(
       onTap: onTap,

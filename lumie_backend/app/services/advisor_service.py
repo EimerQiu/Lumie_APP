@@ -42,7 +42,10 @@ RUN_DATA_ANALYSIS_TOOL = {
     "name": "run_data_analysis",
     "description": (
         "Call this tool when the user's question requires querying their personal health data to answer. "
-        "Examples: activity trends, medication completion rates, heart rate analysis, walk test comparisons, etc. "
+        "Examples: activity trends, medication completion rates, heart rate analysis, walk test comparisons, "
+        "upcoming medication/task reminders, what tasks are due now/today, which medicines to take, "
+        "meal reminders, study tasks, exercise plans, or any scheduled tasks. "
+        "The tasks system covers ALL types: Medicine, Life, Study, Exercise, Work, Meditation, Love — not just medications. "
         "Do NOT use for general health knowledge questions that can be answered directly."
     ),
     "input_schema": {
@@ -121,19 +124,24 @@ User profile:
 {f'- Their healthcare advisor/coach is {advisor}' if advisor else ''}
 
 ## When to use the run_data_analysis tool
-Call run_data_analysis ONLY when the user asks a question that requires querying their personal data:
+Call run_data_analysis when the user asks a question that requires querying their personal data:
 - Activity trends, totals, or comparisons over time
 - Task/medication completion rates or statistics
 - Heart rate analysis
 - Walk test progress
 - Any question that asks about specific numbers/trends in their data
+- **Task/schedule questions**: "what should I do now", "what's due today", "any upcoming reminders", "what medicine should I take" — these require looking up the user's tasks
+- Any question about the user's own tasks, medications, meals, exercise plans, or schedules
+- The task system has 7 types: Medicine, Life (meals, daily habits), Study, Exercise, Work, Meditation, Love — always query ALL relevant types unless the user specifies one
 
 Do NOT call the tool for:
-- General health advice or tips
+- General health advice or tips (e.g., "what are good stretches for arthritis")
 - Greetings or small talk
-- Questions about medical conditions (answer from knowledge)
+- Questions about medical conditions in general (answer from knowledge)
 - Emotional support or encouragement
-- Questions you can answer without data
+- Questions you can answer without the user's personal data
+
+**Key distinction**: "What medicine should I take now?" = needs data (query their tasks) ≠ "What medications treat diabetes?" = general knowledge (answer directly)
 
 ## Response guidelines
 - Keep replies concise: 2-4 sentences unless a detailed explanation is clearly needed.

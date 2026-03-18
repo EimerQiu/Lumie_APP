@@ -101,28 +101,70 @@ class _AnalysisResultCardState extends State<AnalysisResultCard> {
     );
   }
 
+  static const _internalKeys = {
+    '_id', 'user_id', 'target_user_id', 'job_id', 'team_id',
+    'created_at', 'updated_at', 'started_at', 'finished_at',
+    'status', 'generated_code', 'docker_container_id', 'token_usage',
+  };
+
+  /// Converts a snake_case or camelCase key to a human-readable label.
+  String _formatKey(String key) {
+    // Replace underscores and hyphens with spaces, split camelCase
+    final spaced = key
+        .replaceAllMapped(RegExp(r'([a-z])([A-Z])'), (m) => '${m[1]} ${m[2]}')
+        .replaceAll(RegExp(r'[_\-]'), ' ');
+    // Title-case each word
+    return spaced
+        .split(' ')
+        .where((w) => w.isNotEmpty)
+        .map((w) => w[0].toUpperCase() + w.substring(1).toLowerCase())
+        .join(' ');
+  }
+
+  String _formatValue(dynamic value) {
+    if (value == null) return '—';
+    if (value is bool) return value ? 'Yes' : 'No';
+    if (value is List) {
+      if (value.isEmpty) return '—';
+      final items = value.take(10).map((v) => _formatValue(v)).join(', ');
+      return value.length > 10 ? '$items…' : items;
+    }
+    if (value is Map) {
+      // Render nested map as comma-separated key: value pairs, skipping internals
+      final parts = value.entries
+          .where((e) => !_internalKeys.contains(e.key))
+          .map((e) => '${_formatKey(e.key.toString())}: ${_formatValue(e.value)}')
+          .toList();
+      return parts.isEmpty ? '—' : parts.join(', ');
+    }
+    final str = value.toString();
+    // Detect ISO timestamps and reformat them
+    final tsMatch = RegExp(
+      r'^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})',
+    ).firstMatch(str);
+    if (tsMatch != null) return '${tsMatch[1]}  ${tsMatch[2]}';
+    return str;
+  }
+
   Widget _buildDataView(Map<String, dynamic> data) {
+    final visible = data.entries
+        .where((e) => !_internalKeys.contains(e.key))
+        .toList();
+
+    if (visible.isEmpty) return const SizedBox.shrink();
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
-      children: data.entries.map((entry) {
-        final value = entry.value;
-        String displayValue;
-        if (value is List) {
-          displayValue = value.take(10).join(', ');
-          if (value.length > 10) displayValue += '...';
-        } else {
-          displayValue = value.toString();
-        }
-
+      children: visible.map((entry) {
         return Padding(
-          padding: const EdgeInsets.only(bottom: 4),
+          padding: const EdgeInsets.only(bottom: 6),
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               SizedBox(
-                width: 100,
+                width: 110,
                 child: Text(
-                  entry.key,
+                  _formatKey(entry.key),
                   style: const TextStyle(
                     fontSize: 11,
                     color: AppColors.textSecondary,
@@ -132,7 +174,7 @@ class _AnalysisResultCardState extends State<AnalysisResultCard> {
               ),
               Expanded(
                 child: Text(
-                  displayValue,
+                  _formatValue(entry.value),
                   style: const TextStyle(
                     fontSize: 11,
                     color: AppColors.textPrimary,
