@@ -3,6 +3,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../shared/models/analysis_models.dart';
+import '../../tasks/screens/tasks_list_screen.dart';
+import '../../tasks/screens/admin_dashboard_screen.dart';
 
 /// Displays an analysis result inside a chat bubble.
 ///
@@ -55,6 +57,12 @@ class _AnalysisResultCardState extends State<AnalysisResultCard> {
               errorBuilder: (_, e, st) => const SizedBox.shrink(),
             ),
           ),
+        ],
+
+        // Navigation hint chip
+        if (widget.result.navHint != null) ...[
+          const SizedBox(height: 12),
+          _NavHintChip(navHint: widget.result.navHint!),
         ],
 
         // Expandable data section

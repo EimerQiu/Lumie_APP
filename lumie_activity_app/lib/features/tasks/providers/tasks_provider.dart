@@ -190,6 +190,16 @@ class TasksProvider extends ChangeNotifier {
     await loadTasks();
   }
 
+  /// Extend a task's close_datetime by 10% of its duration
+  Future<void> extendTask(String taskId) async {
+    final updatedTask = await _taskService.extendTask(taskId);
+    final idx = _tasks.indexWhere((t) => t.taskId == taskId);
+    if (idx != -1) {
+      _tasks[idx] = updatedTask;
+      notifyListeners();
+    }
+  }
+
   /// Delete a task
   Future<void> deleteTask(String taskId) async {
     await _taskService.deleteTask(taskId);

@@ -234,6 +234,8 @@ async def get_advisor_reply(
             prompt=tool_input["question"],
             target_user_id=effective_target,
             team_id=team_id,
+            data_types=tool_input.get("data_types", []),
+            time_range=tool_input.get("time_range", ""),
         )
 
         # Start async execution

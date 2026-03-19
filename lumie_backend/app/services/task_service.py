@@ -89,6 +89,7 @@ class TaskService:
             status=task_status,
             task_info=doc.get("task_info"),
             completed_at=self._format_datetime(doc["done"]) if doc.get("done") else None,
+            extension_count=doc.get("extension_count", 0),
             created_at=self._format_datetime(doc["created_at"]),
             updated_at=self._format_datetime(doc["updated_at"]),
         )
@@ -353,6 +354,73 @@ class TaskService:
 
         # Min-interval postpone logic: only for template-generated tasks
         await self._apply_min_interval_postpone(db, task, now)
+
+        return self._task_doc_to_response(task)
+
+    async def extend_task(self, task_id: str, user_id: str) -> TaskResponse:
+        """
+        Extend the close_datetime of a task by 10% of its duration.
+
+        Args:
+            task_id: Task ID
+            user_id: User ID (must be the assigned user)
+
+        Returns:
+            Updated TaskResponse
+        """
+        db = get_database()
+
+        task = await db.tasks.find_one({"task_id": task_id})
+        if not task:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Task not found"
+            )
+
+        if task["user_id"] != user_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Only the assigned user can extend this task"
+            )
+
+        if task.get("done"):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Cannot extend a completed task"
+            )
+
+        if task.get("extension_count", 0) >= 1:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="This task has already been extended once"
+            )
+
+        try:
+            open_dt = datetime.strptime(task["open_datetime"], "%Y-%m-%d %H:%M")
+            close_dt = datetime.strptime(task["close_datetime"], "%Y-%m-%d %H:%M")
+        except Exception:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid task datetime format"
+            )
+
+        duration_seconds = (close_dt - open_dt).total_seconds()
+        extension_seconds = duration_seconds * 0.1
+        new_close_dt = close_dt + timedelta(seconds=extension_seconds)
+        new_close_str = new_close_dt.strftime("%Y-%m-%d %H:%M")
+
+        now = datetime.utcnow()
+        await db.tasks.update_one(
+            {"task_id": task_id},
+            {"$set": {
+                "close_datetime": new_close_str,
+                "updated_at": now,
+            }, "$inc": {"extension_count": 1}}
+        )
+
+        task["close_datetime"] = new_close_str
+        task["extension_count"] = task.get("extension_count", 0) + 1
+        task["updated_at"] = now
 
         return self._task_doc_to_response(task)
 

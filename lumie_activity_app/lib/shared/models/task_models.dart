@@ -88,6 +88,7 @@ class Task {
   final TaskStatus status;
   final String? taskInfo;
   final DateTime? completedAt;
+  final int extensionCount;
   final DateTime createdAt;
   final DateTime updatedAt;
 
@@ -104,6 +105,7 @@ class Task {
     required this.status,
     this.taskInfo,
     this.completedAt,
+    this.extensionCount = 0,
     required this.createdAt,
     required this.updatedAt,
   });
@@ -124,6 +126,7 @@ class Task {
       completedAt: json['completed_at'] != null
           ? DateTime.parse(_ensureUtcSuffix(json['completed_at'] as String))
           : null,
+      extensionCount: json['extension_count'] as int? ?? 0,
       createdAt:
           DateTime.parse(_ensureUtcSuffix(json['created_at'] as String)),
       updatedAt:
@@ -145,6 +148,7 @@ class Task {
       'status': status.name,
       'task_info': taskInfo,
       'completed_at': completedAt?.toIso8601String(),
+      'extension_count': extensionCount,
       'created_at': createdAt.toIso8601String(),
       'updated_at': updatedAt.toIso8601String(),
     };

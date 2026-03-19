@@ -24,6 +24,7 @@ class AnalysisResult(BaseModel):
     summary: str
     data: Optional[Dict[str, Any]] = None
     chart_base64: Optional[str] = None
+    nav_hint: Optional[str] = None  # "task_list" | "task_dashboard" | None
 
 
 class AnalysisJobResponse(BaseModel):

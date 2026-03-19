@@ -93,12 +93,25 @@ async def check_analysis_quota(user_id: str, subscription_tier: str) -> Optional
     return None
 
 
+def _compute_nav_hint(data_types: list, time_range: str) -> Optional[str]:
+    """Determine which screen to navigate to based on what data was queried."""
+    if not data_types or "tasks" not in data_types:
+        return None
+    current_keywords = {"today", "now", "due", "current", "upcoming", "remind", "schedule", "soon"}
+    time_range_lower = (time_range or "").lower()
+    if any(kw in time_range_lower for kw in current_keywords):
+        return "task_list"
+    return "task_dashboard"
+
+
 async def create_analysis_job(
     user_id: str,
     prompt: str,
     target_user_id: str,
     team_id: Optional[str] = None,
     timeout: int = 30,
+    data_types: list = None,
+    time_range: str = "",
 ) -> str:
     """Create a new analysis job record in MongoDB. Returns the job_id."""
     db = get_database()
@@ -123,6 +136,8 @@ async def create_analysis_job(
         "docker_container_id": "",
         "model": "claude-haiku-4-5-20251001",
         "token_usage": {"input_tokens": 0, "output_tokens": 0},
+        "data_types": data_types or [],
+        "time_range": time_range,
     }
 
     await db.analysis_jobs.insert_one(job_doc)
@@ -215,10 +230,15 @@ async def _execute_job(job_id: str) -> None:
 
         if sandbox_result["success"] and sandbox_result["result"]:
             result_data = sandbox_result["result"]
+            nav_hint = _compute_nav_hint(
+                job.get("data_types", []),
+                job.get("time_range", ""),
+            )
             update_fields["result"] = {
                 "summary": result_data.get("summary", "Analysis complete."),
                 "data": result_data.get("data"),
                 "chart_base64": result_data.get("chart_base64"),
+                "nav_hint": nav_hint,
             }
             update_fields["status"] = AnalysisJobStatus.SUCCESS.value
             logger.info(f"Job {job_id} completed successfully")

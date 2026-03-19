@@ -20,6 +20,7 @@ def _format_job(job: dict) -> AnalysisJobResponse:
             summary=job["result"].get("summary", ""),
             data=job["result"].get("data"),
             chart_base64=job["result"].get("chart_base64"),
+            nav_hint=job["result"].get("nav_hint"),
         )
     return AnalysisJobResponse(
         job_id=job["job_id"],

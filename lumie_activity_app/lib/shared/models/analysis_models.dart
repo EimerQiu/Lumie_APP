@@ -5,11 +5,13 @@ class AnalysisResult {
   final String summary;
   final Map<String, dynamic>? data;
   final String? chartBase64;
+  final String? navHint; // "task_list" | "task_dashboard" | null
 
   const AnalysisResult({
     required this.summary,
     this.data,
     this.chartBase64,
+    this.navHint,
   });
 
   factory AnalysisResult.fromJson(Map<String, dynamic> json) {
@@ -17,6 +19,7 @@ class AnalysisResult {
       summary: json['summary'] as String? ?? '',
       data: json['data'] as Map<String, dynamic>?,
       chartBase64: json['chart_base64'] as String?,
+      navHint: json['nav_hint'] as String?,
     );
   }
 }

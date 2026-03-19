@@ -165,6 +165,20 @@ async def complete_task(
     return await task_service.complete_task(task_id, user_id)
 
 
+@router.post("/{task_id}/extend", response_model=TaskResponse)
+async def extend_task(
+    task_id: str,
+    user_id: str = Depends(get_current_user_id)
+):
+    """
+    Extend a task's close_datetime by 10% of its duration.
+
+    - Only the assigned user can extend
+    - Cannot extend a completed task
+    """
+    return await task_service.extend_task(task_id, user_id)
+
+
 @router.delete("/{task_id}")
 async def delete_task(
     task_id: str,

@@ -135,6 +135,21 @@ class TaskService {
     _handleError(response, 'complete task');
   }
 
+  /// Extend a task's close_datetime by 10% of its duration
+  Future<Task> extendTask(String taskId) async {
+    if (_token == null) throw Exception('Not authenticated');
+
+    final response = await http.post(
+      Uri.parse('${ApiConstants.baseUrl}/tasks/$taskId/extend'),
+      headers: _headers,
+    );
+
+    if (response.statusCode == 200) {
+      return Task.fromJson(json.decode(response.body));
+    }
+    _handleError(response, 'extend task');
+  }
+
   /// Delete a task
   Future<void> deleteTask(String taskId) async {
     if (_token == null) throw Exception('Not authenticated');
