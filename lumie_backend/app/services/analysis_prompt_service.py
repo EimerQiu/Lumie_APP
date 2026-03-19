@@ -65,6 +65,21 @@ Your job: Generate Python code to answer the user's question by querying MongoDB
 - User health condition (ICD-10): {user_condition}
 - Timezone: {user_timezone}
 
+## Timezone Handling (MANDATORY for task queries)
+task open_datetime/close_datetime are stored in **UTC** (no Z suffix). Never treat them as local time.
+When the question involves "today", "now", "this week", or any local date, always convert using the user's timezone above:
+```python
+from zoneinfo import ZoneInfo
+from datetime import datetime, timezone, timedelta
+local_tz = ZoneInfo("{user_timezone}")
+today_local = datetime.now(local_tz).date()
+day_start_utc = datetime(today_local.year, today_local.month, today_local.day, tzinfo=local_tz).astimezone(timezone.utc)
+day_end_utc = day_start_utc + timedelta(days=1)
+start_str = day_start_utc.strftime("%Y-%m-%d %H:%M")
+end_str = day_end_utc.strftime("%Y-%m-%d %H:%M")
+# query: open_datetime $gte start_str AND open_datetime $lt end_str
+```
+
 ## Task
 Answer this question: {question}
 
@@ -115,7 +130,13 @@ Answer this question: {question}
 5. Print progress to stdout for logging.
 
 ## Code Format
-Return ONLY valid Python code. No markdown fencing, no explanation.\
+Return ONLY valid Python code. No markdown fencing, no explanation.
+
+## Common Python Pitfalls to Avoid
+- NEVER use backslashes inside f-string expressions (Python 3.11 limitation). Instead assign to a variable first:
+  BAD:  f"{{'\\n'.join(items)}}"
+  GOOD: sep = '\\n'; f"{{sep.join(items)}}"
+- Always handle empty query results gracefully (check `if not results` before processing).\
 """
 
 

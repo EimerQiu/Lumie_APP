@@ -18,6 +18,7 @@ from .api.advisor_routes import router as advisor_router
 from .api.task_routes import router as task_router
 from .api.admin_task_routes import router as admin_task_router
 from .api.analysis_routes import router as analysis_router
+from .api.dayprint_routes import router as dayprint_router
 
 # Configure logging
 logging.basicConfig(
@@ -103,6 +104,7 @@ app.include_router(advisor_router, prefix="/api/v1")
 app.include_router(task_router, prefix="/api/v1")
 app.include_router(admin_task_router, prefix="/api/v1")
 app.include_router(analysis_router, prefix="/api/v1")
+app.include_router(dayprint_router, prefix="/api/v1")
 
 
 @app.get("/")

@@ -7,6 +7,7 @@ import '../../../core/services/analysis_service.dart';
 import '../../../shared/models/analysis_models.dart';
 import '../../../shared/widgets/gradient_card.dart';
 import '../widgets/analysis_result_card.dart';
+import '../widgets/dayprint_tab.dart';
 
 class AdvisorScreen extends StatefulWidget {
   const AdvisorScreen({super.key});
@@ -22,7 +23,7 @@ class _AdvisorScreenState extends State<AdvisorScreen>
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 2, vsync: this);
+    _tabController = TabController(length: 3, vsync: this);
   }
 
   @override
@@ -60,12 +61,13 @@ class _AdvisorScreenState extends State<AdvisorScreen>
           tabs: const [
             Tab(text: 'Chat'),
             Tab(text: 'Advice'),
+            Tab(text: 'Dayprint'),
           ],
         ),
       ),
       body: TabBarView(
         controller: _tabController,
-        children: const [_ChatTab(), _AdviceTab()],
+        children: const [_ChatTab(), _AdviceTab(), DayprintTab()],
       ),
     );
   }
@@ -109,6 +111,7 @@ class _ChatTabState extends State<_ChatTab> {
     final text = _input.text.trim();
     if (text.isEmpty) return;
     _input.clear();
+    FocusScope.of(context).unfocus();
 
     setState(() {
       _messages.add(_Message(text: text, isUser: true));
@@ -147,7 +150,9 @@ class _ChatTabState extends State<_ChatTab> {
             );
           } else {
             _messages[idx] = _Message(
-              text: result.error ?? 'Analysis failed. Please try again.',
+              text: result.error?.isNotEmpty == true
+                  ? result.error!
+                  : "I wasn't able to complete this analysis. Please try rephrasing your question.",
               isUser: false,
               isAnalysisFailed: true,
             );

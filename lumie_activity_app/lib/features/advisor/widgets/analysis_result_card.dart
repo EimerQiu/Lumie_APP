@@ -196,3 +196,53 @@ class _AnalysisResultCardState extends State<AnalysisResultCard> {
     );
   }
 }
+
+class _NavHintChip extends StatelessWidget {
+  final String navHint;
+  const _NavHintChip({required this.navHint});
+
+  @override
+  Widget build(BuildContext context) {
+    final isTaskList = navHint == 'task_list';
+    final label = isTaskList ? "View today's tasks" : "View task statistics";
+    final icon = isTaskList ? Icons.checklist_rounded : Icons.bar_chart_rounded;
+
+    return GestureDetector(
+      onTap: () {
+        if (isTaskList) {
+          Navigator.of(context).push(
+            MaterialPageRoute(builder: (_) => const TasksListScreen()),
+          );
+        } else {
+          Navigator.of(context).push(
+            MaterialPageRoute(builder: (_) => const AdminDashboardScreen()),
+          );
+        }
+      },
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+        decoration: BoxDecoration(
+          color: AppColors.primaryLemon.withValues(alpha: 0.25),
+          borderRadius: BorderRadius.circular(20),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 14, color: AppColors.primaryLemonDark),
+            const SizedBox(width: 6),
+            Text(
+              label,
+              style: const TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+                color: AppColors.primaryLemonDark,
+              ),
+            ),
+            const SizedBox(width: 4),
+            const Icon(Icons.arrow_forward_rounded, size: 12, color: AppColors.primaryLemonDark),
+          ],
+        ),
+      ),
+    );
+  }
+}

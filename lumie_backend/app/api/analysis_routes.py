@@ -1,10 +1,13 @@
 """Analysis API routes — job status, cancellation, and history."""
+import asyncio
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
+from ..core.database import get_database
 from ..services.auth_service import get_current_user_id
 from ..services.analysis_service import get_job, get_jobs, cancel_job
+from ..services.dayprint_service import log_advisor_chat
 from ..models.analysis import AnalysisJobResponse, AnalysisJobListResponse, AnalysisResult
 
 logger = logging.getLogger(__name__)
@@ -49,6 +52,21 @@ async def get_analysis_job(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Analysis job not found.",
         )
+
+    # Log to Dayprint once when job first succeeds
+    if job.get("status") == "success" and not job.get("dayprint_logged"):
+        db = get_database()
+        await db.analysis_jobs.update_one(
+            {"job_id": job_id}, {"$set": {"dayprint_logged": True}}
+        )
+        profile = await db.profiles.find_one({"user_id": user_id}, {"name": 1}) or {}
+        user_name = profile.get("name", "")
+        question = job.get("prompt", "")
+        result_summary = (job.get("result") or {}).get("summary", "")
+        asyncio.create_task(
+            log_advisor_chat(user_id, user_name, question, result_summary)
+        )
+
     return _format_job(job)
 
 

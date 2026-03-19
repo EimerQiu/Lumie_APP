@@ -32,6 +32,9 @@ class ApiConstants {
   static const String taskBatchPreview = '/tasks/batch/preview';
   static const String taskBatchGenerate = '/tasks/batch/generate';
 
+  // Dayprint
+  static const String dayprint = '/dayprint';
+
   // Admin Tasks
   static const String adminTaskList = '/admin/task-list-ios';
   static const String adminTaskComplete = '/admin/task_complete';

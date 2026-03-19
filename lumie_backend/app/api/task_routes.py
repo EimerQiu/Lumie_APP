@@ -5,9 +5,12 @@ Task API Routes (Med-Reminder)
 from fastapi import APIRouter, Depends, Query, status
 from typing import Optional
 
+import asyncio
+
 from ..services.auth_service import get_current_user_id
 from ..services.task_service import task_service
 from ..services.ai_tips_service import get_ai_tips
+from ..services.dayprint_service import log_task_completed
 from ..models.task import (
     TaskCreate, TaskResponse, TaskListResponse,
     TemplateCreate, TemplateUpdate, TemplateResponse, TemplateListResponse,
@@ -162,7 +165,9 @@ async def complete_task(
     - Only the assigned user can complete
     - Records completion timestamp
     """
-    return await task_service.complete_task(task_id, user_id)
+    result = await task_service.complete_task(task_id, user_id)
+    asyncio.create_task(log_task_completed(user_id, result.task_name, result.task_type))
+    return result
 
 
 @router.post("/{task_id}/extend", response_model=TaskResponse)

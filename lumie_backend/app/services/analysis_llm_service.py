@@ -9,7 +9,7 @@ from ..core.config import settings
 
 logger = logging.getLogger(__name__)
 
-_MODEL = "claude-haiku-4-5-20251001"
+_MODEL = "claude-sonnet-4-6"
 _MAX_TOKENS = 4000
 _TEMPERATURE = 0
 

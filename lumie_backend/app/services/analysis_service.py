@@ -93,15 +93,22 @@ async def check_analysis_quota(user_id: str, subscription_tier: str) -> Optional
     return None
 
 
-def _compute_nav_hint(data_types: list, time_range: str) -> Optional[str]:
+def _compute_nav_hint(data_types: list, time_range: str, question: str = "") -> Optional[str]:
     """Determine which screen to navigate to based on what data was queried."""
     if not data_types or "tasks" not in data_types:
         return None
-    current_keywords = {"today", "now", "due", "current", "upcoming", "remind", "schedule", "soon"}
-    time_range_lower = (time_range or "").lower()
-    if any(kw in time_range_lower for kw in current_keywords):
-        return "task_list"
-    return "task_dashboard"
+    # Dashboard: completion/miss status questions, or explicit historical time ranges.
+    # Task list: current/upcoming task queries.
+    dashboard_keywords = {
+        "miss", "missed", "completion", "complete", "completed",
+        "how many", "did i", "have i", "status",
+        "last", "past", "week", "month", "days", "history",
+        "rate", "statistic", "trend", "ago", "previous",
+    }
+    combined = f"{time_range} {question}".lower()
+    if any(kw in combined for kw in dashboard_keywords):
+        return "task_dashboard"
+    return "task_list"
 
 
 async def create_analysis_job(
@@ -153,8 +160,25 @@ async def run_analysis_job(job_id: str) -> None:
         await _execute_job(job_id)
 
 
+_MAX_RETRIES = 2
+_FRIENDLY_ERROR = "I wasn't able to complete this analysis. Please try rephrasing your question."
+
+
+def _build_retry_prompt(original_prompt: str, failed_code: str, error: str) -> str:
+    """Build a follow-up prompt that includes the previous error so Claude can fix it."""
+    return (
+        f"{original_prompt}\n\n"
+        f"## Previous attempt failed\n"
+        f"The code below was generated but failed with this error:\n"
+        f"```\n{error[:800]}\n```\n\n"
+        f"Failed code:\n"
+        f"```python\n{failed_code[:2000]}\n```\n\n"
+        f"Fix the error and return corrected Python code only."
+    )
+
+
 async def _execute_job(job_id: str) -> None:
-    """Internal job execution logic."""
+    """Internal job execution logic with retry on sandbox failure."""
     db = get_database()
 
     try:
@@ -176,86 +200,115 @@ async def _execute_job(job_id: str) -> None:
         # 3. Load user profile for context
         profile = await db.profiles.find_one({"user_id": job["target_user_id"]}) or {}
 
-        # 4. Build prompt
+        # 4. Build base prompt
         analysis_prompt = await build_analysis_prompt(
             question=job["prompt"],
             target_user_id=job["target_user_id"],
             user_profile=profile,
         )
 
-        # 5. Generate code via Claude
-        try:
-            code, token_usage = await generate_analysis_code(analysis_prompt)
-        except (ValueError, RuntimeError) as e:
-            await _fail_job(db, job_id, f"code_generation_failed: {e}")
-            return
+        code = ""
+        token_usage = {"input_tokens": 0, "output_tokens": 0}
+        last_error = ""
 
-        await db.analysis_jobs.update_one(
-            {"job_id": job_id},
-            {"$set": {
-                "generated_code": code,
-                "token_usage": token_usage,
-            }},
-        )
+        for attempt in range(_MAX_RETRIES + 1):
+            # 5. Generate code (or regenerate with error context)
+            try:
+                prompt = (
+                    analysis_prompt if attempt == 0
+                    else _build_retry_prompt(analysis_prompt, code, last_error)
+                )
+                code, token_usage = await generate_analysis_code(prompt)
+            except (ValueError, RuntimeError) as e:
+                logger.warning(f"Job {job_id} code generation failed (attempt {attempt+1}): {e}")
+                if attempt == _MAX_RETRIES:
+                    await _fail_job(db, job_id, _FRIENDLY_ERROR)
+                    return
+                last_error = str(e)
+                continue
 
-        # 6. Security scan
-        violation = scan_code(code)
-        if violation:
-            await _fail_job(db, job_id, f"security_violation: {violation}")
-            return
-
-        # 7. Check if cancelled during generation
-        job = await db.analysis_jobs.find_one({"job_id": job_id})
-        if job and job["status"] == AnalysisJobStatus.CANCELLED.value:
-            return
-
-        # 8. Update status → running
-        await _update_status(db, job_id, AnalysisJobStatus.RUNNING)
-
-        # 9. Execute in Docker sandbox
-        sandbox_result = await run_in_sandbox(
-            job_id=job_id,
-            code=code,
-            target_user_id=job["target_user_id"],
-            timeout_sec=job.get("timeout_sec", 30),
-        )
-
-        # 10. Process results
-        update_fields = {
-            "stdout": sandbox_result.get("stdout", "")[:5000],
-            "stderr": sandbox_result.get("stderr", "")[:5000],
-            "docker_container_id": sandbox_result.get("container_id", ""),
-            "finished_at": datetime.utcnow().isoformat(),
-        }
-
-        if sandbox_result["success"] and sandbox_result["result"]:
-            result_data = sandbox_result["result"]
-            nav_hint = _compute_nav_hint(
-                job.get("data_types", []),
-                job.get("time_range", ""),
+            await db.analysis_jobs.update_one(
+                {"job_id": job_id},
+                {"$set": {"generated_code": code, "token_usage": token_usage}},
             )
-            update_fields["result"] = {
-                "summary": result_data.get("summary", "Analysis complete."),
-                "data": result_data.get("data"),
-                "chart_base64": result_data.get("chart_base64"),
-                "nav_hint": nav_hint,
-            }
-            update_fields["status"] = AnalysisJobStatus.SUCCESS.value
-            logger.info(f"Job {job_id} completed successfully")
-        else:
-            error_msg = sandbox_result.get("error", "unknown_error")
-            update_fields["error"] = error_msg
-            update_fields["status"] = AnalysisJobStatus.FAILED.value
-            logger.error(f"Job {job_id} failed: {error_msg}")
 
-        await db.analysis_jobs.update_one(
-            {"job_id": job_id},
-            {"$set": update_fields},
-        )
+            # 6. Security scan (no retry — violation is intentional)
+            violation = scan_code(code)
+            if violation:
+                await _fail_job(db, job_id, _FRIENDLY_ERROR)
+                logger.error(f"Job {job_id} security violation: {violation}")
+                return
+
+            # 7. Check if cancelled
+            job = await db.analysis_jobs.find_one({"job_id": job_id})
+            if job and job["status"] == AnalysisJobStatus.CANCELLED.value:
+                return
+
+            # 8. Update status → running
+            await _update_status(db, job_id, AnalysisJobStatus.RUNNING)
+
+            # 9. Execute in Docker sandbox
+            sandbox_result = await run_in_sandbox(
+                job_id=job_id,
+                code=code,
+                target_user_id=job["target_user_id"],
+                timeout_sec=job.get("timeout_sec", 30),
+            )
+
+            if sandbox_result["success"] and sandbox_result["result"]:
+                # ✅ Success
+                result_data = sandbox_result["result"]
+                nav_hint = _compute_nav_hint(
+                    job.get("data_types", []),
+                    job.get("time_range", ""),
+                    job.get("prompt", ""),
+                )
+                await db.analysis_jobs.update_one(
+                    {"job_id": job_id},
+                    {"$set": {
+                        "stdout": sandbox_result.get("stdout", "")[:5000],
+                        "stderr": sandbox_result.get("stderr", "")[:5000],
+                        "docker_container_id": sandbox_result.get("container_id", ""),
+                        "finished_at": datetime.utcnow().isoformat(),
+                        "result": {
+                            "summary": result_data.get("summary", "Analysis complete."),
+                            "data": result_data.get("data"),
+                            "chart_base64": result_data.get("chart_base64"),
+                            "nav_hint": nav_hint,
+                        },
+                        "status": AnalysisJobStatus.SUCCESS.value,
+                    }},
+                )
+                logger.info(f"Job {job_id} completed successfully (attempt {attempt+1})")
+                return
+
+            # ❌ Execution failed — capture error and retry
+            last_error = sandbox_result.get("error", "unknown_error")
+            stderr = sandbox_result.get("stderr", "")
+            last_error = f"{last_error}\n{stderr}".strip()
+            logger.warning(f"Job {job_id} execution failed (attempt {attempt+1}): {last_error[:200]}")
+
+            if attempt == _MAX_RETRIES:
+                await db.analysis_jobs.update_one(
+                    {"job_id": job_id},
+                    {"$set": {
+                        "stdout": sandbox_result.get("stdout", "")[:5000],
+                        "stderr": stderr[:5000],
+                        "docker_container_id": sandbox_result.get("container_id", ""),
+                        "finished_at": datetime.utcnow().isoformat(),
+                        "error": _FRIENDLY_ERROR,
+                        "status": AnalysisJobStatus.FAILED.value,
+                    }},
+                )
+                logger.error(f"Job {job_id} failed after {_MAX_RETRIES+1} attempts")
+                return
+
+            # Back to top of loop for retry
+            await _update_status(db, job_id, AnalysisJobStatus.GENERATING)
 
     except Exception as e:
         logger.error(f"Unexpected error in job {job_id}: {e}", exc_info=True)
-        await _fail_job(db, job_id, f"internal_error: {e}")
+        await _fail_job(db, job_id, _FRIENDLY_ERROR)
 
     finally:
         cleanup_sandbox(job_id)
@@ -269,17 +322,17 @@ async def _update_status(db, job_id: str, status: AnalysisJobStatus, extra: dict
     await db.analysis_jobs.update_one({"job_id": job_id}, {"$set": update})
 
 
-async def _fail_job(db, job_id: str, error: str):
-    """Mark a job as failed."""
+async def _fail_job(db, job_id: str, internal_error: str):
+    """Mark a job as failed with a friendly user-facing error message."""
+    logger.error(f"Job {job_id} failed: {internal_error}")
     await db.analysis_jobs.update_one(
         {"job_id": job_id},
         {"$set": {
             "status": AnalysisJobStatus.FAILED.value,
-            "error": error,
+            "error": _FRIENDLY_ERROR,
             "finished_at": datetime.utcnow().isoformat(),
         }},
     )
-    logger.error(f"Job {job_id} failed: {error}")
 
 
 # ── Job queries ──────────────────────────────────────────────────────────────

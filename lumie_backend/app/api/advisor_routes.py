@@ -1,12 +1,15 @@
 """Advisor API routes — AI chat endpoint with intelligent routing."""
+import asyncio
 import logging
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 
+from ..core.database import get_database
 from ..services.auth_service import get_current_user_id
 from ..services.advisor_service import get_advisor_reply
+from ..services.dayprint_service import log_advisor_chat
 
 logger = logging.getLogger(__name__)
 
@@ -66,6 +69,15 @@ async def advisor_chat(
             target_user_id=body.target_user_id,
             team_id=body.team_id,
         )
+        # Log to Dayprint in background (only for direct replies; analysis jobs
+        # are logged when polled so we have the actual result text)
+        if result.get("type") == "direct":
+            db = get_database()
+            profile = await db.profiles.find_one({"user_id": user_id}, {"name": 1}) or {}
+            user_name = profile.get("name", "")
+            asyncio.create_task(
+                log_advisor_chat(user_id, user_name, body.message, result["reply"])
+            )
         return AdvisorChatResponse(
             type=result.get("type", "direct"),
             reply=result["reply"],
