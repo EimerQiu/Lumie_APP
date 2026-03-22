@@ -1,7 +1,10 @@
 // Tasks List Screen - Main task list with pull-to-refresh and swipe actions
 
+import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:provider/provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:timezone/timezone.dart' as tz;
 import '../../../core/theme/app_colors.dart';
 import '../../../core/services/task_service.dart';
@@ -42,20 +45,63 @@ class _TasksListScreenState extends State<TasksListScreen> {
     }
   }
 
-  Future<void> _loadAiTip() async {
+  static const _tipCacheKey = 'ai_tip_cache';
+  static const _tipTimestampKey = 'ai_tip_timestamp';
+  static const _tipTtl = Duration(hours: 1);
+
+  Future<void> _loadAiTip({bool forceRefresh = false}) async {
     if (_aiTipLoading) return;
     setState(() => _aiTipLoading = true);
     try {
+      if (!forceRefresh) {
+        final cached = await _loadCachedTip();
+        if (cached != null) {
+          if (mounted) setState(() => _aiTip = cached);
+          return;
+        }
+      }
       final tip = await TaskService().getAiTips(
         daysBack: 30,
         timeZone: _deviceTimezone(),
       );
       if (mounted) setState(() => _aiTip = tip);
+      await _saveTipToCache(tip);
     } catch (_) {
       // Non-fatal: tip card stays hidden on error
     } finally {
       if (mounted) setState(() => _aiTipLoading = false);
     }
+  }
+
+  Future<AiTip?> _loadCachedTip() async {
+    final prefs = await SharedPreferences.getInstance();
+    final timestamp = prefs.getInt(_tipTimestampKey);
+    if (timestamp == null) return null;
+    final cachedAt = DateTime.fromMillisecondsSinceEpoch(timestamp);
+    if (DateTime.now().difference(cachedAt) > _tipTtl) return null;
+    final raw = prefs.getString(_tipCacheKey);
+    if (raw == null) return null;
+    try {
+      return AiTip.fromJson(json.decode(raw) as Map<String, dynamic>);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<void> _saveTipToCache(AiTip tip) async {
+    final prefs = await SharedPreferences.getInstance();
+    final data = {
+      'tip': tip.tip,
+      'task_stats': {
+        'total_tasks': tip.taskStats.totalTasks,
+        'completed_tasks': tip.taskStats.completedTasks,
+        'expired_tasks': tip.taskStats.expiredTasks,
+        'pending_tasks': tip.taskStats.pendingTasks,
+        'completion_rate': tip.taskStats.completionRate,
+      },
+    };
+    await prefs.setString(_tipCacheKey, json.encode(data));
+    await prefs.setInt(_tipTimestampKey, DateTime.now().millisecondsSinceEpoch);
   }
 
   @override
@@ -202,17 +248,30 @@ class _TasksListScreenState extends State<TasksListScreen> {
             )
           else ...[
             Expanded(
-              child: Text(
-                _aiTip!.tip,
-                style: const TextStyle(
-                  fontSize: 13,
-                  color: AppColors.textPrimary,
-                  height: 1.4,
+              child: MarkdownBody(
+                data: _aiTip!.tip,
+                styleSheet: MarkdownStyleSheet(
+                  p: const TextStyle(
+                    fontSize: 13,
+                    color: AppColors.textPrimary,
+                    height: 1.4,
+                  ),
+                  listBullet: const TextStyle(
+                    fontSize: 13,
+                    color: AppColors.textPrimary,
+                    height: 1.4,
+                  ),
+                  strong: const TextStyle(
+                    fontSize: 13,
+                    color: AppColors.textPrimary,
+                    fontWeight: FontWeight.bold,
+                    height: 1.4,
+                  ),
                 ),
               ),
             ),
             GestureDetector(
-              onTap: _loadAiTip,
+              onTap: () => _loadAiTip(forceRefresh: true),
               child: Padding(
                 padding: const EdgeInsets.only(left: 8),
                 child: Icon(Icons.refresh, size: 18, color: AppColors.textLight),

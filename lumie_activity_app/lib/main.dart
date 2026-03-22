@@ -43,7 +43,8 @@ import 'features/tasks/screens/admin_dashboard_screen.dart';
 import 'features/tasks/screens/reward_calc_screen.dart';
 import 'shared/models/activity_models.dart';
 import 'shared/models/user_models.dart';
-import 'package:shared_preferences/shared_preferences.dart';
+import 'core/services/push_notification_service.dart';
+import 'core/services/checkin_service.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -296,6 +297,14 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
 
       // Reload ring info (in case it was paired while away)
       ringProvider.init();
+    });
+
+    // Listen for notification taps to deep-link to the right screen
+    PushNotificationService().setOnNotificationTap((data) {
+      final navigateTo = data['navigate_to'] as String?;
+      if (navigateTo == 'advisor' && mounted) {
+        setState(() => _currentIndex = 1); // Switch to Advisor tab
+      }
     });
   }
 
@@ -591,23 +600,74 @@ class SettingsScreen extends StatefulWidget {
 }
 
 class _SettingsScreenState extends State<SettingsScreen> {
-  String _checkInFreq = 'Daily';
+  final CheckinService _checkinService = CheckinService();
+  bool _checkinEnabled = false;
+  String _checkinFreq = 'daily'; // "daily" | "weekdays"
+  int _checkinHourUtc = 9;
+  int _checkinMinuteUtc = 0;
+  bool _checkinLoading = true;
 
   @override
   void initState() {
     super.initState();
-    _loadFreq();
+    _loadCheckinPrefs();
   }
 
-  Future<void> _loadFreq() async {
-    final prefs = await SharedPreferences.getInstance();
-    if (mounted) setState(() => _checkInFreq = prefs.getString('advisor_checkin_freq') ?? 'Daily');
+  Future<void> _loadCheckinPrefs() async {
+    final prefs = await _checkinService.getPreferences();
+    if (mounted) {
+      setState(() {
+        _checkinEnabled = prefs.enabled;
+        _checkinFreq = prefs.frequency;
+        _checkinHourUtc = prefs.hourUtc;
+        _checkinMinuteUtc = prefs.minuteUtc;
+        _checkinLoading = false;
+      });
+    }
+  }
+
+  Future<void> _toggleCheckin(bool value) async {
+    setState(() => _checkinEnabled = value);
+    await _checkinService.updatePreferences(enabled: value);
   }
 
   Future<void> _setFreq(String freq) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('advisor_checkin_freq', freq);
-    if (mounted) setState(() => _checkInFreq = freq);
+    setState(() => _checkinFreq = freq);
+    await _checkinService.updatePreferences(frequency: freq);
+  }
+
+  Future<void> _pickCheckinTime() async {
+    // Convert UTC hour to local for the picker
+    final nowUtc = DateTime.now().toUtc();
+    final localOffset = DateTime.now().timeZoneOffset;
+    final localHour = (_checkinHourUtc + localOffset.inHours) % 24;
+
+    final picked = await showTimePicker(
+      context: context,
+      initialTime: TimeOfDay(hour: localHour, minute: _checkinMinuteUtc),
+    );
+    if (picked == null || !mounted) return;
+
+    // Convert local time back to UTC for the backend
+    final utcHour = (picked.hour - localOffset.inHours) % 24;
+    setState(() {
+      _checkinHourUtc = utcHour;
+      _checkinMinuteUtc = picked.minute;
+    });
+    await _checkinService.updatePreferences(
+      hourUtc: utcHour,
+      minuteUtc: picked.minute,
+    );
+  }
+
+  /// Format the check-in time for display (in user's local timezone).
+  String get _checkinTimeDisplay {
+    final localOffset = DateTime.now().timeZoneOffset;
+    final localHour = (_checkinHourUtc + localOffset.inHours) % 24;
+    final period = localHour >= 12 ? 'PM' : 'AM';
+    final displayHour = localHour == 0 ? 12 : (localHour > 12 ? localHour - 12 : localHour);
+    final displayMin = _checkinMinuteUtc.toString().padLeft(2, '0');
+    return '$displayHour:$displayMin $period';
   }
 
   @override
@@ -749,62 +809,130 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         ),
                       ),
                     ),
+
+                    // Check-in push notification toggle
                     Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
+                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                      child: Row(
                         children: [
-                          Row(
-                            children: [
-                              Container(
-                                padding: const EdgeInsets.all(8),
-                                decoration: BoxDecoration(
-                                  color: AppColors.primaryLemon.withValues(alpha: 0.3),
-                                  borderRadius: BorderRadius.circular(10),
-                                ),
-                                child: const Icon(Icons.schedule_outlined, size: 22, color: AppColors.textOnYellow),
-                              ),
-                              const SizedBox(width: 16),
-                              const Text(
-                                'Check-in Frequency',
-                                style: TextStyle(fontSize: 18, fontWeight: FontWeight.w500, color: AppColors.textPrimary),
-                              ),
-                            ],
+                          Container(
+                            padding: const EdgeInsets.all(8),
+                            decoration: BoxDecoration(
+                              color: AppColors.primaryLemon.withValues(alpha: 0.3),
+                              borderRadius: BorderRadius.circular(10),
+                            ),
+                            child: const Icon(Icons.notifications_active_outlined, size: 22, color: AppColors.textOnYellow),
                           ),
-                          const SizedBox(height: 12),
-                          Row(
-                            children: ['Daily', 'Weekly', 'Monthly'].map((freq) {
-                              final selected = _checkInFreq == freq;
-                              return Padding(
-                                padding: const EdgeInsets.only(right: 8),
-                                child: GestureDetector(
-                                  onTap: () => _setFreq(freq),
-                                  child: AnimatedContainer(
-                                    duration: const Duration(milliseconds: 180),
-                                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                                    decoration: BoxDecoration(
-                                      color: selected ? AppColors.primaryLemonDark : AppColors.backgroundPaper,
-                                      borderRadius: BorderRadius.circular(20),
-                                      border: Border.all(
-                                        color: selected ? AppColors.primaryLemonDark : AppColors.surfaceLight,
-                                      ),
-                                    ),
-                                    child: Text(
-                                      freq,
-                                      style: TextStyle(
-                                        fontSize: 14,
-                                        fontWeight: FontWeight.w500,
-                                        color: selected ? Colors.white : AppColors.textSecondary,
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                              );
-                            }).toList(),
+                          const SizedBox(width: 16),
+                          const Expanded(
+                            child: Text(
+                              'Daily Check-in Nudge',
+                              style: TextStyle(fontSize: 17, fontWeight: FontWeight.w500, color: AppColors.textPrimary),
+                            ),
                           ),
+                          if (_checkinLoading)
+                            const SizedBox(
+                              width: 20, height: 20,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          else
+                            Switch.adaptive(
+                              value: _checkinEnabled,
+                              activeColor: AppColors.primaryLemonDark,
+                              onChanged: _toggleCheckin,
+                            ),
                         ],
                       ),
                     ),
+
+                    // Frequency + time (only visible when enabled)
+                    if (_checkinEnabled) ...[
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text(
+                              'Frequency',
+                              style: TextStyle(fontSize: 13, color: AppColors.textSecondary),
+                            ),
+                            const SizedBox(height: 8),
+                            Row(
+                              children: [
+                                {'label': 'Every day', 'value': 'daily'},
+                                {'label': 'Weekdays', 'value': 'weekdays'},
+                              ].map((item) {
+                                final selected = _checkinFreq == item['value'];
+                                return Padding(
+                                  padding: const EdgeInsets.only(right: 8),
+                                  child: GestureDetector(
+                                    onTap: () => _setFreq(item['value']!),
+                                    child: AnimatedContainer(
+                                      duration: const Duration(milliseconds: 180),
+                                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                                      decoration: BoxDecoration(
+                                        color: selected ? AppColors.primaryLemonDark : AppColors.backgroundPaper,
+                                        borderRadius: BorderRadius.circular(20),
+                                        border: Border.all(
+                                          color: selected ? AppColors.primaryLemonDark : AppColors.surfaceLight,
+                                        ),
+                                      ),
+                                      child: Text(
+                                        item['label']!,
+                                        style: TextStyle(
+                                          fontSize: 14,
+                                          fontWeight: FontWeight.w500,
+                                          color: selected ? Colors.white : AppColors.textSecondary,
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                );
+                              }).toList(),
+                            ),
+                          ],
+                        ),
+                      ),
+                      // Time picker
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+                        child: GestureDetector(
+                          onTap: _pickCheckinTime,
+                          child: Row(
+                            children: [
+                              const Text(
+                                'Remind me at',
+                                style: TextStyle(fontSize: 13, color: AppColors.textSecondary),
+                              ),
+                              const SizedBox(width: 8),
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                                decoration: BoxDecoration(
+                                  color: AppColors.backgroundPaper,
+                                  borderRadius: BorderRadius.circular(12),
+                                  border: Border.all(color: AppColors.surfaceLight),
+                                ),
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Text(
+                                      _checkinTimeDisplay,
+                                      style: const TextStyle(
+                                        fontSize: 15,
+                                        fontWeight: FontWeight.w600,
+                                        color: AppColors.primaryLemonDark,
+                                      ),
+                                    ),
+                                    const SizedBox(width: 4),
+                                    const Icon(Icons.access_time, size: 16, color: AppColors.primaryLemonDark),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ],
 
                     const Divider(height: 24),
 

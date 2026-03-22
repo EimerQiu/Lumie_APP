@@ -4,6 +4,7 @@ import '../../../core/services/profile_service.dart';
 import '../../../core/services/team_service.dart';
 import '../../../core/services/task_service.dart';
 import '../../../core/services/push_notification_service.dart';
+import '../../../core/services/chat_history_service.dart';
 import '../../../shared/models/user_models.dart';
 
 enum AuthState {
@@ -296,6 +297,7 @@ class AuthProvider extends ChangeNotifier {
       await _pushService.deleteToken(token);
     }
     await _authService.logout();
+    await ChatHistoryService().clearCache();
     _teamService.clearToken();
     _taskService.clearToken();
     _user = null;

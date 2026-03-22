@@ -20,13 +20,15 @@ class AdvisorResponse {
   final String type; // "direct" or "analysis"
   final String reply;
   final String? jobId;
+  final String? navHint; // "task_list" | "task_dashboard" | null
 
-  const AdvisorResponse.direct({required this.reply})
+  const AdvisorResponse.direct({required this.reply, this.navHint})
       : type = 'direct',
         jobId = null;
 
   const AdvisorResponse.analysis({required this.reply, required this.jobId})
-      : type = 'analysis';
+      : type = 'analysis',
+        navHint = null;
 
   factory AdvisorResponse.fromJson(Map<String, dynamic> json) {
     final type = json['type'] as String? ?? 'direct';
@@ -36,7 +38,10 @@ class AdvisorResponse {
         jobId: json['job_id'] as String?,
       );
     }
-    return AdvisorResponse.direct(reply: json['reply'] as String? ?? '');
+    return AdvisorResponse.direct(
+      reply: json['reply'] as String? ?? '',
+      navHint: json['nav_hint'] as String?,
+    );
   }
 }
 
@@ -71,16 +76,21 @@ class AdvisorService {
   Future<AdvisorResponse> sendMessage(
     String message, {
     List<ChatMessage> history = const [],
+    String? sessionId,
   }) async {
     try {
+      final body = <String, dynamic>{
+        'message': message,
+        'history': history.map((m) => m.toJson()).toList(),
+      };
+      if (sessionId != null) {
+        body['session_id'] = sessionId;
+      }
       final response = await http
           .post(
             Uri.parse('${ApiConstants.baseUrl}${ApiConstants.advisorChat}'),
             headers: _headers,
-            body: json.encode({
-              'message': message,
-              'history': history.map((m) => m.toJson()).toList(),
-            }),
+            body: json.encode(body),
           )
           .timeout(ApiConstants.receiveTimeout);
 

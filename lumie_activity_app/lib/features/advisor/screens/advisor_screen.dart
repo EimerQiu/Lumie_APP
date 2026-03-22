@@ -1,13 +1,16 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
-import 'package:shared_preferences/shared_preferences.dart';
+import 'package:uuid/uuid.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/services/advisor_service.dart';
+import '../../../core/services/checkin_service.dart';
+import '../../../core/services/chat_history_service.dart';
 import '../../../core/services/analysis_service.dart';
 import '../../../shared/models/analysis_models.dart';
 import '../../../shared/widgets/gradient_card.dart';
 import '../widgets/analysis_result_card.dart';
 import '../widgets/dayprint_tab.dart';
+import '../../tasks/screens/tasks_list_screen.dart';
 
 class AdvisorScreen extends StatefulWidget {
   const AdvisorScreen({super.key});
@@ -87,24 +90,113 @@ class _ChatTabState extends State<_ChatTab> {
   final ScrollController _scroll = ScrollController();
   final AdvisorService _advisor = AdvisorService();
   final AnalysisService _analysisService = AnalysisService();
-  final List<_Message> _messages = [
-    _Message(
-      text:
-          'Hi! I\'m your Lumie Advisor. I can help with activity guidance, recovery tips, and wellness check-ins. What\'s on your mind?',
-      isUser: false,
-    ),
-  ];
-  bool _isTyping = false;
+  final ChatHistoryService _historyService = ChatHistoryService();
 
-  /// Converts the current message list into the history format the service expects,
-  /// excluding the initial greeting.
-  List<ChatMessage> get _history => _messages
-      .skip(1) // skip the opening greeting
-      .where((m) => !m.isAnalyzing) // skip analyzing placeholders
-      .map(
-        (m) =>
-            ChatMessage(role: m.isUser ? 'user' : 'assistant', content: m.text),
-      )
+  /// Unique ID for this chat session — generated fresh each time the chat tab
+  /// is created so the backend can distinguish separate conversations in the
+  /// dayprint and avoid merging unrelated topics across sessions.
+  final String _sessionId = const Uuid().v4();
+
+  /// All displayable items: history messages + session dividers + current session.
+  final List<_ChatItem> _items = [];
+
+  bool _isTyping = false;
+  bool _historyLoaded = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadHistory();
+  }
+
+  Future<void> _loadHistory() async {
+    // Load local cache first for instant display
+    final cached = await _historyService.loadFromCache();
+    if (mounted && cached.isNotEmpty) {
+      setState(() {
+        _items.clear();
+        _items.addAll(_buildItemsFromHistory(cached));
+        _items.add(_ChatItem.sessionDivider('New conversation'));
+        _historyLoaded = true;
+      });
+      _scrollToBottom();
+    } else if (mounted) {
+      setState(() {
+        _historyLoaded = true;
+      });
+    }
+
+    // Then sync from server in background
+    _historyService.fetchFromServer(limit: 200).then((serverMessages) async {
+      if (!mounted) return;
+      if (serverMessages.isNotEmpty) {
+        await _historyService.saveToCache(serverMessages);
+        // Only rebuild if we got more data than the cache had
+        if (serverMessages.length != cached.length) {
+          setState(() {
+            _items.clear();
+            _items.addAll(_buildItemsFromHistory(serverMessages));
+            // Add current session items back
+            _items.add(_ChatItem.sessionDivider('New conversation'));
+            _items.addAll(_currentSessionItems);
+          });
+        }
+      }
+    });
+  }
+
+  /// Track current-session messages separately so we can re-append after server sync.
+  final List<_ChatItem> _currentSessionItems = [];
+
+  /// Convert a flat list of PersistedMessages into _ChatItems with session dividers.
+  List<_ChatItem> _buildItemsFromHistory(List<PersistedMessage> messages) {
+    if (messages.isEmpty) return [];
+
+    final items = <_ChatItem>[];
+    String? lastSessionId;
+
+    for (final msg in messages) {
+      // Insert a session divider when session changes
+      if (msg.sessionId != lastSessionId && msg.sessionId.isNotEmpty) {
+        // Parse created_at for a friendly date label
+        final label = _formatSessionDate(msg.createdAt);
+        items.add(_ChatItem.sessionDivider(label));
+        lastSessionId = msg.sessionId;
+      }
+
+      items.add(_ChatItem.message(_Message(
+        text: msg.content,
+        isUser: msg.isUser,
+      )));
+    }
+
+    return items;
+  }
+
+  String _formatSessionDate(String isoDate) {
+    try {
+      final dt = DateTime.parse(isoDate).toLocal();
+      final now = DateTime.now();
+      final diff = now.difference(dt);
+
+      if (diff.inDays == 0) return 'Today';
+      if (diff.inDays == 1) return 'Yesterday';
+      if (diff.inDays < 7) {
+        const days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+        return days[dt.weekday - 1];
+      }
+      return '${dt.month}/${dt.day}';
+    } catch (_) {
+      return '';
+    }
+  }
+
+  /// Builds the history context for the advisor API (current session only).
+  List<ChatMessage> get _history => _currentSessionItems
+      .where((item) => item.type == _ChatItemType.message)
+      .map((item) => item.message!)
+      .where((m) => !m.isAnalyzing)
+      .map((m) => ChatMessage(role: m.isUser ? 'user' : 'assistant', content: m.text))
       .toList();
 
   Future<void> _send() async {
@@ -113,61 +205,101 @@ class _ChatTabState extends State<_ChatTab> {
     _input.clear();
     FocusScope.of(context).unfocus();
 
+    final userItem = _ChatItem.message(_Message(text: text, isUser: true));
+    _currentSessionItems.add(userItem);
+
     setState(() {
-      _messages.add(_Message(text: text, isUser: true));
+      _items.add(userItem);
       _isTyping = true;
     });
     _scrollToBottom();
 
-    final response = await _advisor.sendMessage(text, history: _history);
+    final response = await _advisor.sendMessage(text, history: _history, sessionId: _sessionId);
     if (!mounted) return;
 
     if (response.type == 'analysis' && response.jobId != null) {
-      // Slow path: show "analyzing" placeholder, then poll for result
+      final placeholder = _ChatItem.message(_Message(
+        text: response.reply,
+        isUser: false,
+        isAnalyzing: true,
+        jobId: response.jobId,
+      ));
+      _currentSessionItems.add(placeholder);
+
       setState(() {
-        _messages.add(_Message(
-          text: response.reply,
-          isUser: false,
-          isAnalyzing: true,
-          jobId: response.jobId,
-        ));
+        _items.add(placeholder);
         _isTyping = false;
       });
       _scrollToBottom();
+
+      // Persist the exchange to local cache immediately
+      _persistExchange(text, response.reply);
 
       // Poll for result
       final result = await _analysisService.pollJobResult(response.jobId!);
       if (!mounted) return;
 
       setState(() {
-        final idx = _messages.lastIndexWhere((m) => m.jobId == response.jobId);
+        final idx = _items.lastIndexWhere(
+            (item) => item.type == _ChatItemType.message && item.message?.jobId == response.jobId);
         if (idx >= 0) {
-          if (result.isSuccess && result.result != null) {
-            _messages[idx] = _Message(
-              text: result.result!.summary,
-              isUser: false,
-              analysisResult: result.result,
-            );
-          } else {
-            _messages[idx] = _Message(
-              text: result.error?.isNotEmpty == true
-                  ? result.error!
-                  : "I wasn't able to complete this analysis. Please try rephrasing your question.",
-              isUser: false,
-              isAnalysisFailed: true,
-            );
-          }
+          final resolved = result.isSuccess && result.result != null
+              ? _ChatItem.message(_Message(
+                  text: result.result!.summary,
+                  isUser: false,
+                  analysisResult: result.result,
+                ))
+              : _ChatItem.message(_Message(
+                  text: result.error?.isNotEmpty == true
+                      ? result.error!
+                      : "I wasn't able to complete this analysis. Please try rephrasing your question.",
+                  isUser: false,
+                  isAnalysisFailed: true,
+                ));
+          _items[idx] = resolved;
+          // Also update in currentSessionItems
+          final csIdx = _currentSessionItems.lastIndexWhere(
+              (item) => item.type == _ChatItemType.message && item.message?.jobId == response.jobId);
+          if (csIdx >= 0) _currentSessionItems[csIdx] = resolved;
         }
       });
       _scrollToBottom();
     } else {
-      // Fast path: direct reply
+      final replyItem = _ChatItem.message(_Message(
+        text: response.reply,
+        isUser: false,
+        navHint: response.navHint,
+      ));
+      _currentSessionItems.add(replyItem);
+
       setState(() {
-        _messages.add(_Message(text: response.reply, isUser: false));
+        _items.add(replyItem);
         _isTyping = false;
       });
       _scrollToBottom();
+
+      // Persist the exchange to local cache
+      _persistExchange(text, response.reply);
     }
+  }
+
+  /// Persist an exchange to local cache so it survives tab switches.
+  void _persistExchange(String userMsg, String assistantReply) {
+    final now = DateTime.now().toUtc().toIso8601String();
+    _historyService.appendToCache([
+      PersistedMessage(
+        sessionId: _sessionId,
+        role: 'user',
+        content: userMsg,
+        createdAt: now,
+      ),
+      PersistedMessage(
+        sessionId: _sessionId,
+        role: 'assistant',
+        content: assistantReply,
+        createdAt: now,
+      ),
+    ]);
   }
 
   void _scrollToBottom() {
@@ -194,16 +326,22 @@ class _ChatTabState extends State<_ChatTab> {
     return Column(
       children: [
         Expanded(
-          child: ListView.builder(
-            controller: _scroll,
-            padding: const EdgeInsets.all(16),
-            itemCount: _messages.length + (_isTyping ? 1 : 0),
-            itemBuilder: (context, i) {
-              if (_isTyping && i == _messages.length) {
-                return const _TypingBubble();
-              }
-              return _ChatBubble(message: _messages[i]);
-            },
+          child: SelectionArea(
+            child: ListView.builder(
+              controller: _scroll,
+              padding: const EdgeInsets.all(16),
+              itemCount: _items.length + (_isTyping ? 1 : 0),
+              itemBuilder: (context, i) {
+                if (_isTyping && i == _items.length) {
+                  return const _TypingBubble();
+                }
+                final item = _items[i];
+                if (item.type == _ChatItemType.sessionDivider) {
+                  return _SessionDivider(label: item.dividerLabel ?? '');
+                }
+                return _ChatBubble(message: item.message!);
+              },
+            ),
           ),
         ),
         _buildInput(),
@@ -267,6 +405,25 @@ class _ChatTabState extends State<_ChatTab> {
   }
 }
 
+// ── Chat item model ─────────────────────────────────────────────────────────
+
+enum _ChatItemType { message, sessionDivider }
+
+class _ChatItem {
+  final _ChatItemType type;
+  final _Message? message;
+  final String? dividerLabel;
+
+  const _ChatItem._({required this.type, this.message, this.dividerLabel});
+
+  factory _ChatItem.message(_Message msg) =>
+      _ChatItem._(type: _ChatItemType.message, message: msg);
+
+  factory _ChatItem.sessionDivider(String label) =>
+      _ChatItem._(type: _ChatItemType.sessionDivider, dividerLabel: label);
+
+}
+
 class _Message {
   final String text;
   final bool isUser;
@@ -274,6 +431,7 @@ class _Message {
   final bool isAnalysisFailed;
   final String? jobId;
   final AnalysisResult? analysisResult;
+  final String? navHint; // "task_list" | "task_dashboard" | null
 
   const _Message({
     required this.text,
@@ -282,7 +440,39 @@ class _Message {
     this.isAnalysisFailed = false,
     this.jobId,
     this.analysisResult,
+    this.navHint,
   });
+}
+
+/// Visual divider between chat sessions showing a date/label.
+class _SessionDivider extends StatelessWidget {
+  final String label;
+  const _SessionDivider({required this.label});
+
+  @override
+  Widget build(BuildContext context) {
+    if (label.isEmpty) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 16),
+      child: Row(
+        children: [
+          Expanded(child: Divider(color: AppColors.surfaceLight, height: 1)),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            child: Text(
+              label,
+              style: TextStyle(
+                fontSize: 12,
+                color: AppColors.textLight,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ),
+          Expanded(child: Divider(color: AppColors.surfaceLight, height: 1)),
+        ],
+      ),
+    );
+  }
 }
 
 class _ChatBubble extends StatelessWidget {
@@ -406,20 +596,72 @@ class _ChatBubble extends StatelessWidget {
       return AnalysisResultCard(result: message.analysisResult!);
     }
 
-    // Normal assistant message — markdown
-    return MarkdownBody(
-      data: message.text,
-      styleSheet: MarkdownStyleSheet(
-        p: const TextStyle(
-          fontSize: 14,
-          color: AppColors.textPrimary,
-          height: 1.4,
+    // Normal assistant message — markdown + optional nav hint
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        MarkdownBody(
+          data: message.text,
+          styleSheet: MarkdownStyleSheet(
+            p: const TextStyle(
+              fontSize: 14,
+              color: AppColors.textPrimary,
+              height: 1.4,
+            ),
+            strong: const TextStyle(
+              fontSize: 14,
+              color: AppColors.textPrimary,
+              fontWeight: FontWeight.bold,
+              height: 1.4,
+            ),
+          ),
         ),
-        strong: const TextStyle(
-          fontSize: 14,
-          color: AppColors.textPrimary,
-          fontWeight: FontWeight.bold,
-          height: 1.4,
+        if (message.navHint != null) ...[
+          const SizedBox(height: 10),
+          _buildNavHintChip(message.navHint!),
+        ],
+      ],
+    );
+  }
+
+  Widget _buildNavHintChip(String navHint) {
+    final isTaskList = navHint == 'task_list';
+    final label = isTaskList ? "View your tasks" : "View task statistics";
+    final icon =
+        isTaskList ? Icons.checklist_rounded : Icons.bar_chart_rounded;
+
+    return Builder(
+      builder: (context) => GestureDetector(
+        onTap: () {
+          Navigator.of(context).push(
+            MaterialPageRoute(builder: (_) => const TasksListScreen()),
+          );
+        },
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+          decoration: BoxDecoration(
+            color: AppColors.primaryLemon.withValues(alpha: 0.25),
+            borderRadius: BorderRadius.circular(20),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(icon, size: 14, color: AppColors.primaryLemonDark),
+              const SizedBox(width: 6),
+              Text(
+                label,
+                style: const TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                  color: AppColors.primaryLemonDark,
+                ),
+              ),
+              const SizedBox(width: 4),
+              const Icon(Icons.arrow_forward_rounded,
+                  size: 12, color: AppColors.primaryLemonDark),
+            ],
+          ),
         ),
       ),
     );
@@ -543,20 +785,23 @@ class _AdviceTabState extends State<_AdviceTab> {
   }
 
   Future<void> _loadFreq() async {
-    final prefs = await SharedPreferences.getInstance();
+    final prefs = await CheckinService().getPreferences();
     if (mounted) {
       setState(() {
-        _checkInFreq = prefs.getString('advisor_checkin_freq') ?? 'Daily';
+        _checkInFreq = prefs.enabled
+            ? (prefs.frequency == 'weekdays' ? 'Weekdays' : 'Daily')
+            : 'Off';
       });
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    return ListView(
-      padding: const EdgeInsets.all(16),
-      children: [
-        _sectionLabel('Condition-Based Advice'),
+    return SelectionArea(
+      child: ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          _sectionLabel('Condition-Based Advice'),
         const SizedBox(height: 8),
         _AdviceCard(
           icon: Icons.favorite_border,
@@ -625,6 +870,7 @@ class _AdviceTabState extends State<_AdviceTab> {
         ),
         const SizedBox(height: 24),
       ],
+      ),
     );
   }
 

@@ -19,6 +19,8 @@ from .api.task_routes import router as task_router
 from .api.admin_task_routes import router as admin_task_router
 from .api.analysis_routes import router as analysis_router
 from .api.dayprint_routes import router as dayprint_router
+from .api.checkin_routes import router as checkin_router
+from .api.chat_history_routes import router as chat_history_router
 
 # Configure logging
 logging.basicConfig(
@@ -38,6 +40,9 @@ async def lifespan(app: FastAPI):
     logger.info("Starting Lumie API...")
     await connect_to_mongo()
     logger.info("Connected to MongoDB")
+    # Ensure indexes for chat history
+    from .services.chat_history_service import ensure_indexes
+    await ensure_indexes()
     yield
     # Shutdown
     logger.info("Shutting down Lumie API...")
@@ -105,6 +110,8 @@ app.include_router(task_router, prefix="/api/v1")
 app.include_router(admin_task_router, prefix="/api/v1")
 app.include_router(analysis_router, prefix="/api/v1")
 app.include_router(dayprint_router, prefix="/api/v1")
+app.include_router(checkin_router, prefix="/api/v1")
+app.include_router(chat_history_router, prefix="/api/v1")
 
 
 @app.get("/")

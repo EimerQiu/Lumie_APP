@@ -64,19 +64,21 @@ class _DayprintTabState extends State<DayprintTab>
     if (_dayprint == null || _dayprint!.events.isEmpty) {
       return _EmptyDayprint(onRefresh: _load);
     }
-    return RefreshIndicator(
-      onRefresh: _load,
-      color: AppColors.primaryLemonDark,
-      child: ListView(
-        padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
-        children: [
-          _SectionHeader(
-            title: "Today's Log",
-            subtitle: '${_dayprint!.events.length} entries',
-          ),
-          const SizedBox(height: 12),
-          ..._dayprint!.events.reversed.map((e) => _EventTile(event: e)),
-        ],
+    return SelectionArea(
+      child: RefreshIndicator(
+        onRefresh: _load,
+        color: AppColors.primaryLemonDark,
+        child: ListView(
+          padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
+          children: [
+            _SectionHeader(
+              title: "Today's Log",
+              subtitle: '${_dayprint!.events.length} entries',
+            ),
+            const SizedBox(height: 12),
+            ..._dayprint!.events.reversed.map((e) => _EventTile(event: e)),
+          ],
+        ),
       ),
     );
   }
@@ -181,15 +183,23 @@ class _EventTile extends StatelessWidget {
   Widget build(BuildContext context) {
     final isTask = event.type == 'task_completed';
     final isChat = event.type == 'advisor_chat';
+    final isInsight = event.type == 'important_insight';
 
     final icon = isTask
         ? Icons.check_circle_outline_rounded
-        : Icons.chat_bubble_outline_rounded;
-    final iconColor =
-        isTask ? AppColors.success : AppColors.primaryLemonDark;
+        : isInsight
+            ? Icons.flag_rounded
+            : Icons.chat_bubble_outline_rounded;
+    final iconColor = isTask
+        ? AppColors.success
+        : isInsight
+            ? AppColors.accentOrange
+            : AppColors.primaryLemonDark;
     final iconBg = isTask
         ? const Color(0xFFDCFCE7)
-        : AppColors.primaryLemon;
+        : isInsight
+            ? const Color(0xFFFFF7ED)
+            : AppColors.primaryLemon;
 
     String title;
     String? subtitle;
@@ -197,6 +207,10 @@ class _EventTile extends StatelessWidget {
       title = event.data['task_name'] as String? ?? 'Task';
       final type = event.data['task_type'] as String? ?? '';
       subtitle = type.isNotEmpty ? type : null;
+    } else if (isInsight) {
+      title = event.data['summary'] as String? ?? 'Important insight';
+      final cat = event.data['category'] as String? ?? '';
+      subtitle = cat.isNotEmpty ? _formatCategory(cat) : null;
     } else if (isChat) {
       title = event.data['summary'] as String? ?? 'Advisor chat';
       subtitle = null;
@@ -211,9 +225,12 @@ class _EventTile extends StatelessWidget {
       child: Container(
         padding: const EdgeInsets.all(14),
         decoration: BoxDecoration(
-          color: AppColors.backgroundWhite,
+          color: isInsight ? const Color(0xFFFFFBF5) : AppColors.backgroundWhite,
           borderRadius: BorderRadius.circular(12),
           boxShadow: AppColors.cardShadow,
+          border: isInsight
+              ? Border(left: BorderSide(color: AppColors.accentOrange, width: 3))
+              : null,
         ),
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -267,6 +284,18 @@ class _EventTile extends StatelessWidget {
         ),
       ),
     );
+  }
+
+  String _formatCategory(String cat) {
+    const labels = {
+      'symptom': 'Symptom',
+      'medication': 'Medication',
+      'emotional': 'Emotional',
+      'health_concern': 'Health concern',
+      'urgent': 'Urgent',
+      'other': 'Note',
+    };
+    return labels[cat] ?? cat;
   }
 
   String _formatTime(String iso) {

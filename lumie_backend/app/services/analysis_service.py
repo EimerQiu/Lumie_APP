@@ -15,6 +15,7 @@ from .analysis_prompt_service import build_analysis_prompt
 from .analysis_llm_service import generate_analysis_code
 from .analysis_security_service import scan_code
 from .analysis_sandbox_service import run_in_sandbox, cleanup_sandbox, kill_container
+from .notification_service import queue_analysis_complete_notification
 
 logger = logging.getLogger(__name__)
 
@@ -280,6 +281,18 @@ async def _execute_job(job_id: str) -> None:
                     }},
                 )
                 logger.info(f"Job {job_id} completed successfully (attempt {attempt+1})")
+
+                # Queue push notification so the user knows the result is ready
+                try:
+                    summary_text = result_data.get("summary", "Your analysis is ready.")
+                    await queue_analysis_complete_notification(
+                        user_id=job["user_id"],
+                        job_id=job_id,
+                        summary=summary_text,
+                    )
+                except Exception as notify_err:
+                    logger.warning(f"Failed to queue analysis notification for job {job_id}: {notify_err}")
+
                 return
 
             # ❌ Execution failed — capture error and retry

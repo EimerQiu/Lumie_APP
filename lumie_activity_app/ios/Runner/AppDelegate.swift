@@ -7,6 +7,7 @@ import UserNotifications
 
   private var deviceToken: String?
   private var tokenCompletion: ((String?) -> Void)?
+  private var notificationChannel: FlutterMethodChannel?
 
   override func application(
     _ application: UIApplication,
@@ -14,18 +15,30 @@ import UserNotifications
   ) -> Bool {
     GeneratedPluginRegistrant.register(with: self)
 
-    // Set up MethodChannel for push token retrieval
+    // Become the notification center delegate so we can handle taps
+    UNUserNotificationCenter.current().delegate = self
+
+    // Set up MethodChannel for push token retrieval and notification events
     let controller = window?.rootViewController as! FlutterViewController
     let channel = FlutterMethodChannel(
       name: "com.lumie.app/push",
       binaryMessenger: controller.binaryMessenger
     )
+    notificationChannel = channel
 
     channel.setMethodCallHandler { [weak self] (call, result) in
       if call.method == "getDeviceToken" {
         self?.requestPushToken(application: application, result: result)
       } else {
         result(FlutterMethodNotImplemented)
+      }
+    }
+
+    // Check if the app was launched from a notification
+    if let notification = launchOptions?[.remoteNotification] as? [String: Any] {
+      // Defer until Flutter is ready — send after a short delay
+      DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
+        self?.notificationChannel?.invokeMethod("onNotificationTap", arguments: notification)
       }
     }
 
@@ -72,5 +85,31 @@ import UserNotifications
   ) {
     tokenCompletion?(nil)
     tokenCompletion = nil
+  }
+
+  // MARK: - UNUserNotificationCenterDelegate
+
+  /// Called when user taps a notification (app in background or terminated)
+  override func userNotificationCenter(
+    _ center: UNUserNotificationCenter,
+    didReceive response: UNNotificationResponse,
+    withCompletionHandler completionHandler: @escaping () -> Void
+  ) {
+    let userInfo = response.notification.request.content.userInfo
+    notificationChannel?.invokeMethod("onNotificationTap", arguments: userInfo)
+    completionHandler()
+  }
+
+  /// Called when notification arrives while app is in foreground — show it
+  override func userNotificationCenter(
+    _ center: UNUserNotificationCenter,
+    willPresent notification: UNNotification,
+    withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
+  ) {
+    if #available(iOS 14.0, *) {
+      completionHandler([.banner, .sound])
+    } else {
+      completionHandler([.alert, .sound])
+    }
   }
 }

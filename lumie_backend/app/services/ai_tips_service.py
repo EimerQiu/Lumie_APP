@@ -89,23 +89,29 @@ async def get_ai_tips(user_id: str, days_back: int, time_zone: str) -> AiTipsRes
         f"- Total: {total}, Completed: {completed} ({rate}%), "
         f"Expired: {expired}, Pending: {pending}\n"
         f"- Most common task type: {top_type}\n\n"
-        "Write a single motivating sentence (max 220 characters) with a concrete, "
-        "actionable tip based on their completion rate. Mention their rate. "
-        "No markdown, no bullet points."
+        "Write a warm, caring message (2-4 sentences, up to 500 characters) "
+        "based on these stats. Include the actual numbers."
     )
 
     try:
         client = _get_client()
         response = client.messages.create(
             model=_MODEL,
-            max_tokens=120,
+            max_tokens=250,
             system=(
-                "You are a concise productivity coach for a health task app. "
-                "Reply with exactly one plain-text sentence under 220 characters."
+                "You write caring encouragement for a teen health task app. "
+                "Your tone is like a loving parent who truly cares about the child: "
+                "warm, reassuring, patient, and kind. "
+                "Never sound like a productivity coach, manager, or lecture. "
+                "Focus on comfort, encouragement, and one doable next step. "
+                "You can gently suggest tapping for a chat with advisor when that would help. "
+                "Always use actual digits for numbers (e.g. '4 out of 7', '85%'), never spell them out as words. "
+                "Reply in 2-4 sentences, under 500 characters. "
+                "You may use markdown and bullet points."
             ),
             messages=[{"role": "user", "content": prompt}],
         )
-        tip = _clean(response.content[0].text)
+        tip = response.content[0].text.strip()
     except Exception as e:
         logger.error(f"Claude call failed in ai_tips_service: {e}")
         if rate >= 80:

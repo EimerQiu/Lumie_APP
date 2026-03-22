@@ -2,6 +2,7 @@
 
 import 'dart:async';
 import 'package:flutter/foundation.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:timezone/timezone.dart' as tz;
 import '../../../core/services/task_service.dart';
 import '../../../shared/models/task_models.dart';
@@ -186,6 +187,10 @@ class TasksProvider extends ChangeNotifier {
     // Remove from local list immediately for responsive UI
     _tasks.removeWhere((t) => t.taskId == taskId);
     notifyListeners();
+    // Invalidate cached AI tip so it refreshes on next visit
+    SharedPreferences.getInstance().then((prefs) {
+      prefs.remove('ai_tip_timestamp');
+    });
     // Reload to get fresh data
     await loadTasks();
   }

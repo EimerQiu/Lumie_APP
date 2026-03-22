@@ -2,12 +2,19 @@
 ///
 /// Requests APNs permission and uploads the device token to the backend.
 /// Uses native iOS APIs via MethodChannel — no Firebase dependency.
+///
+/// Also listens for notification taps and exposes a navigation callback
+/// so the app can deep-link to the correct screen (e.g. Advisor).
 
 import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import '../constants/api_constants.dart';
+
+/// Callback type for notification tap navigation.
+/// The [data] map contains the notification payload (e.g. `navigate_to`, `type`).
+typedef NotificationTapCallback = void Function(Map<String, dynamic> data);
 
 class PushNotificationService {
   static final PushNotificationService _instance =
@@ -18,14 +25,24 @@ class PushNotificationService {
   static const _channel = MethodChannel('com.lumie.app/push');
 
   String? _token;
+  NotificationTapCallback? _onTap;
 
   String? get token => _token;
+
+  /// Register a callback to be invoked when the user taps a push notification.
+  /// The callback receives the notification payload as a Map.
+  void setOnNotificationTap(NotificationTapCallback callback) {
+    _onTap = callback;
+  }
 
   /// Called on every app launch once the user is authenticated.
   /// Requests permission (no-op if already granted), retrieves the APNs
   /// device token, and POSTs it to the backend.
   Future<void> init(String authToken) async {
     if (!Platform.isIOS) return; // Android/FCM is P1
+
+    // Listen for notification tap events from native
+    _channel.setMethodCallHandler(_handleMethodCall);
 
     try {
       final deviceToken = await _channel.invokeMethod<String>('getDeviceToken');
@@ -36,6 +53,13 @@ class PushNotificationService {
     } on PlatformException catch (e) {
       // Permission denied or unavailable — not fatal
       print('Push notification init failed: ${e.message}');
+    }
+  }
+
+  Future<dynamic> _handleMethodCall(MethodCall call) async {
+    if (call.method == 'onNotificationTap') {
+      final data = Map<String, dynamic>.from(call.arguments as Map);
+      _onTap?.call(data);
     }
   }
 

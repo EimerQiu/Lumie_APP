@@ -22,6 +22,7 @@ class ApiConstants {
 
   // Advisor
   static const String advisorChat = '/advisor/chat';
+  static const String advisorHistory = '/advisor/history';
 
   // Analysis
   static const String analysisJobs = '/analysis/jobs';

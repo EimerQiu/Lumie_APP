@@ -10,6 +10,7 @@ from ..core.database import get_database
 from ..services.auth_service import get_current_user_id
 from ..services.advisor_service import get_advisor_reply
 from ..services.dayprint_service import log_advisor_chat
+from ..services.chat_history_service import save_exchange
 
 logger = logging.getLogger(__name__)
 
@@ -28,12 +29,14 @@ class AdvisorChatRequest(BaseModel):
     history: list[HistoryMessage] = []
     target_user_id: Optional[str] = None
     team_id: Optional[str] = None
+    session_id: Optional[str] = None
 
 
 class AdvisorChatResponse(BaseModel):
     type: str = "direct"        # "direct" or "analysis"
     reply: str
     job_id: Optional[str] = None
+    nav_hint: Optional[str] = None  # "task_list" | "task_dashboard" | None
 
 
 # ── Endpoint ──────────────────────────────────────────────────────────────────
@@ -69,19 +72,38 @@ async def advisor_chat(
             target_user_id=body.target_user_id,
             team_id=body.team_id,
         )
-        # Log to Dayprint in background (only for direct replies; analysis jobs
-        # are logged when polled so we have the actual result text)
-        if result.get("type") == "direct":
+        # Persist chat messages + log to Dayprint in background
+        session_id = body.session_id or ""
+        resp_type = result.get("type", "direct")
+
+        if resp_type == "direct":
             db = get_database()
             profile = await db.profiles.find_one({"user_id": user_id}, {"name": 1}) or {}
             user_name = profile.get("name", "")
             asyncio.create_task(
-                log_advisor_chat(user_id, user_name, body.message, result["reply"])
+                log_advisor_chat(user_id, user_name, body.message, result["reply"], session_id=body.session_id)
             )
+            # Save the full exchange to chat_messages for history
+            asyncio.create_task(
+                save_exchange(
+                    user_id, session_id, body.message, result["reply"],
+                    metadata={"type": "direct", "nav_hint": result.get("nav_hint")},
+                )
+            )
+        else:
+            # Analysis path: save user message now, assistant reply saved when job completes
+            asyncio.create_task(
+                save_exchange(
+                    user_id, session_id, body.message, result["reply"],
+                    metadata={"type": "analysis", "job_id": result.get("job_id")},
+                )
+            )
+
         return AdvisorChatResponse(
             type=result.get("type", "direct"),
             reply=result["reply"],
             job_id=result.get("job_id"),
+            nav_hint=result.get("nav_hint"),
         )
     except RuntimeError as e:
         # ANTHROPIC_API_KEY not configured

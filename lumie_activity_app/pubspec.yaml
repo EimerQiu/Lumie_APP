@@ -62,6 +62,9 @@ dependencies:
   # Timezone support for device timezone detection
   timezone: ^0.9.2
 
+  # UUID generation (e.g. advisor chat session IDs)
+  uuid: ^4.5.1
+
 dev_dependencies:
   flutter_test:
     sdk: flutter
