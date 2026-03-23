@@ -93,7 +93,9 @@ Configure these A records on GoDaddy for yumo.life:
 - **Backend Directory:** `/home/ubuntu/lumie_backend`
 - **Python Virtual Env:** `/home/ubuntu/lumie_backend/venv`
 - **Nginx Config:** `/etc/nginx/sites-available/yumo.org`
-- **systemd Service:** `lumie-api.service`
+- **systemd Services:**
+  - `lumie-api.service` — FastAPI backend (uvicorn, port 8000)
+  - `lumie-notify.service` — Push notification daemon (APNs, polls every 60s)
 
 ## Instructions
 
@@ -157,6 +159,35 @@ curl https://yumo.org/api/v1/health
 
 # View API documentation
 # Browser: https://yumo.org/docs
+```
+
+### 🔔 Notification Daemon
+
+The notification daemon (`lumie-notify.service`) runs independently of the API and sends push notifications via APNs. It is deployed alongside the backend code via `deploy.sh`.
+
+**Important:** After deploying backend changes, you must restart **both** services:
+```bash
+ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.177.85.124 "sudo systemctl restart lumie-api && sudo systemctl restart lumie-notify"
+```
+
+#### APNs Environment
+- **Production (TestFlight / App Store):** `APNS_USE_SANDBOX=false` → `api.push.apple.com`
+- **Development (Xcode direct install):** `APNS_USE_SANDBOX=true` → `api.sandbox.push.apple.com`
+- Currently set to **production** (`APNS_USE_SANDBOX=false`) in `.env`
+
+#### Notification Daemon Commands
+```bash
+# Check status
+ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.177.85.124 "sudo systemctl status lumie-notify"
+
+# Restart daemon
+ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.177.85.124 "sudo systemctl restart lumie-notify"
+
+# View real-time logs
+ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.177.85.124 "sudo journalctl -u lumie-notify -f"
+
+# View last 50 log lines
+ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.177.85.124 "sudo journalctl -u lumie-notify -n 50 --no-pager"
 ```
 
 ### 📊 Service Management
@@ -266,7 +297,7 @@ scp -i ~/.ssh/Lumie_Key.pem -r ./website/* ubuntu@54.177.85.124:/home/ubuntu/web
 ```bash
 cd /Users/ciline/Documents/development/projects/Lumie_APP/lumie_backend
 bash deploy.sh
-ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.177.85.124 "sudo systemctl restart lumie-api"
+ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.177.85.124 "sudo systemctl restart lumie-api && sudo systemctl restart lumie-notify"
 
 # Check health status
 curl https://yumo.org/api/v1/health
@@ -280,6 +311,9 @@ sudo systemctl status nginx --no-pager | head -3
 
 echo -e "\n=== API Service Status ==="
 sudo systemctl status lumie-api --no-pager | head -3
+
+echo -e "\n=== Notification Daemon Status ==="
+sudo systemctl status lumie-notify --no-pager | head -3
 
 echo -e "\n=== MongoDB Status ==="
 sudo systemctl status mongod --no-pager | head -3
@@ -568,6 +602,12 @@ ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.177.85.124 "sudo systemctl restart lumie-a
 - `SECRET_KEY` - JWT signing key (auto-generated)
 - `ACCESS_TOKEN_EXPIRE_MINUTES` - Token expiry (10080 = 7 days)
 - `CORS_ORIGINS` - Allowed API origins
+- `ANTHROPIC_API_KEY` - AI advisor API key
+- `APNS_KEY_PATH` - Path to APNs .p8 key file
+- `APNS_KEY_ID` - Apple key ID (9YS58RKP86)
+- `APNS_TEAM_ID` - Apple team ID (G756UPT65U)
+- `APNS_TOPIC` - Bundle ID (org.yumo.lumie)
+- `APNS_USE_SANDBOX` - `false` for TestFlight/production, `true` for Xcode dev builds
 
 ## API Endpoints
 
