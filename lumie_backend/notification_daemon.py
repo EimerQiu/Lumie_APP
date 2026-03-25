@@ -197,6 +197,18 @@ def _build_task_body(
             close_dt_local = close_dt.astimezone(display_tz)
             now_local = now.astimezone(display_tz)
 
+            # Calculate window progress percentage
+            open_str = task.get("open_datetime", "")
+            try:
+                open_dt = datetime.strptime(open_str, "%Y-%m-%d %H:%M").replace(tzinfo=timezone.utc)
+                duration = (close_dt - open_dt).total_seconds()
+                elapsed = (now - open_dt).total_seconds()
+                progress_pct = int(elapsed / duration * 100) if duration > 0 else 0
+                progress_pct = max(0, min(progress_pct, 100))
+                progress_prefix = f"Window {progress_pct}% elapsed. "
+            except Exception:
+                progress_prefix = ""
+
             if "medicine" in task_type or "med" in task_type or "medication" in task_type:
                 action_today = "Take it by"
                 action_future = "Take your meds by"
@@ -217,16 +229,16 @@ def _build_task_body(
                     time_str = f"{hours}h {minutes}m"
                 else:
                     time_str = f"{minutes}m"
-                body_text = f"You've got {time_str} left! 💪 {action_today} {close_time}"
+                body_text = f"{progress_prefix}You've got {time_str} left! 💪 {action_today} {close_time}"
             elif days_until == 1:
                 close_time = close_dt_local.strftime("%I:%M %p").lstrip("0")
-                body_text = f"Don't forget tomorrow! {action_future} {close_time} 🌟"
+                body_text = f"{progress_prefix}Don't forget tomorrow! {action_future} {close_time} 🌟"
             elif days_until < 7:
                 close_time = close_dt_local.strftime("%a %I:%M %p").lstrip("0")
-                body_text = f"You can do it! {action_future} {close_time} 💪"
+                body_text = f"{progress_prefix}You can do it! {action_future} {close_time} 💪"
             else:
                 close_time = close_dt_local.strftime("%b %d, %I:%M %p").lstrip("0")
-                body_text = f"No rush, but remember: {close_time} 😊"
+                body_text = f"{progress_prefix}No rush, but remember: {close_time} 😊"
         except Exception:
             body_text = "Don't forget!"
 
