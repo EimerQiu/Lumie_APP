@@ -150,6 +150,22 @@ class TaskService {
     _handleError(response, 'extend task');
   }
 
+  /// Save a note on a task
+  Future<Task> updateNote(String taskId, String note) async {
+    if (_token == null) throw Exception('Not authenticated');
+
+    final response = await http.patch(
+      Uri.parse('${ApiConstants.baseUrl}/tasks/$taskId/note'),
+      headers: _headers,
+      body: json.encode({'note': note}),
+    );
+
+    if (response.statusCode == 200) {
+      return Task.fromJson(json.decode(response.body));
+    }
+    _handleError(response, 'update note');
+  }
+
   /// Delete a task
   Future<void> deleteTask(String taskId) async {
     if (_token == null) throw Exception('Not authenticated');

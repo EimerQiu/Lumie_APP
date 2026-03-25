@@ -111,6 +111,7 @@ class AdminTaskService:
             rpttask_id=task.get("rpttask_id"),
             rpttask_name=task.get("task_name", ""),
             rpttask_info=task.get("task_info"),
+            note=task.get("note"),
             rpttask_type=task.get("task_type", ""),
             rpttask_list=rpttask_list,
             small_task_id=task.get("small_task_id"),

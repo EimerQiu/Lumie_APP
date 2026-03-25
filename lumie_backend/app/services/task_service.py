@@ -88,6 +88,7 @@ class TaskService:
             rpttask_id=doc.get("rpttask_id"),
             status=task_status,
             task_info=doc.get("task_info"),
+            note=doc.get("note"),
             completed_at=self._format_datetime(doc["done"]) if doc.get("done") else None,
             extension_count=doc.get("extension_count", 0),
             created_at=self._format_datetime(doc["created_at"]),
@@ -511,6 +512,33 @@ class TaskService:
         await db.tasks.delete_one({"task_id": task_id})
 
         return {"message": "Task deleted successfully"}
+
+    async def update_note(self, task_id: str, user_id: str, note: str) -> TaskResponse:
+        """Save a user note on a task."""
+        db = get_database()
+
+        task = await db.tasks.find_one({"task_id": task_id})
+        if not task:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Task not found"
+            )
+
+        if task["user_id"] != user_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Only the assigned user can add a note"
+            )
+
+        now = datetime.utcnow()
+        await db.tasks.update_one(
+            {"task_id": task_id},
+            {"$set": {"note": note, "updated_at": now}}
+        )
+
+        task["note"] = note
+        task["updated_at"] = now
+        return self._task_doc_to_response(task)
 
     # ============ Template Operations ============
 

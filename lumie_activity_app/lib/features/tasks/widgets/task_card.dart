@@ -81,7 +81,7 @@ class TaskCard extends StatelessWidget {
         onTap: onTap,
         child: Container(
           margin: const EdgeInsets.only(bottom: 12),
-          height: 55,
+          height: task.note != null && task.note!.isNotEmpty ? 72 : 55,
           decoration: BoxDecoration(
             color: _cardBase,
             borderRadius: BorderRadius.circular(12),
@@ -140,6 +140,19 @@ class TaskCard extends StatelessWidget {
                               textAlign: TextAlign.center,
                               overflow: TextOverflow.ellipsis,
                             ),
+                            if (task.note != null && task.note!.isNotEmpty) ...[
+                              const SizedBox(height: 2),
+                              Text(
+                                task.note!,
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  color: Colors.grey[600],
+                                ),
+                                maxLines: 1,
+                                textAlign: TextAlign.center,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ],
                           ],
                         ),
                       ),

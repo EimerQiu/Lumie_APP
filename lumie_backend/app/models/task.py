@@ -55,6 +55,7 @@ class TaskResponse(BaseModel):
     rpttask_id: Optional[str] = None
     status: TaskStatus
     task_info: Optional[str] = None
+    note: Optional[str] = None
     completed_at: Optional[str] = None
     extension_count: int = 0
     created_at: str
@@ -158,6 +159,7 @@ class AdminTaskData(BaseModel):
     rpttask_id: Optional[str] = None
     rpttask_name: str
     rpttask_info: Optional[str] = None
+    note: Optional[str] = None
     rpttask_type: str
     rpttask_list: List[RptTaskItem] = []
     small_task_id: Optional[str] = None

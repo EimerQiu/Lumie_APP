@@ -667,6 +667,25 @@ class _AdminTaskCard extends StatelessWidget {
             ),
           ],
 
+          // Note
+          if (task.note != null && task.note!.isNotEmpty) ...[
+            const SizedBox(height: 4),
+            Row(
+              children: [
+                Icon(Icons.sticky_note_2_outlined, size: 14, color: Colors.grey[500]),
+                const SizedBox(width: 4),
+                Expanded(
+                  child: Text(
+                    task.note!,
+                    style: TextStyle(fontSize: 12, color: Colors.grey[600], fontStyle: FontStyle.italic),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              ],
+            ),
+          ],
+
           const SizedBox(height: 8),
 
           // Time window

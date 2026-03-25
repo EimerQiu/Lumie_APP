@@ -2,7 +2,7 @@
 Task API Routes (Med-Reminder)
 """
 
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Body, Depends, Query, status
 from typing import Optional
 
 import asyncio
@@ -182,6 +182,16 @@ async def extend_task(
     - Cannot extend a completed task
     """
     return await task_service.extend_task(task_id, user_id)
+
+
+@router.patch("/{task_id}/note", response_model=TaskResponse)
+async def update_note(
+    task_id: str,
+    note: str = Body(..., embed=True, max_length=500),
+    user_id: str = Depends(get_current_user_id),
+):
+    """Save a user note on a task."""
+    return await task_service.update_note(task_id, user_id, note)
 
 
 @router.delete("/{task_id}")

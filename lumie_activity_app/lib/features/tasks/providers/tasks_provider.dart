@@ -205,6 +205,16 @@ class TasksProvider extends ChangeNotifier {
     }
   }
 
+  /// Save a note on a task
+  Future<void> updateNote(String taskId, String note) async {
+    final updatedTask = await _taskService.updateNote(taskId, note);
+    final idx = _tasks.indexWhere((t) => t.taskId == taskId);
+    if (idx != -1) {
+      _tasks[idx] = updatedTask;
+      notifyListeners();
+    }
+  }
+
   /// Delete a task
   Future<void> deleteTask(String taskId) async {
     await _taskService.deleteTask(taskId);

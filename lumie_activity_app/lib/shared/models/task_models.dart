@@ -87,6 +87,7 @@ class Task {
   final String? rpttaskId;
   final TaskStatus status;
   final String? taskInfo;
+  final String? note;
   final DateTime? completedAt;
   final int extensionCount;
   final DateTime createdAt;
@@ -104,6 +105,7 @@ class Task {
     this.rpttaskId,
     required this.status,
     this.taskInfo,
+    this.note,
     this.completedAt,
     this.extensionCount = 0,
     required this.createdAt,
@@ -123,6 +125,7 @@ class Task {
       rpttaskId: json['rpttask_id'] as String?,
       status: TaskStatus.fromString(json['status'] as String),
       taskInfo: json['task_info'] as String?,
+      note: json['note'] as String?,
       completedAt: json['completed_at'] != null
           ? DateTime.parse(_ensureUtcSuffix(json['completed_at'] as String))
           : null,
@@ -147,6 +150,7 @@ class Task {
       'rpttask_id': rpttaskId,
       'status': status.name,
       'task_info': taskInfo,
+      'note': note,
       'completed_at': completedAt?.toIso8601String(),
       'extension_count': extensionCount,
       'created_at': createdAt.toIso8601String(),
@@ -380,6 +384,7 @@ class AdminTaskData {
   final String? rpttaskId;
   final String rpttaskName;
   final String? rpttaskInfo;
+  final String? note;
   final String rpttaskType;
   final List<RptTaskItem> rpttaskList;
   final String? smallTaskId;
@@ -398,6 +403,7 @@ class AdminTaskData {
     this.rpttaskId,
     required this.rpttaskName,
     this.rpttaskInfo,
+    this.note,
     required this.rpttaskType,
     this.rpttaskList = const [],
     this.smallTaskId,
@@ -418,6 +424,7 @@ class AdminTaskData {
       rpttaskId: json['rpttask_id'] as String?,
       rpttaskName: json['rpttask_name'] as String,
       rpttaskInfo: json['rpttask_info'] as String?,
+      note: json['note'] as String?,
       rpttaskType: json['rpttask_type'] as String,
       rpttaskList: (json['rpttask_list'] as List?)
               ?.map((e) => RptTaskItem.fromJson(e as Map<String, dynamic>))
