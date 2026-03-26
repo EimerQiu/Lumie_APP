@@ -5,7 +5,6 @@ import 'package:provider/provider.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/services/rest_days_service.dart';
 import '../../../shared/models/activity_models.dart';
-import '../../../shared/models/ring_models.dart';
 import '../../../shared/widgets/circular_progress_indicator.dart';
 import '../../../shared/widgets/gradient_card.dart';
 import '../../../shared/widgets/intensity_badge.dart';
@@ -408,10 +407,8 @@ class _DashboardScreenState extends State<DashboardScreen>
           padding: const EdgeInsets.only(right: 16),
           child: Consumer<RingProvider>(
             builder: (context, ring, _) {
-              final connectionStatus = ring.ringInfo?.connectionStatus;
-              final isConnected = connectionStatus == RingConnectionStatus.connected;
               return RingStatusIndicator(
-                status: isConnected ? RingStatus.connected : RingStatus.disconnected,
+                status: ring.isConnected ? RingStatus.connected : RingStatus.disconnected,
                 batteryLevel: ring.ringInfo?.batteryLevel,
                 compact: true,
                 onTap: () => Navigator.pushNamed(context, '/ring/manage'),

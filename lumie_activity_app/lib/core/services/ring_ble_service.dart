@@ -33,6 +33,9 @@ class RingBleService {
   StreamSubscription<BluetoothConnectionState>? _connectionStateSub;
   VoidCallback? onDisconnected;
 
+  // Keep-alive timer (command 0x2A sent every 30 seconds while connected)
+  Timer? _keepAliveTimer;
+
   bool get isConnected => _connectedDevice != null && _writeChar != null;
 
   // ─── Scanning ────────────────────────────────────────────────────────────
@@ -150,6 +153,7 @@ class RingBleService {
     final ringName = 'Lumie Ring ${macFormatted.length >= 5 ? macFormatted.substring(macFormatted.length - 5).replaceAll(':', '') : macFormatted}';
 
     _subscribeToConnectionState(device);
+    _startKeepAlive();
     debugPrint('[Ring BLE] Pairing complete: $ringName');
 
     return RingInfo(
@@ -164,6 +168,7 @@ class RingBleService {
 
   Future<void> disconnect() async {
     debugPrint('[Ring BLE] disconnect called');
+    _stopKeepAlive();
     // Cancel connection state subscription first to avoid spurious callbacks
     await _connectionStateSub?.cancel();
     _connectionStateSub = null;
@@ -193,6 +198,7 @@ class RingBleService {
     _connectionStateSub = device.connectionState.listen((state) {
       debugPrint('[Ring BLE] Connection state changed: $state');
       if (state == BluetoothConnectionState.disconnected) {
+        _stopKeepAlive();
         // Cancel subscription BEFORE nulling it, so it's properly disposed
         _connectionStateSub?.cancel();
         _connectionStateSub = null;
@@ -204,6 +210,35 @@ class RingBleService {
       }
     });
   }
+
+  // ─── Keep-alive (command 0x2A) ────────────────────────────────────────────
+
+  void _startKeepAlive() {
+    _keepAliveTimer?.cancel();
+    _keepAliveTimer = Timer.periodic(const Duration(seconds: 30), (_) {
+      _sendActivityPing();
+    });
+    debugPrint('[Ring BLE] Keep-alive timer started (0x2A every 30s)');
+  }
+
+  void _stopKeepAlive() {
+    _keepAliveTimer?.cancel();
+    _keepAliveTimer = null;
+  }
+
+  /// Command 0x2A — Request current activity data (step count ping).
+  /// Fire-and-forget; ring responds asynchronously via notify channel.
+  void _sendActivityPing() {
+    if (_writeChar == null) return;
+    final payload = List<int>.filled(15, 0);
+    payload[0] = 0x2A;
+    _writeCommand(payload).catchError((e) {
+      debugPrint('[Ring BLE] 0x2A ping error: $e');
+    });
+  }
+
+  /// Public wrapper so the provider can read battery level after reconnect.
+  Future<int?> fetchBatteryLevel() => _getBatteryLevel();
 
   /// Reconnect to a previously paired ring by device ID (no full handshake).
   /// Discovers GATT, enables notifications, and re-syncs time.
@@ -250,6 +285,7 @@ class RingBleService {
     await _setTime();
     debugPrint('[Ring BLE] Reconnect complete, time synced');
     _subscribeToConnectionState(device);
+    _startKeepAlive();
   }
 
   // ─── Heart Rate ───────────────────────────────────────────────────────────

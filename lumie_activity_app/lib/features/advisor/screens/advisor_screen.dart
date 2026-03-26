@@ -86,7 +86,7 @@ class _ChatTab extends StatefulWidget {
   State<_ChatTab> createState() => _ChatTabState();
 }
 
-class _ChatTabState extends State<_ChatTab> with WidgetsBindingObserver {
+class _ChatTabState extends State<_ChatTab> {
   final TextEditingController _input = TextEditingController();
   final ScrollController _scroll = ScrollController();
   final AdvisorService _advisor = AdvisorService();
@@ -102,48 +102,25 @@ class _ChatTabState extends State<_ChatTab> with WidgetsBindingObserver {
   bool _isLoading = true;
 
   static const _sessionIdKey = 'advisor_active_session_id';
-  static const _lastActiveKey = 'advisor_last_active_at';
-  static const _sessionTimeoutMinutes = 2;
 
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addObserver(this);
     _initSession();
   }
 
   @override
   void dispose() {
-    WidgetsBinding.instance.removeObserver(this);
     _input.dispose();
     _scroll.dispose();
     super.dispose();
   }
 
-  @override
-  void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.paused) {
-      _saveLastActiveTime();
-    } else if (state == AppLifecycleState.resumed) {
-      _checkSessionTimeout();
-    }
-  }
-
   Future<void> _initSession() async {
     final prefs = await SharedPreferences.getInstance();
     final savedId = prefs.getString(_sessionIdKey);
-    final lastActiveStr = prefs.getString(_lastActiveKey);
 
-    bool shouldResume = false;
-    if (savedId != null && lastActiveStr != null) {
-      final lastActive = DateTime.tryParse(lastActiveStr);
-      if (lastActive != null) {
-        final elapsed = DateTime.now().difference(lastActive);
-        shouldResume = elapsed.inMinutes < _sessionTimeoutMinutes;
-      }
-    }
-
-    if (shouldResume && savedId != null) {
+    if (savedId != null) {
       _sessionId = savedId;
       final messages = await _historyService.fetchSessionMessages(savedId);
       if (mounted && messages.isNotEmpty) {
@@ -159,7 +136,7 @@ class _ChatTabState extends State<_ChatTab> with WidgetsBindingObserver {
       }
     }
 
-    // New session
+    // No saved session — start fresh
     await _saveActiveSession();
     if (mounted) setState(() => _isLoading = false);
   }
@@ -167,27 +144,6 @@ class _ChatTabState extends State<_ChatTab> with WidgetsBindingObserver {
   Future<void> _saveActiveSession() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_sessionIdKey, _sessionId);
-    await _saveLastActiveTime();
-  }
-
-  Future<void> _saveLastActiveTime() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(
-        _lastActiveKey, DateTime.now().toUtc().toIso8601String());
-  }
-
-  Future<void> _checkSessionTimeout() async {
-    final prefs = await SharedPreferences.getInstance();
-    final lastActiveStr = prefs.getString(_lastActiveKey);
-    if (lastActiveStr == null) return;
-    final lastActive = DateTime.tryParse(lastActiveStr);
-    if (lastActive == null) return;
-    final elapsed = DateTime.now().difference(lastActive);
-    if (elapsed.inMinutes >= _sessionTimeoutMinutes) {
-      _startNewSession();
-    } else {
-      await _saveLastActiveTime();
-    }
   }
 
   void _startNewSession() {
@@ -242,7 +198,6 @@ class _ChatTabState extends State<_ChatTab> with WidgetsBindingObserver {
       _isTyping = true;
     });
     _scrollToBottom();
-    _saveLastActiveTime();
 
     final response =
         await _advisor.sendMessage(text, history: _history, sessionId: _sessionId);

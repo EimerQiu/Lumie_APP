@@ -72,6 +72,7 @@ class RingProvider extends ChangeNotifier {
   void _handleDisconnected() {
     if (_ringInfo?.isPaired == true) {
       debugPrint('[Ring] Disconnected — scheduling auto-reconnect');
+      _ringInfo = _ringInfo?.copyWith(connectionStatus: RingConnectionStatus.disconnected);
       _state = RingProviderState.disconnected;
       notifyListeners();
       // Auto-reconnect with retry after a short delay
@@ -83,18 +84,23 @@ class RingProvider extends ChangeNotifier {
   Future<void> tryReconnect() => _tryReconnect();
 
   Future<void> _tryReconnect() async {
+    if (_bleService.isConnected) return; // Already connected
     final deviceId = _ringInfo?.ringDeviceId;
     if (deviceId == null) return;
     debugPrint('[Ring] tryReconnect: $deviceId');
     try {
       await _bleService.reconnect(deviceId);
-      _ringInfo =
-          _ringInfo?.copyWith(connectionStatus: RingConnectionStatus.connected);
+      final battery = await _bleService.fetchBatteryLevel();
+      _ringInfo = _ringInfo?.copyWith(
+        connectionStatus: RingConnectionStatus.connected,
+        batteryLevel: battery ?? _ringInfo?.batteryLevel,
+      );
       _state = RingProviderState.paired;
       debugPrint('[Ring] Reconnect succeeded');
       notifyListeners();
     } catch (e) {
       debugPrint('[Ring] Reconnect failed: $e');
+      _ringInfo = _ringInfo?.copyWith(connectionStatus: RingConnectionStatus.disconnected);
       _state = RingProviderState.disconnected;
       notifyListeners();
     }
@@ -118,7 +124,11 @@ class RingProvider extends ChangeNotifier {
 
       try {
         await _bleService.reconnect(deviceId);
-        _ringInfo = _ringInfo?.copyWith(connectionStatus: RingConnectionStatus.connected);
+        final battery = await _bleService.fetchBatteryLevel();
+        _ringInfo = _ringInfo?.copyWith(
+          connectionStatus: RingConnectionStatus.connected,
+          batteryLevel: battery ?? _ringInfo?.batteryLevel,
+        );
         _state = RingProviderState.paired;
         debugPrint('[Ring] Auto-reconnect succeeded on attempt $attempt');
         notifyListeners();
@@ -127,6 +137,7 @@ class RingProvider extends ChangeNotifier {
         debugPrint('[Ring] Auto-reconnect attempt $attempt failed: $e');
         if (attempt == maxAttempts) {
           debugPrint('[Ring] All reconnect attempts exhausted');
+          _ringInfo = _ringInfo?.copyWith(connectionStatus: RingConnectionStatus.disconnected);
           _state = RingProviderState.disconnected;
           notifyListeners();
         }
