@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/services/sleep_service.dart';
 import '../../../shared/models/sleep_models.dart';
 import '../../../shared/widgets/gradient_card.dart';
+import '../../ring/providers/ring_provider.dart';
 import '../widgets/sleep_stage_chart.dart';
 import '../widgets/sleep_metric_card.dart';
 
@@ -20,6 +22,7 @@ class _SleepScreenState extends State<SleepScreen> {
   SleepTarget? _sleepTarget;
   bool _isLoading = true;
   String? _errorMessage;
+  String _syncMessage = 'Loading…';
 
   @override
   void initState() {
@@ -31,9 +34,21 @@ class _SleepScreenState extends State<SleepScreen> {
     setState(() {
       _isLoading = true;
       _errorMessage = null;
+      _syncMessage = 'Loading…';
     });
 
     try {
+      final ringProvider = Provider.of<RingProvider>(context, listen: false);
+      if (ringProvider.isConnected) {
+        setState(() => _syncMessage = 'Syncing from ring…');
+        final records = await ringProvider.fetchSleepHistory();
+        if (records.isNotEmpty) {
+          setState(() => _syncMessage = 'Saving sleep data…');
+          await _sleepService.syncFromRingRecords(records);
+        }
+      }
+
+      setState(() => _syncMessage = 'Loading sleep data…');
       final results = await Future.wait([
         _sleepService.getLatestSleep(),
         _sleepService.getSleepTarget(),
@@ -61,8 +76,23 @@ class _SleepScreenState extends State<SleepScreen> {
           slivers: [
             _buildHeader(),
             if (_isLoading)
-              const SliverFillRemaining(
-                child: Center(child: CircularProgressIndicator()),
+              SliverFillRemaining(
+                child: Center(
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      const CircularProgressIndicator(),
+                      const SizedBox(height: 16),
+                      Text(
+                        _syncMessage,
+                        style: TextStyle(
+                          fontSize: 14,
+                          color: AppColors.textSecondary,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
               )
             else if (_errorMessage != null)
               SliverFillRemaining(

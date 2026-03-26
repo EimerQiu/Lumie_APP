@@ -126,7 +126,7 @@ class SleepSession {
       stages: (json['stages'] as List)
           .map((s) => SleepStageData.fromJson(s))
           .toList(),
-      restingHeartRate: json['resting_heart_rate'] as int,
+      restingHeartRate: (json['resting_heart_rate'] as int?) ?? 0,
       sleepQualityScore: (json['sleep_quality_score'] as num).toDouble(),
       createdAt: DateTime.parse(json['created_at'] as String),
     );

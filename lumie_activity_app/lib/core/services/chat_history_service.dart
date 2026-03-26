@@ -52,6 +52,30 @@ class PersistedMessage {
   bool get isUser => role == 'user';
 }
 
+/// A summary of one chat session shown in the history list.
+class SessionSummary {
+  final String sessionId;
+  final String startedAt;
+  final String preview;
+  final int messageCount;
+
+  const SessionSummary({
+    required this.sessionId,
+    required this.startedAt,
+    required this.preview,
+    required this.messageCount,
+  });
+
+  factory SessionSummary.fromJson(Map<String, dynamic> json) {
+    return SessionSummary(
+      sessionId: json['session_id'] as String? ?? '',
+      startedAt: json['started_at'] as String? ?? '',
+      preview: json['preview'] as String? ?? '',
+      messageCount: json['message_count'] as int? ?? 0,
+    );
+  }
+}
+
 class ChatHistoryService {
   static final ChatHistoryService _instance = ChatHistoryService._internal();
   factory ChatHistoryService() => _instance;
@@ -145,6 +169,51 @@ class ChatHistoryService {
   Future<void> clearCache() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove(_cacheKey);
+  }
+
+  // ── Session list & messages ───────────────────────────────────────────────
+
+  /// Fetch all sessions for this user, newest first.
+  Future<List<SessionSummary>> fetchSessions({int limit = 50}) async {
+    try {
+      final url = '${ApiConstants.baseUrl}${ApiConstants.advisorSessions}?limit=$limit';
+      final response = await http
+          .get(Uri.parse(url), headers: _headers)
+          .timeout(ApiConstants.receiveTimeout);
+
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body) as Map<String, dynamic>;
+        final list = data['sessions'] as List;
+        return list
+            .map((s) => SessionSummary.fromJson(s as Map<String, dynamic>))
+            .toList();
+      }
+    } catch (e) {
+      print('ChatHistoryService.fetchSessions error: $e');
+    }
+    return [];
+  }
+
+  /// Fetch all messages for a specific session, in chronological order.
+  Future<List<PersistedMessage>> fetchSessionMessages(String sessionId) async {
+    try {
+      final url =
+          '${ApiConstants.baseUrl}${ApiConstants.advisorSessions}/$sessionId/messages';
+      final response = await http
+          .get(Uri.parse(url), headers: _headers)
+          .timeout(ApiConstants.receiveTimeout);
+
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body) as Map<String, dynamic>;
+        final list = data['messages'] as List;
+        return list
+            .map((m) => PersistedMessage.fromJson(m as Map<String, dynamic>))
+            .toList();
+      }
+    } catch (e) {
+      print('ChatHistoryService.fetchSessionMessages error: $e');
+    }
+    return [];
   }
 
   // ── Combined load (cache-first, then server sync) ────────────────────────

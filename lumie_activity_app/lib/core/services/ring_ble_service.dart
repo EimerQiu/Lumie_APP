@@ -401,6 +401,97 @@ class RingBleService {
     debugPrint('[Ring BLE] HR streaming stopped');
   }
 
+  // ─── Sleep ────────────────────────────────────────────────────────────────
+
+  /// Command 0x53 — Fetch stored sleep sessions from the ring.
+  /// Returns one record per sleep session (AA=0x00 fetches all stored).
+  Future<List<RingRawSleepRecord>> fetchSleepHistory() async {
+    if (_notifyChar == null) {
+      debugPrint('[Ring BLE] fetchSleepHistory: not connected');
+      return [];
+    }
+    debugPrint('[Ring BLE] fetchSleepHistory: sending 0x53 AA=0x00');
+
+    final records = <RingRawSleepRecord>[];
+    final completer = Completer<List<RingRawSleepRecord>>();
+    StreamSubscription<List<int>>? sub;
+
+    sub = _notifyChar!.lastValueStream.listen((data) {
+      if (data.isEmpty || data[0] != 0x53) return;
+
+      // End-of-data marker: 0x53 0xFF
+      if (data.length >= 2 && data[1] == 0xFF) {
+        debugPrint('[Ring BLE] Sleep history end marker — ${records.length} record(s)');
+        if (!completer.isCompleted) completer.complete(records);
+        return;
+      }
+
+      // Need at least header (10 bytes) + N stage bytes
+      if (data.length < 10) return;
+
+      final yy = _bcdToDecimal(data[3]);
+      final mm = _bcdToDecimal(data[4]);
+      final dd = _bcdToDecimal(data[5]);
+      final hh = _bcdToDecimal(data[6]);
+      final min = _bcdToDecimal(data[7]);
+      final ss = _bcdToDecimal(data[8]);
+      final n = data[9]; // valid stage count (1–120 minutes)
+
+      if (n < 1 || n > 120) return;
+      if (data.length < 10 + n) return;
+
+      final sessionStart = DateTime(2000 + yy, mm, dd, hh, min, ss);
+      final sessionEnd = sessionStart.add(Duration(minutes: n));
+
+      int deep = 0, light = 0, rem = 0, awake = 0;
+      for (var i = 0; i < n; i++) {
+        final stage = data[10 + i];
+        if (stage == 0x01) {
+          deep++;
+        } else if (stage == 0x02) {
+          light++;
+        } else if (stage == 0x03) {
+          rem++;
+        } else {
+          awake++;
+        }
+      }
+
+      debugPrint(
+        '[Ring BLE] Sleep record: $sessionStart  N=$n  '
+        'light=${light}m deep=${deep}m rem=${rem}m awake=${awake}m',
+      );
+
+      records.add(RingRawSleepRecord(
+        sessionStart: sessionStart,
+        sessionEnd: sessionEnd,
+        lightMinutes: light,
+        deepMinutes: deep,
+        remMinutes: rem,
+        awakeMinutes: awake,
+      ));
+    });
+
+    try {
+      final payload = List<int>.filled(15, 0);
+      payload[0] = 0x53;
+      payload[1] = 0x00; // read all stored sessions
+      await _writeCommand(payload);
+      return await completer.future.timeout(
+        const Duration(seconds: 10),
+        onTimeout: () {
+          debugPrint('[Ring BLE] fetchSleepHistory timeout — returning ${records.length} record(s)');
+          return records;
+        },
+      );
+    } catch (e) {
+      debugPrint('[Ring BLE] fetchSleepHistory error: $e');
+      return records;
+    } finally {
+      await sub.cancel();
+    }
+  }
+
   // ─── Commands ────────────────────────────────────────────────────────────
 
   /// Command 0x01 — Set Time

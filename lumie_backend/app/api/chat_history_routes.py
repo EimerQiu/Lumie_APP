@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 
 from ..services.auth_service import get_current_user_id
-from ..services.chat_history_service import get_history
+from ..services.chat_history_service import get_history, get_session_messages, get_sessions
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +25,62 @@ class ChatMessageResponse(BaseModel):
 class ChatHistoryResponse(BaseModel):
     messages: list[ChatMessageResponse]
     has_more: bool
+
+
+class SessionSummaryResponse(BaseModel):
+    session_id: str
+    started_at: str
+    preview: str
+    message_count: int
+
+
+class SessionListResponse(BaseModel):
+    sessions: list[SessionSummaryResponse]
+
+
+class SessionMessagesResponse(BaseModel):
+    messages: list[ChatMessageResponse]
+
+
+@router.get("/sessions", response_model=SessionListResponse)
+async def list_sessions(
+    user_id: str = Depends(get_current_user_id),
+    limit: int = Query(default=50, ge=1, le=200),
+):
+    """List all chat sessions for the user, newest first."""
+    sessions = await get_sessions(user_id, limit=limit)
+    return SessionListResponse(
+        sessions=[
+            SessionSummaryResponse(
+                session_id=s["session_id"],
+                started_at=s["started_at"],
+                preview=s["preview"],
+                message_count=s["message_count"],
+            )
+            for s in sessions
+        ]
+    )
+
+
+@router.get("/sessions/{session_id}/messages", response_model=SessionMessagesResponse)
+async def get_session(
+    session_id: str,
+    user_id: str = Depends(get_current_user_id),
+):
+    """Fetch all messages for a specific session in chronological order."""
+    messages = await get_session_messages(user_id, session_id)
+    return SessionMessagesResponse(
+        messages=[
+            ChatMessageResponse(
+                session_id=m.get("session_id", ""),
+                role=m["role"],
+                content=m["content"],
+                metadata=m.get("metadata", {}),
+                created_at=m["created_at"],
+            )
+            for m in messages
+        ]
+    )
 
 
 @router.get("/history", response_model=ChatHistoryResponse)

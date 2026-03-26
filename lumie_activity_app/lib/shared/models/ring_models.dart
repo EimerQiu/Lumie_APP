@@ -127,6 +127,29 @@ class DiscoveredRing {
   }
 }
 
+/// Raw sleep session data parsed from ring command 0x53.
+/// One record = one contiguous sleep session.
+class RingRawSleepRecord {
+  final DateTime sessionStart;  // BCD timestamp from ring
+  final DateTime sessionEnd;    // sessionStart + N minutes
+  final int lightMinutes;
+  final int deepMinutes;
+  final int remMinutes;
+  final int awakeMinutes;
+
+  const RingRawSleepRecord({
+    required this.sessionStart,
+    required this.sessionEnd,
+    required this.lightMinutes,
+    required this.deepMinutes,
+    required this.remMinutes,
+    required this.awakeMinutes,
+  });
+
+  int get totalSleepMinutes => lightMinutes + deepMinutes + remMinutes;
+  int get totalMinutes => totalSleepMinutes + awakeMinutes;
+}
+
 /// Real-time data streamed from ring (command 0x09)
 class RingStreamData {
   final int steps;

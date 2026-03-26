@@ -129,6 +129,39 @@ async def get_session_messages(
     return await cursor.to_list(length=500)
 
 
+async def get_sessions(user_id: str, limit: int = 50) -> list[dict]:
+    """Fetch distinct sessions for a user, newest first.
+
+    Returns one entry per session:
+        session_id, started_at, preview (first message), message_count
+    """
+    db = get_database()
+    pipeline = [
+        {"$match": {"user_id": user_id}},
+        {"$sort": {"created_at": 1}},
+        {
+            "$group": {
+                "_id": "$session_id",
+                "started_at": {"$first": "$created_at"},
+                "preview": {"$first": "$content"},
+                "message_count": {"$sum": 1},
+            }
+        },
+        {"$sort": {"started_at": -1}},
+        {"$limit": limit},
+        {
+            "$project": {
+                "_id": 0,
+                "session_id": "$_id",
+                "started_at": 1,
+                "preview": 1,
+                "message_count": 1,
+            }
+        },
+    ]
+    return await db.chat_messages.aggregate(pipeline).to_list(length=limit)
+
+
 async def ensure_indexes() -> None:
     """Create indexes if they don't exist. Call on app startup."""
     db = get_database()

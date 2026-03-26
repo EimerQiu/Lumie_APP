@@ -1,11 +1,11 @@
 import 'dart:convert';
-import 'dart:math';
 import 'package:http/http.dart' as http;
 import '../constants/api_constants.dart';
 import 'auth_service.dart';
 import '../../shared/models/sleep_models.dart';
+import '../../shared/models/ring_models.dart';
 
-/// Sleep service for managing sleep data
+/// Sleep service — reads from the backend and syncs ring data.
 class SleepService {
   static final SleepService _instance = SleepService._internal();
   factory SleepService() => _instance;
@@ -18,227 +18,153 @@ class SleepService {
         'Authorization': 'Bearer ${_authService.token}',
       };
 
-  /// Get the most recent sleep session
-  Future<SleepSession?> getLatestSleep() async {
-    try {
-      final response = await http.get(
-        Uri.parse('${ApiConstants.baseUrl}/sleep/latest'),
-        headers: _headers,
-      ).timeout(const Duration(seconds: 3));
+  // ─── Ring sync ────────────────────────────────────────────────────────────
 
-      if (response.statusCode == 200) {
-        final data = json.decode(response.body);
-        return data != null ? SleepSession.fromJson(data) : null;
-      } else {
-        throw Exception('Failed to get latest sleep');
-      }
+  /// Upload raw sleep records fetched from the ring to the backend.
+  /// Converts each [RingRawSleepRecord] to a [SleepSession] payload and POSTs
+  /// to /sleep/sync. Silently ignores network errors (best-effort).
+  Future<void> syncFromRingRecords(List<RingRawSleepRecord> records) async {
+    if (records.isEmpty) return;
+
+    final sessions = records
+        .where((r) => r.totalSleepMinutes > 0)
+        .map((r) => _ringRecordToPayload(r))
+        .toList();
+
+    if (sessions.isEmpty) return;
+
+    try {
+      await http.post(
+        Uri.parse('${ApiConstants.baseUrl}/sleep/sync'),
+        headers: _headers,
+        body: json.encode({'sessions': sessions}),
+      ).timeout(const Duration(seconds: 10));
     } catch (e) {
-      // Fallback to mock data for local development
-      return _mockGetLatestSleep();
+      // Best-effort — data will be re-uploaded on next sync
     }
   }
 
-  /// Get sleep sessions for a date range
+  Map<String, dynamic> _ringRecordToPayload(RingRawSleepRecord r) {
+    final total = r.totalSleepMinutes;
+    final stages = <Map<String, dynamic>>[];
+
+    if (r.lightMinutes > 0) {
+      stages.add({
+        'stage': 'light',
+        'duration_minutes': r.lightMinutes,
+        'percentage': r.lightMinutes / total * 100,
+      });
+    }
+    if (r.deepMinutes > 0) {
+      stages.add({
+        'stage': 'deep',
+        'duration_minutes': r.deepMinutes,
+        'percentage': r.deepMinutes / total * 100,
+      });
+    }
+    if (r.remMinutes > 0) {
+      stages.add({
+        'stage': 'rem',
+        'duration_minutes': r.remMinutes,
+        'percentage': r.remMinutes / total * 100,
+      });
+    }
+
+    // Quality score: weighted by healthy stage ratios
+    //   Deep target 25% → 40 pts max
+    //   REM target 25%  → 35 pts max
+    //   Duration 8 hrs  → 25 pts max
+    final deepPct = r.deepMinutes / total * 100;
+    final remPct = r.remMinutes / total * 100;
+    final quality = (deepPct / 25.0).clamp(0.0, 1.0) * 40 +
+        (remPct / 25.0).clamp(0.0, 1.0) * 35 +
+        (total / 480.0).clamp(0.0, 1.0) * 25;
+
+    return {
+      'session_id': '${r.sessionStart.millisecondsSinceEpoch}',
+      'bedtime': r.sessionStart.toIso8601String(),
+      'wake_time': r.sessionEnd.toIso8601String(),
+      'total_sleep_minutes': total,
+      'time_awake_minutes': r.awakeMinutes,
+      'stages': stages,
+      'resting_heart_rate': 0,
+      'sleep_quality_score': quality,
+    };
+  }
+
+  // ─── Read endpoints ───────────────────────────────────────────────────────
+
+  /// Get the most recent sleep session.
+  Future<SleepSession?> getLatestSleep() async {
+    final response = await http.get(
+      Uri.parse('${ApiConstants.baseUrl}/sleep/latest'),
+      headers: _headers,
+    ).timeout(const Duration(seconds: 5));
+
+    if (response.statusCode == 200) {
+      final data = json.decode(response.body);
+      return data != null ? SleepSession.fromJson(data) : null;
+    }
+    return null;
+  }
+
+  /// Get sleep sessions for a date range.
   Future<List<SleepSession>> getSleepHistory({
     required DateTime startDate,
     required DateTime endDate,
   }) async {
-    try {
-      final response = await http.get(
-        Uri.parse(
-          '${ApiConstants.baseUrl}/sleep/history?start=${startDate.toIso8601String()}&end=${endDate.toIso8601String()}',
-        ),
-        headers: _headers,
-      ).timeout(const Duration(seconds: 3));
+    final response = await http.get(
+      Uri.parse(
+        '${ApiConstants.baseUrl}/sleep/history'
+        '?start=${startDate.toIso8601String()}&end=${endDate.toIso8601String()}',
+      ),
+      headers: _headers,
+    ).timeout(const Duration(seconds: 5));
 
-      if (response.statusCode == 200) {
-        final data = json.decode(response.body) as List;
-        return data.map((s) => SleepSession.fromJson(s)).toList();
-      } else {
-        throw Exception('Failed to get sleep history');
-      }
-    } catch (e) {
-      // Fallback to mock data for local development
-      return _mockGetSleepHistory(startDate: startDate, endDate: endDate);
+    if (response.statusCode == 200) {
+      final data = json.decode(response.body) as List;
+      return data.map((s) => SleepSession.fromJson(s)).toList();
     }
+    return [];
   }
 
-  /// Get sleep summary for a date range
-  Future<SleepSummary> getSleepSummary({
+  /// Get sleep summary for a date range.
+  Future<SleepSummary?> getSleepSummary({
     required DateTime startDate,
     required DateTime endDate,
   }) async {
-    try {
-      final response = await http.get(
-        Uri.parse(
-          '${ApiConstants.baseUrl}/sleep/summary?start=${startDate.toIso8601String()}&end=${endDate.toIso8601String()}',
-        ),
-        headers: _headers,
-      ).timeout(const Duration(seconds: 3));
+    final response = await http.get(
+      Uri.parse(
+        '${ApiConstants.baseUrl}/sleep/summary'
+        '?start=${startDate.toIso8601String()}&end=${endDate.toIso8601String()}',
+      ),
+      headers: _headers,
+    ).timeout(const Duration(seconds: 5));
 
-      if (response.statusCode == 200) {
-        return SleepSummary.fromJson(json.decode(response.body));
-      } else {
-        throw Exception('Failed to get sleep summary');
-      }
-    } catch (e) {
-      // Fallback to mock data for local development
-      return _mockGetSleepSummary(startDate: startDate, endDate: endDate);
+    if (response.statusCode == 200) {
+      return SleepSummary.fromJson(json.decode(response.body));
     }
+    return null;
   }
 
-  /// Get sleep target based on user age
+  /// Get sleep target based on user age.
   Future<SleepTarget> getSleepTarget() async {
     try {
       final response = await http.get(
         Uri.parse('${ApiConstants.baseUrl}/sleep/target'),
         headers: _headers,
-      ).timeout(const Duration(seconds: 3));
+      ).timeout(const Duration(seconds: 5));
 
       if (response.statusCode == 200) {
         return SleepTarget.fromJson(json.decode(response.body));
-      } else {
-        throw Exception('Failed to get sleep target');
       }
-    } catch (e) {
-      // Fallback to mock data for local development
-      return _mockGetSleepTarget();
-    }
-  }
+    } catch (_) {}
 
-  /// Mock latest sleep for local development
-  Future<SleepSession?> _mockGetLatestSleep() async {
-    await Future.delayed(const Duration(milliseconds: 300));
-
-    final now = DateTime.now();
-    final lastNight = DateTime(now.year, now.month, now.day - 1, 22, 30);
-    final thismorning = DateTime(now.year, now.month, now.day, 6, 45);
-
-    return SleepSession(
-      sessionId: 'mock_sleep_${now.millisecondsSinceEpoch}',
-      userId: _authService.currentUser?.userId ?? 'mock_user',
-      bedtime: lastNight,
-      wakeTime: thismorning,
-      totalSleepTime: const Duration(hours: 7, minutes: 45),
-      timeAwake: const Duration(minutes: 30),
-      stages: [
-        const SleepStageData(
-          stage: SleepStage.light,
-          duration: Duration(hours: 3, minutes: 30),
-          percentage: 45.0,
-        ),
-        const SleepStageData(
-          stage: SleepStage.deep,
-          duration: Duration(hours: 1, minutes: 45),
-          percentage: 22.5,
-        ),
-        const SleepStageData(
-          stage: SleepStage.rem,
-          duration: Duration(hours: 2, minutes: 30),
-          percentage: 32.5,
-        ),
-      ],
-      restingHeartRate: 58,
-      sleepQualityScore: 85.0,
-      createdAt: thismorning,
-    );
-  }
-
-  /// Mock sleep history for local development
-  Future<List<SleepSession>> _mockGetSleepHistory({
-    required DateTime startDate,
-    required DateTime endDate,
-  }) async {
-    await Future.delayed(const Duration(milliseconds: 500));
-
-    final sessions = <SleepSession>[];
-    final random = Random();
-    final now = DateTime.now();
-
-    // Generate 7 days of mock sleep data
-    for (int i = 0; i < 7; i++) {
-      final date = now.subtract(Duration(days: i));
-      final bedtime = DateTime(
-        date.year,
-        date.month,
-        date.day - 1,
-        22 + random.nextInt(2),
-        random.nextInt(60),
-      );
-      final sleepDuration = Duration(
-        hours: 7 + random.nextInt(2),
-        minutes: random.nextInt(60),
-      );
-      final wakeTime = bedtime.add(sleepDuration + Duration(minutes: 20 + random.nextInt(40)));
-
-      final lightSleep = sleepDuration.inMinutes * (0.40 + random.nextDouble() * 0.10);
-      final deepSleep = sleepDuration.inMinutes * (0.18 + random.nextDouble() * 0.10);
-      final remSleep = sleepDuration.inMinutes * (0.25 + random.nextDouble() * 0.15);
-
-      sessions.add(SleepSession(
-        sessionId: 'mock_sleep_${date.millisecondsSinceEpoch}',
-        userId: _authService.currentUser?.userId ?? 'mock_user',
-        bedtime: bedtime,
-        wakeTime: wakeTime,
-        totalSleepTime: sleepDuration,
-        timeAwake: Duration(minutes: 15 + random.nextInt(45)),
-        stages: [
-          SleepStageData(
-            stage: SleepStage.light,
-            duration: Duration(minutes: lightSleep.round()),
-            percentage: (lightSleep / sleepDuration.inMinutes) * 100,
-          ),
-          SleepStageData(
-            stage: SleepStage.deep,
-            duration: Duration(minutes: deepSleep.round()),
-            percentage: (deepSleep / sleepDuration.inMinutes) * 100,
-          ),
-          SleepStageData(
-            stage: SleepStage.rem,
-            duration: Duration(minutes: remSleep.round()),
-            percentage: (remSleep / sleepDuration.inMinutes) * 100,
-          ),
-        ],
-        restingHeartRate: 56 + random.nextInt(8),
-        sleepQualityScore: 75.0 + random.nextDouble() * 20,
-        createdAt: wakeTime,
-      ));
-    }
-
-    return sessions;
-  }
-
-  /// Mock sleep summary for local development
-  Future<SleepSummary> _mockGetSleepSummary({
-    required DateTime startDate,
-    required DateTime endDate,
-  }) async {
-    await Future.delayed(const Duration(milliseconds: 300));
-
-    return SleepSummary(
-      startDate: startDate,
-      endDate: endDate,
-      averageSleepHours: 7.5,
-      averageRestingHR: 58.0,
-      averageSleepQuality: 82.0,
-      sleepConsistency: 0.85,
-      averageStagePercentages: {
-        SleepStage.light: 45.0,
-        SleepStage.deep: 22.0,
-        SleepStage.rem: 30.0,
-      },
-    );
-  }
-
-  /// Mock sleep target for local development
-  Future<SleepTarget> _mockGetSleepTarget() async {
-    await Future.delayed(const Duration(milliseconds: 200));
-
-    // Default target for teens (13-21)
+    // Sensible default for teens if backend is unreachable
     return const SleepTarget(
-      minDuration: Duration(hours: 7),
+      minDuration: Duration(hours: 8),
       maxDuration: Duration(hours: 10),
-      targetDuration: Duration(hours: 8, minutes: 30),
+      targetDuration: Duration(hours: 9),
       targetStagePercentages: {
         SleepStage.light: 45.0,
         SleepStage.deep: 25.0,
