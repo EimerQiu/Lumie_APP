@@ -53,7 +53,7 @@ class RestDaysService:
             Latest sleep session data or None
         """
         # Query the sleep collection for the most recent sleep session
-        sleep_session = await self.db.sleep.find_one(
+        sleep_session = await self.db.sleep_sessions.find_one(
             {"user_id": user_id},
             sort=[("wake_time", -1)]  # Sort by wake_time descending
         )
