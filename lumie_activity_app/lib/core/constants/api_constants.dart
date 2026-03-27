@@ -28,6 +28,14 @@ class ApiConstants {
   // Analysis
   static const String analysisJobs = '/analysis/jobs';
 
+  // Advisor v2 (base URL uses /api/v2)
+  static const String baseUrlV2 = 'https://yumo.org/api/v2';
+  static const String advisorV2Chat = '/advisor/chat';
+  static const String advisorV2Jobs = '/advisor/jobs';
+  static const String advisorV2Capabilities = '/advisor/capabilities';
+  static const String advisorV2Skills = '/advisor/skills';
+  static const String advisorV2SkillReindex = '/advisor/skills/reindex';
+
   // Tasks / Med-Reminder
   static const String tasks = '/tasks';
   static const String taskTemplates = '/tasks/templates';

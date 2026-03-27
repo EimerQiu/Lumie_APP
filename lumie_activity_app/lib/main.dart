@@ -30,6 +30,7 @@ import 'features/teams/screens/accept_invitation_screen.dart';
 import 'features/settings/screens/rest_days_settings_screen.dart';
 import 'features/settings/screens/edit_profile_screen.dart';
 import 'features/advisor/screens/advisor_screen.dart';
+import 'features/advisor/screens/advisor_settings_screen.dart';
 import 'features/heart_rate/providers/heart_rate_provider.dart';
 import 'features/heart_rate/screens/heart_rate_screen.dart';
 import 'features/tasks/providers/tasks_provider.dart';
@@ -129,12 +130,16 @@ class LumieActivityApp extends StatelessWidget {
             final templateId = settings.arguments as String;
             return MaterialPageRoute(
               builder: (context) => const BatchGenerateScreen(),
-              settings: RouteSettings(name: '/tasks/batch', arguments: templateId),
+              settings: RouteSettings(
+                name: '/tasks/batch',
+                arguments: templateId,
+              ),
             );
           } else if (settings.name == '/tasks/templates/edit') {
             final templateId = settings.arguments as String;
             return MaterialPageRoute(
-              builder: (context) => CreateTemplateScreen(templateId: templateId),
+              builder: (context) =>
+                  CreateTemplateScreen(templateId: templateId),
             );
           } else if (settings.name == '/subscription/upgrade') {
             // Placeholder for subscription upgrade screen
@@ -204,9 +209,7 @@ class SplashScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     return Scaffold(
       body: Container(
-        decoration: const BoxDecoration(
-          gradient: AppColors.primaryGradient,
-        ),
+        decoration: const BoxDecoration(gradient: AppColors.primaryGradient),
         child: SafeArea(
           child: Center(
             child: Column(
@@ -252,7 +255,9 @@ class SplashScreen extends StatelessWidget {
                 ),
                 const SizedBox(height: 48),
                 const CircularProgressIndicator(
-                  valueColor: AlwaysStoppedAnimation<Color>(AppColors.textOnYellow),
+                  valueColor: AlwaysStoppedAnimation<Color>(
+                    AppColors.textOnYellow,
+                  ),
                 ),
               ],
             ),
@@ -311,17 +316,14 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
   @override
   Widget build(BuildContext context) {
     final screens = [
-      const DashboardScreen(),   // Today
-      const AdvisorScreen(),     // Advisor
-      const SleepScreen(),       // Insights
-      const SettingsScreen(),    // Me
+      const DashboardScreen(), // Today
+      const AdvisorScreen(), // Advisor
+      const SleepScreen(), // Insights
+      const SettingsScreen(), // Me
     ];
 
     return Scaffold(
-      body: IndexedStack(
-        index: _currentIndex,
-        children: screens,
-      ),
+      body: IndexedStack(index: _currentIndex, children: screens),
       bottomNavigationBar: _buildBottomNavBar(),
     );
   }
@@ -437,8 +439,12 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
                   MaterialPageRoute(
                     builder: (context) => ManualEntryScreen(
                       detectedActivity: RingDetectedActivity(
-                        startTime: DateTime.now().subtract(const Duration(hours: 1)),
-                        endTime: DateTime.now().subtract(const Duration(minutes: 35)),
+                        startTime: DateTime.now().subtract(
+                          const Duration(hours: 1),
+                        ),
+                        endTime: DateTime.now().subtract(
+                          const Duration(minutes: 35),
+                        ),
                         durationMinutes: 25,
                         suggestedActivityTypeId: 'walking',
                         confidence: 0.75,
@@ -502,7 +508,9 @@ class _NavBarItem extends StatelessWidget {
           children: [
             Icon(
               isSelected ? selectedIcon : icon,
-              color: isSelected ? AppColors.textOnYellow : AppColors.textSecondary,
+              color: isSelected
+                  ? AppColors.textOnYellow
+                  : AppColors.textSecondary,
               size: 24,
             ),
             const SizedBox(height: 4),
@@ -511,7 +519,9 @@ class _NavBarItem extends StatelessWidget {
               style: TextStyle(
                 fontSize: 13,
                 fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
-                color: isSelected ? AppColors.textOnYellow : AppColors.textSecondary,
+                color: isSelected
+                    ? AppColors.textOnYellow
+                    : AppColors.textSecondary,
               ),
             ),
           ],
@@ -665,7 +675,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final localOffset = DateTime.now().timeZoneOffset;
     final localHour = (_checkinHourUtc + localOffset.inHours) % 24;
     final period = localHour >= 12 ? 'PM' : 'AM';
-    final displayHour = localHour == 0 ? 12 : (localHour > 12 ? localHour - 12 : localHour);
+    final displayHour = localHour == 0
+        ? 12
+        : (localHour > 12 ? localHour - 12 : localHour);
     final displayMin = _checkinMinuteUtc.toString().padLeft(2, '0');
     return '$displayHour:$displayMin $period';
   }
@@ -711,10 +723,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         width: 60,
                         height: 60,
                         decoration: BoxDecoration(
-                          color: AppColors.backgroundWhite.withValues(alpha: 0.5),
+                          color: AppColors.backgroundWhite.withValues(
+                            alpha: 0.5,
+                          ),
                           shape: BoxShape.circle,
                         ),
-                        child: const Icon(Icons.person, size: 32, color: AppColors.textOnYellow),
+                        child: const Icon(
+                          Icons.person,
+                          size: 32,
+                          color: AppColors.textOnYellow,
+                        ),
                       ),
                       const SizedBox(width: 16),
                       Expanded(
@@ -734,7 +752,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                               auth.user?.email ?? '',
                               style: TextStyle(
                                 fontSize: 14,
-                                color: AppColors.textOnYellow.withValues(alpha: 0.8),
+                                color: AppColors.textOnYellow.withValues(
+                                  alpha: 0.8,
+                                ),
                               ),
                             ),
                             const SizedBox(height: 4),
@@ -743,7 +763,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                               style: TextStyle(
                                 fontSize: 15,
                                 fontWeight: FontWeight.w500,
-                                color: AppColors.textOnYellow.withValues(alpha: 0.9),
+                                color: AppColors.textOnYellow.withValues(
+                                  alpha: 0.9,
+                                ),
                               ),
                             ),
                           ],
@@ -781,7 +803,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     _SettingsItem(
                       icon: Icons.person_outline,
                       title: 'Edit Profile',
-                      onTap: () => Navigator.pushNamed(context, '/profile/edit'),
+                      onTap: () =>
+                          Navigator.pushNamed(context, '/profile/edit'),
                     ),
                     _SettingsItem(
                       icon: Icons.groups_outlined,
@@ -798,7 +821,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
                     // ── Advisor ───────────────────────────────────────────────
                     Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 4,
+                      ),
                       child: Text(
                         'Advisor',
                         style: TextStyle(
@@ -810,29 +836,56 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       ),
                     ),
 
+                    _SettingsItem(
+                      icon: Icons.auto_awesome_outlined,
+                      title: 'Skills & Capabilities',
+                      onTap: () {
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (_) => const AdvisorSettingsScreen(),
+                          ),
+                        );
+                      },
+                    ),
+
                     // Check-in push notification toggle
                     Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 4,
+                      ),
                       child: Row(
                         children: [
                           Container(
                             padding: const EdgeInsets.all(8),
                             decoration: BoxDecoration(
-                              color: AppColors.primaryLemon.withValues(alpha: 0.3),
+                              color: AppColors.primaryLemon.withValues(
+                                alpha: 0.3,
+                              ),
                               borderRadius: BorderRadius.circular(10),
                             ),
-                            child: const Icon(Icons.notifications_active_outlined, size: 22, color: AppColors.textOnYellow),
+                            child: const Icon(
+                              Icons.notifications_active_outlined,
+                              size: 22,
+                              color: AppColors.textOnYellow,
+                            ),
                           ),
                           const SizedBox(width: 16),
                           const Expanded(
                             child: Text(
                               'Daily Check-in Nudge',
-                              style: TextStyle(fontSize: 17, fontWeight: FontWeight.w500, color: AppColors.textPrimary),
+                              style: TextStyle(
+                                fontSize: 17,
+                                fontWeight: FontWeight.w500,
+                                color: AppColors.textPrimary,
+                              ),
                             ),
                           ),
                           if (_checkinLoading)
                             const SizedBox(
-                              width: 20, height: 20,
+                              width: 20,
+                              height: 20,
                               child: CircularProgressIndicator(strokeWidth: 2),
                             )
                           else
@@ -854,41 +907,59 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           children: [
                             const Text(
                               'Frequency',
-                              style: TextStyle(fontSize: 13, color: AppColors.textSecondary),
+                              style: TextStyle(
+                                fontSize: 13,
+                                color: AppColors.textSecondary,
+                              ),
                             ),
                             const SizedBox(height: 8),
                             Row(
-                              children: [
-                                {'label': 'Every day', 'value': 'daily'},
-                                {'label': 'Weekdays', 'value': 'weekdays'},
-                              ].map((item) {
-                                final selected = _checkinFreq == item['value'];
-                                return Padding(
-                                  padding: const EdgeInsets.only(right: 8),
-                                  child: GestureDetector(
-                                    onTap: () => _setFreq(item['value']!),
-                                    child: AnimatedContainer(
-                                      duration: const Duration(milliseconds: 180),
-                                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                                      decoration: BoxDecoration(
-                                        color: selected ? AppColors.primaryLemonDark : AppColors.backgroundPaper,
-                                        borderRadius: BorderRadius.circular(20),
-                                        border: Border.all(
-                                          color: selected ? AppColors.primaryLemonDark : AppColors.surfaceLight,
+                              children:
+                                  [
+                                    {'label': 'Every day', 'value': 'daily'},
+                                    {'label': 'Weekdays', 'value': 'weekdays'},
+                                  ].map((item) {
+                                    final selected =
+                                        _checkinFreq == item['value'];
+                                    return Padding(
+                                      padding: const EdgeInsets.only(right: 8),
+                                      child: GestureDetector(
+                                        onTap: () => _setFreq(item['value']!),
+                                        child: AnimatedContainer(
+                                          duration: const Duration(
+                                            milliseconds: 180,
+                                          ),
+                                          padding: const EdgeInsets.symmetric(
+                                            horizontal: 16,
+                                            vertical: 8,
+                                          ),
+                                          decoration: BoxDecoration(
+                                            color: selected
+                                                ? AppColors.primaryLemonDark
+                                                : AppColors.backgroundPaper,
+                                            borderRadius: BorderRadius.circular(
+                                              20,
+                                            ),
+                                            border: Border.all(
+                                              color: selected
+                                                  ? AppColors.primaryLemonDark
+                                                  : AppColors.surfaceLight,
+                                            ),
+                                          ),
+                                          child: Text(
+                                            item['label']!,
+                                            style: TextStyle(
+                                              fontSize: 14,
+                                              fontWeight: FontWeight.w500,
+                                              color: selected
+                                                  ? Colors.white
+                                                  : AppColors.textSecondary,
+                                            ),
+                                          ),
                                         ),
                                       ),
-                                      child: Text(
-                                        item['label']!,
-                                        style: TextStyle(
-                                          fontSize: 14,
-                                          fontWeight: FontWeight.w500,
-                                          color: selected ? Colors.white : AppColors.textSecondary,
-                                        ),
-                                      ),
-                                    ),
-                                  ),
-                                );
-                              }).toList(),
+                                    );
+                                  }).toList(),
                             ),
                           ],
                         ),
@@ -902,15 +973,23 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             children: [
                               const Text(
                                 'Remind me at',
-                                style: TextStyle(fontSize: 13, color: AppColors.textSecondary),
+                                style: TextStyle(
+                                  fontSize: 13,
+                                  color: AppColors.textSecondary,
+                                ),
                               ),
                               const SizedBox(width: 8),
                               Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 12,
+                                  vertical: 6,
+                                ),
                                 decoration: BoxDecoration(
                                   color: AppColors.backgroundPaper,
                                   borderRadius: BorderRadius.circular(12),
-                                  border: Border.all(color: AppColors.surfaceLight),
+                                  border: Border.all(
+                                    color: AppColors.surfaceLight,
+                                  ),
                                 ),
                                 child: Row(
                                   mainAxisSize: MainAxisSize.min,
@@ -924,7 +1003,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                       ),
                                     ),
                                     const SizedBox(width: 4),
-                                    const Icon(Icons.access_time, size: 16, color: AppColors.primaryLemonDark),
+                                    const Icon(
+                                      Icons.access_time,
+                                      size: 16,
+                                      color: AppColors.primaryLemonDark,
+                                    ),
                                   ],
                                 ),
                               ),
@@ -938,7 +1021,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
                     // ── Health & Schedule ─────────────────────────────────────
                     Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 4,
+                      ),
                       child: Text(
                         'Health & Schedule',
                         style: TextStyle(
@@ -952,7 +1038,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     _SettingsItem(
                       icon: Icons.event_busy_outlined,
                       title: 'Rest Day Schedule',
-                      onTap: () => Navigator.pushNamed(context, '/settings/rest-days'),
+                      onTap: () =>
+                          Navigator.pushNamed(context, '/settings/rest-days'),
                     ),
                     _SettingsItem(
                       icon: Icons.watch_outlined,
@@ -1017,9 +1104,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
               context.read<TeamsProvider>().reset();
               context.read<AuthProvider>().logout();
             },
-            style: TextButton.styleFrom(
-              foregroundColor: AppColors.error,
-            ),
+            style: TextButton.styleFrom(foregroundColor: AppColors.error),
             child: const Text('Log Out'),
           ),
         ],
@@ -1082,43 +1167,31 @@ class SubscriptionUpgradeScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Upgrade to Pro'),
-      ),
+      appBar: AppBar(title: const Text('Upgrade to Pro')),
       body: Center(
         child: Padding(
           padding: const EdgeInsets.all(32),
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Icon(
-                Icons.workspace_premium,
-                size: 96,
-                color: Colors.amber[600],
-              ),
+              Icon(Icons.workspace_premium, size: 96, color: Colors.amber[600]),
               const SizedBox(height: 24),
               Text(
                 'Upgrade to Pro',
                 style: Theme.of(context).textTheme.headlineMedium?.copyWith(
-                      fontWeight: FontWeight.bold,
-                    ),
+                  fontWeight: FontWeight.bold,
+                ),
               ),
               const SizedBox(height: 16),
               Text(
                 'Get access to up to 100 teams and unlock premium features.',
-                style: TextStyle(
-                  fontSize: 18,
-                  color: Colors.grey[600],
-                ),
+                style: TextStyle(fontSize: 18, color: Colors.grey[600]),
                 textAlign: TextAlign.center,
               ),
               const SizedBox(height: 32),
               Text(
                 'Subscription upgrade screen\ncoming soon!',
-                style: TextStyle(
-                  fontSize: 16,
-                  color: Colors.grey[500],
-                ),
+                style: TextStyle(fontSize: 16, color: Colors.grey[500]),
                 textAlign: TextAlign.center,
               ),
             ],

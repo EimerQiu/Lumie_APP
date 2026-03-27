@@ -3,10 +3,10 @@ import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
 import '../../../core/theme/app_colors.dart';
-import '../../../core/services/advisor_service.dart';
+import '../../../core/services/advisor_v2_service.dart';
 import '../../../core/services/checkin_service.dart';
+import 'advisor_settings_screen.dart';
 import '../../../core/services/chat_history_service.dart';
-import '../../../core/services/analysis_service.dart';
 import '../../../shared/models/analysis_models.dart';
 import '../../../shared/widgets/gradient_card.dart';
 import '../widgets/analysis_result_card.dart';
@@ -52,6 +52,23 @@ class _AdvisorScreenState extends State<AdvisorScreen>
             color: AppColors.textPrimary,
           ),
         ),
+        actions: [
+          IconButton(
+            icon: const Icon(
+              Icons.settings_outlined,
+              color: AppColors.textSecondary,
+            ),
+            tooltip: 'Advisor Settings',
+            onPressed: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => const AdvisorSettingsScreen(),
+                ),
+              );
+            },
+          ),
+        ],
         bottom: TabBar(
           controller: _tabController,
           labelColor: AppColors.primaryLemonDark,
@@ -89,8 +106,7 @@ class _ChatTab extends StatefulWidget {
 class _ChatTabState extends State<_ChatTab> with WidgetsBindingObserver {
   final TextEditingController _input = TextEditingController();
   final ScrollController _scroll = ScrollController();
-  final AdvisorService _advisor = AdvisorService();
-  final AnalysisService _analysisService = AnalysisService();
+  final AdvisorV2Service _advisor = AdvisorV2Service();
   final ChatHistoryService _historyService = ChatHistoryService();
 
   String _sessionId = const Uuid().v4();
@@ -100,6 +116,10 @@ class _ChatTabState extends State<_ChatTab> with WidgetsBindingObserver {
 
   bool _isTyping = false;
   bool _isLoading = true;
+  bool _isCancellingJob = false;
+
+  /// Tracks the currently polling job so the user can cancel it.
+  String? _pendingJobId;
 
   static const _sessionIdKey = 'advisor_active_session_id';
   static const _lastActiveKey = 'advisor_last_active_at';
@@ -150,7 +170,9 @@ class _ChatTabState extends State<_ChatTab> with WidgetsBindingObserver {
         setState(() {
           _items.clear();
           for (final m in messages) {
-            _items.add(_ChatItem.message(_Message(text: m.content, isUser: m.isUser)));
+            _items.add(
+              _ChatItem.message(_Message(text: m.content, isUser: m.isUser)),
+            );
           }
           _isLoading = false;
         });
@@ -173,7 +195,9 @@ class _ChatTabState extends State<_ChatTab> with WidgetsBindingObserver {
   Future<void> _saveLastActiveTime() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(
-        _lastActiveKey, DateTime.now().toUtc().toIso8601String());
+      _lastActiveKey,
+      DateTime.now().toUtc().toIso8601String(),
+    );
   }
 
   Future<void> _checkSessionTimeout() async {
@@ -211,7 +235,9 @@ class _ChatTabState extends State<_ChatTab> with WidgetsBindingObserver {
             _sessionId = sessionId;
             _items.clear();
             for (final m in messages) {
-              _items.add(_ChatItem.message(_Message(text: m.content, isUser: m.isUser)));
+              _items.add(
+                _ChatItem.message(_Message(text: m.content, isUser: m.isUser)),
+              );
             }
           });
           _saveActiveSession();
@@ -221,12 +247,12 @@ class _ChatTabState extends State<_ChatTab> with WidgetsBindingObserver {
     );
   }
 
-  /// Builds the history context for the advisor API (current session only).
-  List<ChatMessage> get _history => _items
+  /// Builds the history context for the v2 advisor API (current session only).
+  List<Map<String, String>> get _history => _items
       .where((item) => item.type == _ChatItemType.message)
       .map((item) => item.message!)
       .where((m) => !m.isAnalyzing)
-      .map((m) => ChatMessage(role: m.isUser ? 'user' : 'assistant', content: m.text))
+      .map((m) => {'role': m.isUser ? 'user' : 'assistant', 'content': m.text})
       .toList();
 
   Future<void> _send() async {
@@ -244,55 +270,105 @@ class _ChatTabState extends State<_ChatTab> with WidgetsBindingObserver {
     _scrollToBottom();
     _saveLastActiveTime();
 
-    final response =
-        await _advisor.sendMessage(text, history: _history, sessionId: _sessionId);
+    final response = await _advisor.sendMessage(
+      text,
+      history: _history,
+      sessionId: _sessionId,
+    );
     if (!mounted) return;
 
-    if (response.type == 'analysis' && response.jobId != null) {
-      final placeholder = _ChatItem.message(_Message(
-        text: response.reply,
-        isUser: false,
-        isAnalyzing: true,
-        jobId: response.jobId,
-      ));
+    // ── "execution" type: show placeholder, poll for result ──────────
+    if (response.isExecution && response.jobId != null) {
+      final placeholder = _ChatItem.message(
+        _Message(
+          text: response.reply,
+          isUser: false,
+          isAnalyzing: true,
+          jobId: response.jobId,
+        ),
+      );
 
       setState(() {
         _items.add(placeholder);
+        _isTyping = false;
+        _pendingJobId = response.jobId;
+      });
+      _scrollToBottom();
+      _persistExchange(text, response.reply);
+
+      final jobResult = await _advisor.pollJobResult(response.jobId!);
+      if (!mounted) return;
+      setState(() {
+        _pendingJobId = null;
+        _isCancellingJob = false;
+      });
+
+      final status = jobResult['status'] as String? ?? 'failed';
+      final resultData = jobResult['result'] as Map<String, dynamic>?;
+
+      setState(() {
+        final idx = _items.lastIndexWhere(
+          (item) =>
+              item.type == _ChatItemType.message &&
+              item.message?.jobId == response.jobId,
+        );
+        if (idx >= 0) {
+          if (status == 'success' && resultData != null) {
+            // Build AnalysisResult from the generic v2 result dict
+            final analysisResult = AnalysisResult(
+              summary: resultData['summary'] as String? ?? 'Analysis complete.',
+              data: resultData,
+              navHint: response.navHint,
+            );
+            _items[idx] = _ChatItem.message(
+              _Message(
+                text: analysisResult.summary,
+                isUser: false,
+                analysisResult: analysisResult,
+              ),
+            );
+          } else if (status == 'cancelled') {
+            _items[idx] = _ChatItem.message(
+              _Message(text: 'Analysis cancelled.', isUser: false),
+            );
+          } else {
+            final error = jobResult['error'] as String?;
+            _items[idx] = _ChatItem.message(
+              _Message(
+                text: error?.isNotEmpty == true
+                    ? error!
+                    : "I wasn't able to complete this analysis. Please try rephrasing your question.",
+                isUser: false,
+                isAnalysisFailed: true,
+              ),
+            );
+          }
+        }
+      });
+      _scrollToBottom();
+
+      // ── "guidance" type: display as info message ─────────────────────
+    } else if (response.isGuidance) {
+      final replyItem = _ChatItem.message(
+        _Message(text: response.reply, isUser: false, isGuidance: true),
+      );
+
+      setState(() {
+        _items.add(replyItem);
         _isTyping = false;
       });
       _scrollToBottom();
       _persistExchange(text, response.reply);
 
-      final result = await _analysisService.pollJobResult(response.jobId!);
-      if (!mounted) return;
-
-      setState(() {
-        final idx = _items.lastIndexWhere((item) =>
-            item.type == _ChatItemType.message &&
-            item.message?.jobId == response.jobId);
-        if (idx >= 0) {
-          _items[idx] = result.isSuccess && result.result != null
-              ? _ChatItem.message(_Message(
-                  text: result.result!.summary,
-                  isUser: false,
-                  analysisResult: result.result,
-                ))
-              : _ChatItem.message(_Message(
-                  text: result.error?.isNotEmpty == true
-                      ? result.error!
-                      : "I wasn't able to complete this analysis. Please try rephrasing your question.",
-                  isUser: false,
-                  isAnalysisFailed: true,
-                ));
-        }
-      });
-      _scrollToBottom();
+      // ── "direct" type: immediate reply ───────────────────────────────
     } else {
-      final replyItem = _ChatItem.message(_Message(
-        text: response.reply,
-        isUser: false,
-        navHint: response.navHint,
-      ));
+      final replyItem = _ChatItem.message(
+        _Message(
+          text: response.reply,
+          isUser: false,
+          navHint: response.navHint,
+        ),
+      );
 
       setState(() {
         _items.add(replyItem);
@@ -307,12 +383,17 @@ class _ChatTabState extends State<_ChatTab> with WidgetsBindingObserver {
     final now = DateTime.now().toUtc().toIso8601String();
     _historyService.appendToCache([
       PersistedMessage(
-          sessionId: _sessionId, role: 'user', content: userMsg, createdAt: now),
+        sessionId: _sessionId,
+        role: 'user',
+        content: userMsg,
+        createdAt: now,
+      ),
       PersistedMessage(
-          sessionId: _sessionId,
-          role: 'assistant',
-          content: assistantReply,
-          createdAt: now),
+        sessionId: _sessionId,
+        role: 'assistant',
+        content: assistantReply,
+        createdAt: now,
+      ),
     ]);
   }
 
@@ -326,6 +407,35 @@ class _ChatTabState extends State<_ChatTab> with WidgetsBindingObserver {
         );
       }
     });
+  }
+
+  Future<void> _cancelPendingJob(String jobId) async {
+    if (_isCancellingJob) return;
+
+    setState(() => _isCancellingJob = true);
+    try {
+      final cancelled = await _advisor.cancelJob(jobId);
+      if (!mounted) return;
+
+      if (cancelled) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('Cancelling analysis...')));
+      } else {
+        setState(() => _isCancellingJob = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('This job can no longer be cancelled.')),
+        );
+      }
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _isCancellingJob = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Unable to cancel right now. Please try again.'),
+        ),
+      );
+    }
   }
 
   @override
@@ -345,7 +455,18 @@ class _ChatTabState extends State<_ChatTab> with WidgetsBindingObserver {
                       if (_isTyping && i == _items.length) {
                         return const _TypingBubble();
                       }
-                      return _ChatBubble(message: _items[i].message!);
+                      final message = _items[i].message!;
+                      return _ChatBubble(
+                        message: message,
+                        onCancelJob:
+                            message.isAnalyzing &&
+                                message.jobId != null &&
+                                message.jobId == _pendingJobId
+                            ? () => _cancelPendingJob(message.jobId!)
+                            : null,
+                        isCancelling:
+                            message.jobId == _pendingJobId && _isCancellingJob,
+                      );
                     },
                   ),
                 ),
@@ -371,8 +492,10 @@ class _ChatTabState extends State<_ChatTab> with WidgetsBindingObserver {
             label: const Text('History'),
             style: TextButton.styleFrom(
               foregroundColor: AppColors.textSecondary,
-              textStyle:
-                  const TextStyle(fontSize: 13, fontWeight: FontWeight.w500),
+              textStyle: const TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w500,
+              ),
             ),
           ),
           IconButton(
@@ -400,14 +523,19 @@ class _ChatTabState extends State<_ChatTab> with WidgetsBindingObserver {
             child: TextField(
               controller: _input,
               onSubmitted: (_) => _send(),
-              style: const TextStyle(fontSize: 15, color: AppColors.textPrimary),
+              style: const TextStyle(
+                fontSize: 15,
+                color: AppColors.textPrimary,
+              ),
               decoration: InputDecoration(
                 hintText: 'Ask your advisor…',
                 hintStyle: TextStyle(color: AppColors.textLight),
                 filled: true,
                 fillColor: AppColors.backgroundLight,
                 contentPadding: const EdgeInsets.symmetric(
-                    horizontal: 16, vertical: 12),
+                  horizontal: 16,
+                  vertical: 12,
+                ),
                 border: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(24),
                   borderSide: BorderSide.none,
@@ -425,7 +553,11 @@ class _ChatTabState extends State<_ChatTab> with WidgetsBindingObserver {
                 color: AppColors.primaryLemonDark,
                 shape: BoxShape.circle,
               ),
-              child: const Icon(Icons.send_rounded, color: Colors.white, size: 20),
+              child: const Icon(
+                Icons.send_rounded,
+                color: Colors.white,
+                size: 20,
+              ),
             ),
           ),
         ],
@@ -439,10 +571,12 @@ class _ChatTabState extends State<_ChatTab> with WidgetsBindingObserver {
 class _HistoryPanel extends StatefulWidget {
   final ChatHistoryService historyService;
   final void Function(String sessionId, List<PersistedMessage> messages)
-      onSessionSelected;
+  onSessionSelected;
 
-  const _HistoryPanel(
-      {required this.historyService, required this.onSessionSelected});
+  const _HistoryPanel({
+    required this.historyService,
+    required this.onSessionSelected,
+  });
 
   @override
   State<_HistoryPanel> createState() => _HistoryPanelState();
@@ -534,14 +668,22 @@ class _HistoryPanelState extends State<_HistoryPanel> {
     return ListView.separated(
       padding: const EdgeInsets.symmetric(vertical: 8),
       itemCount: _sessions.length,
-      separatorBuilder: (context, index) =>
-          Divider(color: AppColors.surfaceLight, height: 1, indent: 16, endIndent: 16),
+      separatorBuilder: (context, index) => Divider(
+        color: AppColors.surfaceLight,
+        height: 1,
+        indent: 16,
+        endIndent: 16,
+      ),
       itemBuilder: (context, i) {
         final s = _sessions[i];
-        final preview =
-            s.preview.length > 70 ? '${s.preview.substring(0, 70)}…' : s.preview;
+        final preview = s.preview.length > 70
+            ? '${s.preview.substring(0, 70)}…'
+            : s.preview;
         return ListTile(
-          contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 4),
+          contentPadding: const EdgeInsets.symmetric(
+            horizontal: 20,
+            vertical: 4,
+          ),
           title: Text(
             preview,
             style: const TextStyle(fontSize: 14, color: AppColors.textPrimary),
@@ -553,11 +695,15 @@ class _HistoryPanelState extends State<_HistoryPanel> {
               style: TextStyle(fontSize: 12, color: AppColors.textLight),
             ),
           ),
-          trailing: const Icon(Icons.arrow_forward_ios_rounded,
-              size: 14, color: AppColors.textLight),
+          trailing: const Icon(
+            Icons.arrow_forward_ios_rounded,
+            size: 14,
+            color: AppColors.textLight,
+          ),
           onTap: () async {
-            final messages =
-                await widget.historyService.fetchSessionMessages(s.sessionId);
+            final messages = await widget.historyService.fetchSessionMessages(
+              s.sessionId,
+            );
             widget.onSessionSelected(s.sessionId, messages);
           },
         );
@@ -602,6 +748,7 @@ class _Message {
   final bool isUser;
   final bool isAnalyzing;
   final bool isAnalysisFailed;
+  final bool isGuidance;
   final String? jobId;
   final AnalysisResult? analysisResult;
   final String? navHint; // "task_list" | "task_dashboard" | null
@@ -611,6 +758,7 @@ class _Message {
     required this.isUser,
     this.isAnalyzing = false,
     this.isAnalysisFailed = false,
+    this.isGuidance = false,
     this.jobId,
     this.analysisResult,
     this.navHint,
@@ -619,7 +767,14 @@ class _Message {
 
 class _ChatBubble extends StatelessWidget {
   final _Message message;
-  const _ChatBubble({required this.message});
+  final VoidCallback? onCancelJob;
+  final bool isCancelling;
+
+  const _ChatBubble({
+    required this.message,
+    this.onCancelJob,
+    this.isCancelling = false,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -676,43 +831,65 @@ class _ChatBubble extends StatelessWidget {
     if (message.isUser) {
       return Text(
         message.text,
-        style: const TextStyle(
-          fontSize: 14,
-          color: Colors.white,
-          height: 1.4,
-        ),
+        style: const TextStyle(fontSize: 14, color: Colors.white, height: 1.4),
       );
     }
 
     // Analyzing state — show text + spinner
     if (message.isAnalyzing) {
-      return Row(
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         mainAxisSize: MainAxisSize.min,
         children: [
-          const SizedBox(
-            width: 14,
-            height: 14,
-            child: CircularProgressIndicator(
-              strokeWidth: 2,
-              color: AppColors.primaryLemonDark,
-            ),
-          ),
-          const SizedBox(width: 10),
-          Flexible(
-            child: Text(
-              message.text,
-              style: const TextStyle(
-                fontSize: 14,
-                color: AppColors.textSecondary,
-                height: 1.4,
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const SizedBox(
+                width: 14,
+                height: 14,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  color: AppColors.primaryLemonDark,
+                ),
               ),
-            ),
+              const SizedBox(width: 10),
+              Flexible(
+                child: Text(
+                  message.text,
+                  style: const TextStyle(
+                    fontSize: 14,
+                    color: AppColors.textSecondary,
+                    height: 1.4,
+                  ),
+                ),
+              ),
+            ],
           ),
+          if (onCancelJob != null) ...[
+            const SizedBox(height: 10),
+            TextButton.icon(
+              onPressed: isCancelling ? null : onCancelJob,
+              style: TextButton.styleFrom(
+                padding: EdgeInsets.zero,
+                minimumSize: Size.zero,
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                foregroundColor: AppColors.textSecondary,
+              ),
+              icon: isCancelling
+                  ? const SizedBox(
+                      width: 14,
+                      height: 14,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.close_rounded, size: 16),
+              label: Text(isCancelling ? 'Cancelling...' : 'Cancel'),
+            ),
+          ],
         ],
       );
     }
 
-    // Analysis failed
+    // Analysis/execution failed
     if (message.isAnalysisFailed) {
       return Row(
         mainAxisSize: MainAxisSize.min,
@@ -733,7 +910,37 @@ class _ChatBubble extends StatelessWidget {
       );
     }
 
-    // Analysis result — use the rich card
+    // Guidance message — capability/credential hint with info styling
+    if (message.isGuidance) {
+      return Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Icon(Icons.info_outline, size: 16, color: AppColors.accentBlue),
+          const SizedBox(width: 8),
+          Flexible(
+            child: MarkdownBody(
+              data: message.text,
+              styleSheet: MarkdownStyleSheet(
+                p: const TextStyle(
+                  fontSize: 14,
+                  color: AppColors.textPrimary,
+                  height: 1.4,
+                ),
+                strong: const TextStyle(
+                  fontSize: 14,
+                  color: AppColors.textPrimary,
+                  fontWeight: FontWeight.bold,
+                  height: 1.4,
+                ),
+              ),
+            ),
+          ),
+        ],
+      );
+    }
+
+    // Analysis/execution result — use the rich card
     if (message.analysisResult != null) {
       return AnalysisResultCard(result: message.analysisResult!);
     }
@@ -770,15 +977,14 @@ class _ChatBubble extends StatelessWidget {
   Widget _buildNavHintChip(String navHint) {
     final isTaskList = navHint == 'task_list';
     final label = isTaskList ? "View your tasks" : "View task statistics";
-    final icon =
-        isTaskList ? Icons.checklist_rounded : Icons.bar_chart_rounded;
+    final icon = isTaskList ? Icons.checklist_rounded : Icons.bar_chart_rounded;
 
     return Builder(
       builder: (context) => GestureDetector(
         onTap: () {
-          Navigator.of(context).push(
-            MaterialPageRoute(builder: (_) => const TasksListScreen()),
-          );
+          Navigator.of(
+            context,
+          ).push(MaterialPageRoute(builder: (_) => const TasksListScreen()));
         },
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
@@ -800,8 +1006,11 @@ class _ChatBubble extends StatelessWidget {
                 ),
               ),
               const SizedBox(width: 4),
-              const Icon(Icons.arrow_forward_rounded,
-                  size: 12, color: AppColors.primaryLemonDark),
+              const Icon(
+                Icons.arrow_forward_rounded,
+                size: 12,
+                color: AppColors.primaryLemonDark,
+              ),
             ],
           ),
         ),
@@ -944,74 +1153,74 @@ class _AdviceTabState extends State<_AdviceTab> {
         padding: const EdgeInsets.all(16),
         children: [
           _sectionLabel('Condition-Based Advice'),
-        const SizedBox(height: 8),
-        _AdviceCard(
-          icon: Icons.favorite_border,
-          title: 'Pacing for Chronic Conditions',
-          body:
-              'Start with 10–15 minutes of light movement and increase by no more than 10% per week. Consistency matters more than intensity.',
-          ringRequired: false,
-        ),
-        _AdviceCard(
-          icon: Icons.self_improvement,
-          title: 'Stress & Recovery Balance',
-          body:
-              'When fatigue is high, prioritise gentle activity like stretching or slow walks over cardio. Rest is productive.',
-          ringRequired: false,
-        ),
-        _AdviceCard(
-          icon: Icons.air,
-          title: 'Breathing Techniques',
-          body:
-              'Box breathing (4-4-4-4) before exercise can help regulate your nervous system and improve exercise tolerance.',
-          ringRequired: false,
-        ),
-        const SizedBox(height: 20),
-        _sectionLabel('Data-Based Advice'),
-        const SizedBox(height: 8),
-        _AdviceCard(
-          icon: Icons.bedtime_outlined,
-          title: 'Sleep Quality Trend',
-          body:
-              'Your average sleep efficiency this week is 84%. Aim to be in bed 30 min earlier to improve deep sleep duration.',
-          ringRequired: true,
-        ),
-        _AdviceCard(
-          icon: Icons.directions_run,
-          title: 'Activity Load',
-          body:
-              'You\'ve hit your activity goal 4 out of 7 days this week — great consistency. Your heart rate during moderate sessions is within a healthy range.',
-          ringRequired: true,
-        ),
-        const SizedBox(height: 20),
-        _sectionLabel('Check-Ins  ·  $_checkInFreq'),
-        const SizedBox(height: 8),
-        _CheckInCard(
-          period: 'Today',
-          metrics: [
-            ('Activity', '42 min', Icons.directions_run),
-            ('Sleep', '7h 12m', Icons.bedtime_outlined),
-            ('Fatigue', '72 / 100', Icons.battery_charging_full),
-          ],
-        ),
-        _CheckInCard(
-          period: 'This Week',
-          metrics: [
-            ('Avg Activity', '38 min / day', Icons.directions_run),
-            ('Avg Sleep', '7h 4m / night', Icons.bedtime_outlined),
-            ('Goal Days Hit', '4 of 7', Icons.flag_outlined),
-          ],
-        ),
-        _CheckInCard(
-          period: 'This Month',
-          metrics: [
-            ('Total Activity', '19.2 hrs', Icons.directions_run),
-            ('Best Sleep', '8h 31m', Icons.bedtime_outlined),
-            ('Rest Days Taken', '6', Icons.event_busy_outlined),
-          ],
-        ),
-        const SizedBox(height: 24),
-      ],
+          const SizedBox(height: 8),
+          _AdviceCard(
+            icon: Icons.favorite_border,
+            title: 'Pacing for Chronic Conditions',
+            body:
+                'Start with 10–15 minutes of light movement and increase by no more than 10% per week. Consistency matters more than intensity.',
+            ringRequired: false,
+          ),
+          _AdviceCard(
+            icon: Icons.self_improvement,
+            title: 'Stress & Recovery Balance',
+            body:
+                'When fatigue is high, prioritise gentle activity like stretching or slow walks over cardio. Rest is productive.',
+            ringRequired: false,
+          ),
+          _AdviceCard(
+            icon: Icons.air,
+            title: 'Breathing Techniques',
+            body:
+                'Box breathing (4-4-4-4) before exercise can help regulate your nervous system and improve exercise tolerance.',
+            ringRequired: false,
+          ),
+          const SizedBox(height: 20),
+          _sectionLabel('Data-Based Advice'),
+          const SizedBox(height: 8),
+          _AdviceCard(
+            icon: Icons.bedtime_outlined,
+            title: 'Sleep Quality Trend',
+            body:
+                'Your average sleep efficiency this week is 84%. Aim to be in bed 30 min earlier to improve deep sleep duration.',
+            ringRequired: true,
+          ),
+          _AdviceCard(
+            icon: Icons.directions_run,
+            title: 'Activity Load',
+            body:
+                'You\'ve hit your activity goal 4 out of 7 days this week — great consistency. Your heart rate during moderate sessions is within a healthy range.',
+            ringRequired: true,
+          ),
+          const SizedBox(height: 20),
+          _sectionLabel('Check-Ins  ·  $_checkInFreq'),
+          const SizedBox(height: 8),
+          _CheckInCard(
+            period: 'Today',
+            metrics: [
+              ('Activity', '42 min', Icons.directions_run),
+              ('Sleep', '7h 12m', Icons.bedtime_outlined),
+              ('Fatigue', '72 / 100', Icons.battery_charging_full),
+            ],
+          ),
+          _CheckInCard(
+            period: 'This Week',
+            metrics: [
+              ('Avg Activity', '38 min / day', Icons.directions_run),
+              ('Avg Sleep', '7h 4m / night', Icons.bedtime_outlined),
+              ('Goal Days Hit', '4 of 7', Icons.flag_outlined),
+            ],
+          ),
+          _CheckInCard(
+            period: 'This Month',
+            metrics: [
+              ('Total Activity', '19.2 hrs', Icons.directions_run),
+              ('Best Sleep', '8h 31m', Icons.bedtime_outlined),
+              ('Rest Days Taken', '6', Icons.event_busy_outlined),
+            ],
+          ),
+          const SizedBox(height: 24),
+        ],
       ),
     );
   }

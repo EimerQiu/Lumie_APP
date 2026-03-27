@@ -44,7 +44,7 @@ async def save_message(
     db = get_database()
     doc = {
         "user_id": user_id,
-        "session_id": session_id,
+        "session_id": session_id or "default",
         "role": role,
         "content": content,
         "metadata": metadata or {},
@@ -65,10 +65,11 @@ async def save_exchange(
 
     db = get_database()
     now = datetime.now(timezone.utc)
+    effective_session_id = session_id or "default"
     docs = [
         {
             "user_id": user_id,
-            "session_id": session_id,
+            "session_id": effective_session_id,
             "role": "user",
             "content": user_message,
             "metadata": {},
@@ -76,7 +77,7 @@ async def save_exchange(
         },
         {
             "user_id": user_id,
-            "session_id": session_id,
+            "session_id": effective_session_id,
             "role": "assistant",
             "content": assistant_reply,
             "metadata": metadata or {},
@@ -137,7 +138,7 @@ async def get_sessions(user_id: str, limit: int = 50) -> list[dict]:
     """
     db = get_database()
     pipeline = [
-        {"$match": {"user_id": user_id}},
+        {"$match": {"user_id": user_id, "session_id": {"$nin": [None, ""]}}},
         {"$sort": {"created_at": 1}},
         {
             "$group": {

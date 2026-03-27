@@ -82,6 +82,28 @@ async def create_indexes():
     await db.db.analysis_jobs.create_index([("user_id", 1), ("created_at", -1)])
     await db.db.analysis_jobs.create_index("status")
 
+    # Advisor v2: capabilities
+    await db.db.advisor_capabilities.create_index("capability_id", unique=True)
+
+    # Advisor v2: user capabilities
+    await db.db.user_advisor_capabilities.create_index(
+        [("user_id", 1), ("capability_id", 1)], unique=True
+    )
+
+    # Advisor v2: skill credentials
+    await db.db.advisor_skill_credentials.create_index(
+        [("user_id", 1), ("skill_id", 1)], unique=True
+    )
+
+    # Advisor v2: execution jobs
+    await db.db.execution_jobs.create_index("job_id", unique=True)
+    await db.db.execution_jobs.create_index([("user_id", 1), ("created_at", -1)])
+    await db.db.execution_jobs.create_index("status")
+
+    # Advisor v2: audit logs
+    await db.db.execution_audit_logs.create_index("log_id", unique=True)
+    await db.db.execution_audit_logs.create_index([("user_id", 1), ("created_at", -1)])
+
 
 def get_database() -> AsyncIOMotorDatabase:
     """Get database instance."""
