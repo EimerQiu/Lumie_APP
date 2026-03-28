@@ -72,10 +72,13 @@ class _BatchGenerateScreenState extends State<BatchGenerateScreen> {
           // Task name
           TextFormField(
             controller: _nameController,
-            decoration: const InputDecoration(
+            decoration: InputDecoration(
               labelText: 'Task Name',
+              labelStyle: TextStyle(fontSize: 12, color: AppColors.textLight, fontWeight: FontWeight.w400),
+              floatingLabelStyle: TextStyle(fontSize: 12, color: AppColors.textLight, fontWeight: FontWeight.w400),
               hintText: 'Base name for generated tasks',
-              border: OutlineInputBorder(),
+              hintStyle: TextStyle(fontSize: 13, color: AppColors.textLight, fontWeight: FontWeight.w400),
+              border: const OutlineInputBorder(),
             ),
           ),
           const SizedBox(height: 16),
@@ -142,9 +145,12 @@ class _BatchGenerateScreenState extends State<BatchGenerateScreen> {
           // Notes
           TextFormField(
             controller: _infoController,
-            decoration: const InputDecoration(
+            decoration: InputDecoration(
               labelText: 'Notes (optional)',
-              border: OutlineInputBorder(),
+              labelStyle: TextStyle(fontSize: 12, color: AppColors.textLight, fontWeight: FontWeight.w400),
+              floatingLabelStyle: TextStyle(fontSize: 12, color: AppColors.textLight, fontWeight: FontWeight.w400),
+              hintStyle: TextStyle(fontSize: 13, color: AppColors.textLight, fontWeight: FontWeight.w400),
+              border: const OutlineInputBorder(),
             ),
             maxLines: 2,
           ),
