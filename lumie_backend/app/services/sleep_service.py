@@ -116,7 +116,7 @@ class SleepService:
         """Return age-appropriate sleep target (CDC recommendations)."""
         db = get_database()
         profile = await db.profiles.find_one({"user_id": user_id})
-        age: int = (profile or {}).get("age", 16)
+        age: int = ((profile or {}).get("age") or 16)
 
         # CDC: teens 13-18 need 8-10h; adults 18+ need 7-9h
         if age < 18:

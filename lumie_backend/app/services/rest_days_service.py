@@ -11,7 +11,13 @@ class RestDaysService:
 
     def __init__(self, db: Optional[AsyncIOMotorDatabase] = None):
         """Initialize the rest days service."""
-        self.db = db or get_database()
+        self._db = db
+
+    @property
+    def db(self) -> AsyncIOMotorDatabase:
+        if self._db is None:
+            self._db = get_database()
+        return self._db
 
     async def is_rest_day(self, user_id: str, date: datetime) -> bool:
         """
