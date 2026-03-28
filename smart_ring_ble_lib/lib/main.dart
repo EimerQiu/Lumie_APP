@@ -37,6 +37,8 @@ class _MyHomePageState extends State<MyHomePage> {
   final ScrollController _scrollController = ScrollController();
   final TextEditingController _deviceNameController = TextEditingController();
   final TextEditingController _macAddressController = TextEditingController();
+  String _selectedDeviceName = 'X6B 27279';
+  static const List<String> _deviceNameOptions = ['X6B 27279', 'X6B 45CC8'];
   
   String _connectionStatus = 'Disconnected';
   bool _isScanning = false;
@@ -55,15 +57,12 @@ class _MyHomePageState extends State<MyHomePage> {
     // Prefill target fields from BleService defaults/current target
     final name = _bleService.targetDeviceName;
     final mac = _bleService.targetMacAddress;
-    if (name != null && name.isNotEmpty) {
-      _deviceNameController.text = name;
-    } else {
-      _deviceNameController.text = 'X6B 45CC8';
+    if (name != null && name.isNotEmpty && _deviceNameOptions.contains(name)) {
+      _selectedDeviceName = name;
     }
+    _deviceNameController.text = _selectedDeviceName;
     if (mac != null && mac.isNotEmpty) {
       _macAddressController.text = mac;
-    } else {
-      _macAddressController.text = 'F8:19:23:14:5C:C8';
     }
     // Push initial target into BleService
     _applyTarget();
@@ -580,11 +579,18 @@ class _MyHomePageState extends State<MyHomePage> {
                     Row(
                       children: [
                         Expanded(
-                          child: TextField(
-                            controller: _deviceNameController,
-                            decoration: const InputDecoration(
-                              labelText: 'Device Name (exact match, optional)',
-                            ),
+                          child: DropdownButtonFormField<String>(
+                            initialValue: _selectedDeviceName,
+                            decoration: const InputDecoration(labelText: 'Device Name'),
+                            items: _deviceNameOptions
+                                .map((n) => DropdownMenuItem(value: n, child: Text(n)))
+                                .toList(),
+                            onChanged: (value) {
+                              if (value != null) {
+                                setState(() => _selectedDeviceName = value);
+                                _deviceNameController.text = value;
+                              }
+                            },
                           ),
                         ),
                         const SizedBox(width: 12),
@@ -595,11 +601,6 @@ class _MyHomePageState extends State<MyHomePage> {
                               labelText: 'MAC Address (optional, e.g. F8:19:23:14:5C:C8)',
                             ),
                           ),
-                        ),
-                        const SizedBox(width: 12),
-                        ElevatedButton(
-                          onPressed: _applyTarget,
-                          child: const Text('Apply Target'),
                         ),
                       ],
                     ),
@@ -1378,6 +1379,7 @@ class _MyHomePageState extends State<MyHomePage> {
 
   // Connection Control Methods
   Future<void> _connectToSmartRing() async {
+    _applyTarget();
     try {
       _addMessage('🔍 Searching for Smart Ring...');
       await _bleService.startScan();
