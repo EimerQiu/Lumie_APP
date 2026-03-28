@@ -13,6 +13,11 @@ class SleepService {
 
   final AuthService _authService = AuthService();
 
+  /// When the last ring sync completed, null if never synced this session.
+  DateTime? lastSyncedAt;
+  /// False if the last ring fetch timed out before the end-of-data marker.
+  bool lastSyncWasComplete = true;
+
   Map<String, String> get _headers => {
         'Content-Type': 'application/json',
         'Authorization': 'Bearer ${_authService.token}',
@@ -21,17 +26,29 @@ class SleepService {
   // ─── Ring sync ────────────────────────────────────────────────────────────
 
   /// Upload raw sleep records fetched from the ring to the backend.
-  /// Converts each [RingRawSleepRecord] to a [SleepSession] payload and POSTs
-  /// to /sleep/sync. Silently ignores network errors (best-effort).
-  Future<void> syncFromRingRecords(List<RingRawSleepRecord> records) async {
-    if (records.isEmpty) return;
+  /// [isComplete] indicates whether the BLE fetch received the end-of-data
+  /// marker; if false, records are still uploaded (they're individually valid)
+  /// but [lastSyncWasComplete] is set to false so the UI can warn the user.
+  Future<void> syncFromRingRecords(
+    List<RingRawSleepRecord> records, {
+    required bool isComplete,
+  }) async {
+    lastSyncWasComplete = isComplete;
+
+    if (records.isEmpty) {
+      lastSyncedAt = DateTime.now();
+      return;
+    }
 
     final sessions = records
         .where((r) => r.totalSleepMinutes > 0)
         .map((r) => _ringRecordToPayload(r))
         .toList();
 
-    if (sessions.isEmpty) return;
+    if (sessions.isEmpty) {
+      lastSyncedAt = DateTime.now();
+      return;
+    }
 
     try {
       await http.post(
@@ -39,6 +56,7 @@ class SleepService {
         headers: _headers,
         body: json.encode({'sessions': sessions}),
       ).timeout(const Duration(seconds: 10));
+      lastSyncedAt = DateTime.now();
     } catch (e) {
       // Best-effort — data will be re-uploaded on next sync
     }

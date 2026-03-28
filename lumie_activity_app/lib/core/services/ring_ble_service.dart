@@ -476,16 +476,22 @@ class RingBleService {
   // ─── Sleep ────────────────────────────────────────────────────────────────
 
   /// Command 0x53 — Fetch stored sleep sessions from the ring.
-  /// Returns one record per sleep session (AA=0x00 fetches all stored).
-  Future<List<RingRawSleepRecord>> fetchSleepHistory() async {
+  ///
+  /// Returns `(records, isComplete)` where `isComplete` is true only when the
+  /// ring sent the end-of-data marker (0x53 0xFF).  A timeout means the ring
+  /// stopped sending before the marker; the records collected so far are still
+  /// returned so they can be synced, but callers should surface a "sync
+  /// incomplete" indicator instead of silently showing stale data.
+  Future<({List<RingRawSleepRecord> records, bool isComplete})>
+      fetchSleepHistory() async {
     if (_notifyChar == null) {
       debugPrint('[Ring BLE] fetchSleepHistory: not connected');
-      return [];
+      return (records: <RingRawSleepRecord>[], isComplete: false);
     }
     debugPrint('[Ring BLE] fetchSleepHistory: sending 0x53 AA=0x00');
 
     final records = <RingRawSleepRecord>[];
-    final completer = Completer<List<RingRawSleepRecord>>();
+    final endMarker = Completer<void>();
     StreamSubscription<List<int>>? sub;
 
     sub = _notifyChar!.lastValueStream.listen((data) {
@@ -494,7 +500,7 @@ class RingBleService {
       // End-of-data marker: 0x53 0xFF
       if (data.length >= 2 && data[1] == 0xFF) {
         debugPrint('[Ring BLE] Sleep history end marker — ${records.length} record(s)');
-        if (!completer.isCompleted) completer.complete(records);
+        if (!endMarker.isCompleted) endMarker.complete();
         return;
       }
 
@@ -543,16 +549,18 @@ class RingBleService {
       payload[0] = 0x53;
       payload[1] = 0x00; // read all stored sessions
       await _writeCommand(payload);
-      return await completer.future.timeout(
-        const Duration(seconds: 10),
-        onTimeout: () {
-          debugPrint('[Ring BLE] fetchSleepHistory timeout — returning ${records.length} record(s)');
-          return records;
-        },
-      );
+
+      bool isComplete = true;
+      try {
+        await endMarker.future.timeout(const Duration(seconds: 10));
+      } on TimeoutException {
+        debugPrint('[Ring BLE] fetchSleepHistory timeout — ${records.length} record(s), incomplete');
+        isComplete = false;
+      }
+      return (records: records, isComplete: isComplete);
     } catch (e) {
       debugPrint('[Ring BLE] fetchSleepHistory error: $e');
-      return records;
+      return (records: records, isComplete: false);
     } finally {
       await sub.cancel();
     }

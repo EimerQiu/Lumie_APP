@@ -23,6 +23,9 @@ class _SleepScreenState extends State<SleepScreen> {
   bool _isLoading = true;
   String? _errorMessage;
   String _syncMessage = 'Loading…';
+  // true if the last ring BLE fetch timed out before the end-of-data marker
+  bool _syncWasIncomplete = false;
+  DateTime? _lastSyncedAt;
   bool _lastConnected = false;
   RingProvider? _ringProvider;
 
@@ -70,10 +73,10 @@ class _SleepScreenState extends State<SleepScreen> {
       final ringProvider = Provider.of<RingProvider>(context, listen: false);
       if (ringProvider.isConnected) {
         setState(() => _syncMessage = 'Syncing from ring…');
-        final records = await ringProvider.fetchSleepHistory();
+        final (:records, :isComplete) = await ringProvider.fetchSleepHistory();
         if (records.isNotEmpty) {
           setState(() => _syncMessage = 'Saving sleep data…');
-          await _sleepService.syncFromRingRecords(records);
+          await _sleepService.syncFromRingRecords(records, isComplete: isComplete);
         }
       }
 
@@ -93,6 +96,8 @@ class _SleepScreenState extends State<SleepScreen> {
       setState(() {
         _latestSleep = isRealRingData ? session : null;
         _sleepTarget = results[1] as SleepTarget;
+        _syncWasIncomplete = !_sleepService.lastSyncWasComplete;
+        _lastSyncedAt = _sleepService.lastSyncedAt;
         _isLoading = false;
       });
     } catch (e) {
@@ -237,11 +242,11 @@ class _SleepScreenState extends State<SleepScreen> {
                   ),
                 ),
                 const SizedBox(width: 16),
-                const Expanded(
+                Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(
+                      const Text(
                         'Sleep',
                         style: TextStyle(
                           fontSize: 24,
@@ -249,13 +254,39 @@ class _SleepScreenState extends State<SleepScreen> {
                           color: AppColors.textPrimary,
                         ),
                       ),
-                      Text(
+                      const Text(
                         'Rest & Recovery',
                         style: TextStyle(
                           fontSize: 14,
                           color: AppColors.textSecondary,
                         ),
                       ),
+                      if (_syncStatusLabel() != null) ...[
+                        const SizedBox(height: 4),
+                        Row(
+                          children: [
+                            Icon(
+                              _syncWasIncomplete
+                                  ? Icons.warning_amber_rounded
+                                  : Icons.check_circle_outline,
+                              size: 12,
+                              color: _syncWasIncomplete
+                                  ? AppColors.warning
+                                  : AppColors.success,
+                            ),
+                            const SizedBox(width: 4),
+                            Text(
+                              _syncStatusLabel()!,
+                              style: TextStyle(
+                                fontSize: 11,
+                                color: _syncWasIncomplete
+                                    ? AppColors.warning
+                                    : AppColors.textLight,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
                     ],
                   ),
                 ),
@@ -265,6 +296,15 @@ class _SleepScreenState extends State<SleepScreen> {
         ),
       ),
     );
+  }
+
+  String? _syncStatusLabel() {
+    if (_lastSyncedAt == null) return null;
+    final mins = DateTime.now().difference(_lastSyncedAt!).inMinutes;
+    final timeAgo = mins < 1 ? 'just now' : '${mins}m ago';
+    return _syncWasIncomplete
+        ? 'Sync incomplete · $timeAgo'
+        : 'Synced $timeAgo';
   }
 
   Widget _buildSleepSummaryCard() {

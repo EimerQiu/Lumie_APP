@@ -1,6 +1,7 @@
 """Sleep data service — MongoDB persistence and aggregation."""
 import logging
-from datetime import datetime
+from collections import defaultdict
+from datetime import datetime, timedelta
 from typing import Optional
 
 from ..core.database import get_database
@@ -15,51 +16,190 @@ from ..models.sleep import (
 logger = logging.getLogger(__name__)
 
 
+# ─── Sleep-night helpers ──────────────────────────────────────────────────────
+
+def _sleep_night_key(bedtime: datetime, wake_time: datetime) -> str:
+    """Return a YYYY-MM-DD string identifying the 'sleep night' for a session.
+
+    Convention: the date is the calendar day the user woke up, provided
+    wake_time is before 1 PM (a normal morning wake).  If wake_time is in the
+    afternoon, the session likely started late at night, so we fall back to
+    bedtime + 1 day as the night key.
+    """
+    if wake_time.hour < 13:
+        return wake_time.strftime("%Y-%m-%d")
+    return (bedtime + timedelta(days=1)).strftime("%Y-%m-%d")
+
+
+def _is_nighttime_session(bedtime: datetime, wake_time: datetime) -> bool:
+    """Return True only if the session looks like a real nighttime sleep.
+
+    Valid window:
+      - Bedtime between 8 PM (20:00) and 6 AM (inclusive)
+      - Wake time before 1 PM (13:00)
+
+    Afternoon and mid-day segments (e.g. 3:46 PM – 4:41 PM) are excluded.
+    Note: timestamps are treated as local time (as stored from the ring).
+    """
+    bed_hour = bedtime.hour
+    return (bed_hour >= 20 or bed_hour < 6) and wake_time.hour < 13
+
+
+def _passes_quality_filter(total_minutes: int, quality_score: float,
+                            stages: list[dict]) -> bool:
+    """Return False for sessions that look like ring noise rather than real sleep.
+
+    Rejected:
+      - Shorter than 30 minutes of actual sleep
+      - Quality score below 5 (2 % quality for a 45-min all-light session is noise)
+      - 100 % light sleep with zero deep/REM and under 60 minutes total
+    """
+    if total_minutes < 30:
+        return False
+    if quality_score < 5.0:
+        return False
+    # All-light sessions shorter than an hour are likely motion artefacts
+    if stages:
+        has_deep_or_rem = any(s.get("stage") in ("deep", "rem") and
+                              s.get("duration_minutes", 0) > 0 for s in stages)
+        if not has_deep_or_rem and total_minutes < 60:
+            return False
+    return True
+
+
+def _build_merged_doc(user_id: str, night_key: str,
+                      segs: list[SleepSessionSync]) -> dict:
+    """Merge multiple same-night ring segments into a single DB document."""
+    segs = sorted(segs, key=lambda s: s.bedtime)
+    earliest_bedtime = segs[0].bedtime
+    latest_wake = max(s.wake_time for s in segs)
+    total_sleep = sum(s.total_sleep_minutes for s in segs)
+    total_awake = sum(s.time_awake_minutes for s in segs)
+
+    # Aggregate stage minutes across all segments
+    stage_totals: dict[str, int] = defaultdict(int)
+    for seg in segs:
+        for stage in seg.stages:
+            stage_totals[stage.stage] += stage.duration_minutes
+
+    merged_total = sum(stage_totals.values()) or max(total_sleep, 1)
+    merged_stages = [
+        {
+            "stage": k,
+            "duration_minutes": v,
+            "percentage": round(v / merged_total * 100, 1),
+        }
+        for k, v in stage_totals.items() if v > 0
+    ]
+
+    # Recompute quality from merged totals
+    deep_min = stage_totals.get("deep", 0)
+    rem_min = stage_totals.get("rem", 0)
+    t = merged_total
+    quality = round(
+        min(1.0, (deep_min / t * 100) / 25.0) * 40 +
+        min(1.0, (rem_min / t * 100) / 25.0) * 35 +
+        min(1.0, total_sleep / 480.0) * 25,
+        1,
+    )
+
+    return {
+        "user_id": user_id,
+        # Stable session_id per night so re-syncs overwrite cleanly
+        "session_id": f"{user_id}_{night_key}",
+        "night_key": night_key,
+        "bedtime": earliest_bedtime,
+        "wake_time": latest_wake,
+        "total_sleep_minutes": total_sleep,
+        "time_awake_minutes": total_awake,
+        "stages": merged_stages,
+        "resting_heart_rate": max((s.resting_heart_rate for s in segs), default=0),
+        "sleep_quality_score": quality,
+        "source": segs[0].source,
+        "created_at": latest_wake,
+    }
+
+
+# ─── Service ──────────────────────────────────────────────────────────────────
+
 class SleepService:
     async def sync_sessions(self, user_id: str, sessions: list[SleepSessionSync]) -> None:
-        """Upsert sleep sessions uploaded from the ring."""
+        """Upsert sleep sessions uploaded from the ring.
+
+        Segments belonging to the same sleep night are merged into one record
+        so the DB contains exactly one document per night (identified by
+        night_key YYYY-MM-DD).  This prevents the ring's multi-segment output
+        from creating duplicate "last night" entries.
+        """
         db = get_database()
+
+        # Group incoming segments by sleep night
+        nights: dict[str, list[SleepSessionSync]] = defaultdict(list)
         for s in sessions:
+            key = _sleep_night_key(s.bedtime, s.wake_time)
+            nights[key].append(s)
+
+        for night_key, segs in nights.items():
+            merged = _build_merged_doc(user_id, night_key, segs)
             await db.sleep_sessions.update_one(
-                {"user_id": user_id, "session_id": s.session_id},
-                {
-                    "$set": {
-                        "user_id": user_id,
-                        "session_id": s.session_id,
-                        "bedtime": s.bedtime,
-                        "wake_time": s.wake_time,
-                        "total_sleep_minutes": s.total_sleep_minutes,
-                        "time_awake_minutes": s.time_awake_minutes,
-                        "stages": [stage.model_dump() for stage in s.stages],
-                        "resting_heart_rate": s.resting_heart_rate,
-                        "sleep_quality_score": s.sleep_quality_score,
-                        "source": s.source,
-                        "created_at": s.wake_time,
-                    }
-                },
+                {"user_id": user_id, "session_id": merged["session_id"]},
+                {"$set": merged},
                 upsert=True,
             )
-        logger.info("[sleep] synced %d session(s) for user %s", len(sessions), user_id)
+
+        logger.info("[sleep] synced %d night(s) for user %s", len(nights), user_id)
 
     async def get_latest(self, user_id: str) -> Optional[SleepSessionResponse]:
-        """Return the most recent sleep session for the user."""
+        """Return the most recent *valid nighttime* sleep session.
+
+        Filters applied (all must pass):
+          1. Bedtime in nighttime window (8 PM – 6 AM)
+          2. Wake time before 1 PM
+          3. At least 30 minutes of sleep
+          4. Sleep quality score ≥ 5
+          5. Not all-light with zero deep/REM and under 60 min (ring noise)
+        """
         db = get_database()
-        doc = await db.sleep_sessions.find_one(
-            {"user_id": user_id},
+        three_days_ago = datetime.utcnow() - timedelta(days=3)
+        cursor = db.sleep_sessions.find(
+            {"user_id": user_id, "bedtime": {"$gte": three_days_ago}},
             sort=[("bedtime", -1)],
+            limit=20,
         )
-        return self._doc_to_response(doc) if doc else None
+        docs = [doc async for doc in cursor]
+
+        for doc in docs:
+            if (
+                _is_nighttime_session(doc["bedtime"], doc["wake_time"])
+                and _passes_quality_filter(
+                    doc["total_sleep_minutes"],
+                    doc["sleep_quality_score"],
+                    doc.get("stages", []),
+                )
+            ):
+                return self._doc_to_response(doc)
+
+        return None
 
     async def get_history(
         self, user_id: str, start: datetime, end: datetime
     ) -> list[SleepSessionResponse]:
-        """Return sleep sessions in the given date range, newest first."""
+        """Return nighttime sleep sessions in the given date range, newest first."""
         db = get_database()
         cursor = db.sleep_sessions.find(
             {"user_id": user_id, "bedtime": {"$gte": start, "$lte": end}},
             sort=[("bedtime", -1)],
         )
-        return [self._doc_to_response(doc) async for doc in cursor]
+        return [
+            self._doc_to_response(doc)
+            async for doc in cursor
+            if _is_nighttime_session(doc["bedtime"], doc["wake_time"])
+            and _passes_quality_filter(
+                doc["total_sleep_minutes"],
+                doc["sleep_quality_score"],
+                doc.get("stages", []),
+            )
+        ]
 
     async def get_summary(
         self, user_id: str, start: datetime, end: datetime
@@ -83,21 +223,17 @@ class SleepService:
         avg_resting_hr = sum(s.resting_heart_rate for s in sessions) / n
         avg_quality = sum(s.sleep_quality_score for s in sessions) / n
 
-        # Average stage percentages across sessions
         stage_sums: dict[str, float] = {}
         for s in sessions:
             for stage in s.stages:
                 stage_sums[stage.stage] = stage_sums.get(stage.stage, 0.0) + stage.percentage
         avg_stages = {k: round(v / n, 1) for k, v in stage_sums.items()}
 
-        # Sleep consistency: how similar are bedtimes?
-        # Expressed as 0–1 where 1 = perfectly consistent
         if n > 1:
             bedtime_minutes = [s.bedtime.hour * 60 + s.bedtime.minute for s in sessions]
             mean_bt = sum(bedtime_minutes) / n
             variance = sum((bt - mean_bt) ** 2 for bt in bedtime_minutes) / n
-            std_dev = variance ** 0.5  # minutes
-            # Map std_dev=0 → 1.0, std_dev=60 → 0.0
+            std_dev = variance ** 0.5
             consistency = round(max(0.0, 1.0 - std_dev / 60.0), 2)
         else:
             consistency = 1.0
@@ -118,7 +254,6 @@ class SleepService:
         profile = await db.profiles.find_one({"user_id": user_id})
         age: int = ((profile or {}).get("age") or 16)
 
-        # CDC: teens 13-18 need 8-10h; adults 18+ need 7-9h
         if age < 18:
             return SleepTargetResponse(
                 min_duration_minutes=8 * 60,
@@ -146,7 +281,7 @@ class SleepService:
             resting_heart_rate=doc.get("resting_heart_rate", 0),
             sleep_quality_score=doc["sleep_quality_score"],
             created_at=doc["created_at"],
-            source=doc.get("source", "ring"),  # default for records before this field existed
+            source=doc.get("source", "ring"),
         )
 
 
