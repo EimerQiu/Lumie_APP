@@ -16,3 +16,6 @@ __pycache__/
 *.py[cod]
 
 /tmp
+
+# Smart ring BLE test app - local only
+smart_ring_ble_lib/
