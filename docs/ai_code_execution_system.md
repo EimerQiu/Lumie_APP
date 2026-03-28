@@ -1,23 +1,24 @@
-# Lumie AI Data Analysis System
+# Lumie Advisor AI Execution System
 
 Backend Architecture & Development Requirements Specification
 
-**Version**: v3.0
-**Updated**: 2026-03-14
+**Version**: v3.1
+**Updated**: 2026-03-25
 **Project**: Lumie Activity App (lumie_backend)
 
 ---
 
 ## Goal
 
-Upgrade Lumie App's Advisor Chat **from a pure conversation system to an intelligent routing system**.
+Upgrade Lumie App's Advisor Chat from a pure conversation system into an **AI orchestration layer** that can route a user message into the correct execution path.
 
-When a user sends any message in Advisor Chat → the backend calls Claude (with tool_use) → Claude decides on its own:
+When a user sends any message in Advisor Chat, the backend calls Claude with tool definitions. Claude then decides whether to:
 
-- **Direct reply**: casual chat, health advice, general questions → immediately return a text reply (same speed as current)
-- **Data analysis**: questions requiring user data → Claude calls the `run_data_analysis` tool → backend starts an analysis job → generates code → Docker sandbox execution → returns conclusions + charts
+- **Reply directly**: casual chat, health advice, general questions
+- **Run async data analysis**: questions requiring personal data lookup through `run_data_analysis`
+- **Execute a direct product action**: currently task creation through `create_task`
 
-The user does not need to know which path the system takes internally. For the user, chatting with the Advisor is a unified experience.
+The user does not need to know which backend path the system takes internally. For the user, chatting with the Advisor remains a unified experience.
 
 ### Typical Scenarios
 
@@ -36,15 +37,21 @@ Triggers data analysis (slow path):
 - "Am I improving on my 6-minute walk test?" → needs to query walk_tests → analysis
 - Parent asks: "How did my child do with their tasks this week?" → needs to query tasks (target user is the child) → analysis
 
+Triggers direct tool execution (non-sandbox write path):
+
+- "Remind me to take my medicine at 8am tomorrow" → `create_task`
+- "Set a study reminder every day this week at 6pm" → `create_task`
+
 ### System Requirements
 
 - Direct reply response time must match the current Advisor (1-3 seconds)
 - Data analysis must not block the API (async execution + frontend polling)
-- AI-generated code **must not modify** business data (read-only access)
+- AI-generated code must remain **read-only**
 - Execution environment must be fully isolated (Docker container)
 - Must comply with Lumie's **teen-safe** design principles (no calories, BMI, weight rankings, etc.)
 - Must comply with Lumie's subscription tier limits
 - LLM must have complete Lumie database schema and domain glossary context
+- Direct business-operation tools must reuse existing backend services rather than generated code
 
 ---
 
@@ -53,52 +60,55 @@ Triggers data analysis (slow path):
 ```
 Flutter App (Advisor Chat)
      │
-     │  POST /api/v1/advisor/chat  (reuse existing endpoint, upgrade internal logic)
+     │  POST /api/v1/advisor/chat
      ▼
-FastAPI — advisor_service.py (upgraded)
+FastAPI — advisor_service.py
      │
-     ├── Claude API (with tool_use)
+     ├── Claude API (Layer 1 routing with tool_use)
      │     │
-     │     ├── No tool call → return reply directly (fast path)
+     │     ├── No tool call → direct reply
      │     │
-     │     └── Calls run_data_analysis tool → create analysis job
-     │           │
-     │           ▼
-     │     AsyncIO Task Runner
-     │           │
-     │           ├── Claude API (code generation, separate call)
-     │           │
-     │           ▼
-     │     Docker Sandbox Container
-     │           │
-     │           ├── Read-only MongoDB connection
-     │           │
-     │           ▼
-     │     Write results to /output → write back to MongoDB
+     │     ├── create_task → call TaskService directly
+     │     │
+     │     └── run_data_analysis → create async analysis job
+     │                              │
+     │                              ▼
+     │                        analysis_service.py
+     │                              │
+     │                              ├── build analysis prompt
+     │                              ├── Claude API (Layer 2 code generation)
+     │                              ├── static security scan
+     │                              └── Docker sandbox execution
+     │                                      │
+     │                                      ├── read-only MongoDB access
+     │                                      └── write results to analysis_jobs
      │
-     ▼
+     ├── chat history persistence
+     └── dayprint / notification side effects
+     
 Response → Flutter
      │
-     ├── type: "direct"   → display reply directly
-     └── type: "analysis" → show "Analyzing...", start polling job status
+     ├── type: "direct"   → display reply immediately
+     └── type: "analysis" → show placeholder, poll /analysis/jobs/{job_id}
 ```
 
 ### Component Responsibilities
 
 | Component | Responsibility |
 | --- | --- |
-| FastAPI | API routing + JWT auth + intelligent routing |
-| advisor_service.py (upgraded) | Claude tool_use call + routing decision + job creation |
-| MongoDB (lumie_db) | Job metadata storage + business data source |
-| AsyncIO Task | Async job execution (replaces Celery, keeps architecture simple) |
-| Docker Sandbox | Isolated execution of AI-generated Python code |
-| Claude API | Routing decision (tool_use) + code generation (separate call) |
+| FastAPI | API routing + JWT auth + Advisor orchestration entrypoint |
+| advisor_service.py | Layer 1 Claude routing, tool dispatch, quota/rate checks, permission checks |
+| analysis_service.py | Analysis job lifecycle orchestration |
+| MongoDB (lumie_db) | Business data source + analysis job metadata + chat history |
+| AsyncIO Task | Async execution for analysis jobs and background side effects |
+| Docker Sandbox | Isolated execution of AI-generated Python analysis code |
+| Claude API | Layer 1 routing + Layer 2 code generation |
 
 ### Key Design Decisions
 
 **Why tool_use instead of two LLM calls?**
 
-No need to call Claude once to "decide whether analysis is needed" and then again to execute. Claude's tool_use natively supports this routing: give it a `run_data_analysis` tool, and it will decide on its own whether to use it. A single call handles both routing and direct answers.
+No need to call Claude once to "decide what kind of request this is" and then again to route it manually. Claude's tool_use can route among direct replies and multiple tools. A single Layer 1 call handles direct answers, analysis requests, and direct business-operation tool calls.
 
 **Why not Celery + Redis?**
 
@@ -108,18 +118,22 @@ Lumie is currently deployed on a single Ubuntu server (54.177.85.124), managed v
 
 # 2 Tech Stack
 
-New additions on top of existing lumie_backend:
+Actual additions on top of existing `lumie_backend`:
 
 ```
-New Python packages:
-  docker          # Docker SDK for Python
-
 Already available (reused directly):
   fastapi
   uvicorn
   motor           # async MongoDB
   pydantic
   anthropic       # Claude API (already used by advisor_service)
+```
+
+Implementation note:
+
+```
+Docker is invoked through the Docker CLI via asyncio.create_subprocess_exec
+The Python Docker SDK is not used in the current implementation
 ```
 
 Server additions:
@@ -165,11 +179,14 @@ Docker Engine    # Needs to be installed on 54.177.85.124
   "timeout_sec": 30,
   "docker_container_id": "",
 
-  "model": "claude-haiku-4-5-20251001",
+  "model": "claude-sonnet-4-6",
   "token_usage": {
     "input_tokens": 0,
     "output_tokens": 0
-  }
+  },
+  "data_types": [],
+  "time_range": "",
+  "dayprint_logged": false
 }
 ```
 
@@ -201,7 +218,7 @@ Headers:
 Authorization: Bearer {jwt_token}
 ```
 
-Request Body (backward-compatible, new optional fields):
+Request Body (backward-compatible, currently implemented fields):
 
 ```json
 {
@@ -211,7 +228,8 @@ Request Body (backward-compatible, new optional fields):
     {"role": "assistant", "content": "..."}
   ],
   "target_user_id": "optional, used when parent analyzes child's data",
-  "team_id": "optional, needed for parent scenarios"
+  "team_id": "optional, needed for parent scenarios",
+  "session_id": "optional, used for chat persistence and session restore"
 }
 ```
 
@@ -225,8 +243,8 @@ async def advisor_chat(request, user_id):
     # 2. Build system prompt (upgraded version, includes tool definitions)
     system_prompt = build_advisor_system_prompt(profile)
 
-    # 3. Define run_data_analysis tool
-    tools = [RUN_DATA_ANALYSIS_TOOL]
+    # 3. Define available tools
+    tools = [RUN_DATA_ANALYSIS_TOOL, CREATE_TASK_TOOL]
 
     # 4. Call Claude (with tool_use)
     response = await client.messages.create(
@@ -243,35 +261,22 @@ async def advisor_chat(request, user_id):
         return {"type": "direct", "reply": extract_text(response)}
 
     elif response.stop_reason == "tool_use":
-        # Slow path: needs data analysis
+        # Tool path: analysis or task creation
         tool_input = extract_tool_input(response)
 
-        # 5a. Check subscription quota (only analysis path needs checking)
-        check_analysis_quota(user_id, subscription_tier)
+        if tool_name == "create_task":
+            return handle_create_task(tool_input)
 
-        # 5b. Check parent permissions (if target_user_id specified)
+        # run_data_analysis path
+        check_analysis_quota(user_id, subscription_tier)
         if target_user_id:
             verify_team_admin_access(user_id, target_user_id, team_id)
-
-        # 5c. Create analysis job
-        job_id = create_analysis_job(
-            user_id=user_id,
-            prompt=tool_input["question"],
-            target_user_id=target_user_id or user_id,
-        )
-
-        # 5d. Start async execution
+        job_id = create_analysis_job(...)
         asyncio.create_task(run_analysis_job(job_id))
-
-        # 5e. Return analyzing response
-        return {
-            "type": "analysis",
-            "reply": "Analyzing your data, please wait...",
-            "job_id": job_id,
-        }
+        return {"type": "analysis", "reply": "Analyzing your data, please wait...", "job_id": job_id}
 ```
 
-### Response Format (Upgraded, Two Types)
+### Response Format (Currently Implemented)
 
 **Direct reply (fast path):**
 
@@ -279,6 +284,22 @@ async def advisor_chat(request, user_id):
 {
   "type": "direct",
   "reply": "Hello! I'm your Lumie health advisor..."
+}
+```
+
+Possible direct replies currently include:
+
+- normal conversational answers
+- quota/rate-limit responses
+- task-creation success/failure replies
+
+Direct responses may also include:
+
+```json
+{
+  "type": "direct",
+  "reply": "Done! I've created **Take Metformin** for you.",
+  "nav_hint": "task_list"
 }
 ```
 
@@ -296,14 +317,17 @@ async def advisor_chat(request, user_id):
 
 When older Flutter clients don't recognize the `type` field, they will simply read the `reply` field and display it — behavior identical to before. The upgraded Flutter checks the `type` field to decide whether to start polling.
 
-### run_data_analysis Tool Definition
+### Tool Definitions
+
+#### run_data_analysis
 
 ```python
 RUN_DATA_ANALYSIS_TOOL = {
     "name": "run_data_analysis",
-    "description": (
+        "description": (
         "Call this tool when the user's question requires querying their personal health data to answer. "
-        "Examples: activity trends, medication completion rates, heart rate analysis, walk test comparisons, etc. "
+        "Examples: activity trends, medication completion rates, heart rate analysis, walk test comparisons, "
+        "upcoming task reminders, or what tasks are due now/today. "
         "Do NOT use for general health knowledge questions that can be answered directly."
     ),
     "input_schema": {
@@ -330,22 +354,31 @@ RUN_DATA_ANALYSIS_TOOL = {
 }
 ```
 
+#### create_task
+
+The current implementation also registers a `create_task` tool for task/reminder creation. This tool:
+
+- is used for write operations such as creating tasks from natural language
+- does not use generated code or the Docker sandbox
+- delegates to existing backend business logic in `TaskService`
+- returns a normal direct response with `nav_hint: "task_list"`
+
 ### Subscription Limits (Analysis Path Only)
 
 Direct replies do not consume analysis quota. Only triggering the `run_data_analysis` tool is checked:
 
 | Tier | Daily Analysis Limit |
 | --- | --- |
-| free | 3 |
-| monthly (Pro) | 20 |
-| annual (Pro) | 20 |
+| free | 200 |
+| monthly (Pro) | 200 |
+| annual (Pro) | 200 |
 
 When the limit is exceeded, instead of returning a 403 error (since we're inside the existing chat endpoint), return:
 
 ```json
 {
   "type": "direct",
-  "reply": "You've used all your data analysis quota for today (3/3). Upgrade to Pro for 20 analyses per day. I can still help you with questions that don't require data lookup."
+  "reply": "You've used all your data analysis quota for today. I can still help you with questions that don't require data lookup."
 }
 ```
 
@@ -480,21 +513,20 @@ async def run_analysis_job(job_id: str):
 8. Security scan the code (see Section 15)
 
 9. Write code to temp directory /tmp/lumie_sandbox/{job_id}/main.py
-10. Write connection config to /tmp/lumie_sandbox/{job_id}/config.json
 
-11. status → running
+10. status → running
 
-12. Start Docker sandbox container
+11. Start Docker sandbox container
 
-13. Wait for container to exit (with timeout monitoring)
+12. Wait for container to exit (with timeout monitoring)
 
-14. Read /tmp/lumie_sandbox/{job_id}/output/result.json
+13. Read /tmp/lumie_sandbox/{job_id}/output/result.json
 
-15. Write results to analysis_jobs.result
+14. Write results to analysis_jobs.result
 
-16. status → success (or failed)
+15. status → success (or failed)
 
-17. Clean up temp directory
+16. Clean up temp directory
 ```
 
 ---
@@ -524,12 +556,13 @@ User profile:
 {f'- Their healthcare advisor/coach is {advisor_name}' if advisor_name else ''}
 
 ## When to use the run_data_analysis tool
-Call run_data_analysis ONLY when the user asks a question that requires querying their personal data:
+Call `run_data_analysis` when the user asks a question that requires querying their personal data:
 - Activity trends, totals, or comparisons over time
 - Task/medication completion rates or statistics
 - Heart rate analysis
 - Walk test progress
 - Any question that asks about specific numbers/trends in their data
+- Questions about what tasks/medications are due now, today, or later
 
 Do NOT call the tool for:
 - General health advice or tips
@@ -537,6 +570,7 @@ Do NOT call the tool for:
 - Questions about medical conditions (answer from knowledge)
 - Emotional support or encouragement
 - Questions you can answer without data
+- Creating or adding new tasks (use `create_task` instead)
 
 ## Response guidelines
 - Keep replies concise: 2–4 sentences unless a detailed explanation is clearly needed.
@@ -545,10 +579,14 @@ Do NOT call the tool for:
 - Never replace medical advice — remind the user to check with their care team for anything clinical.
 - Use warm, supportive language. Avoid being preachy.
 - TEEN-SAFE: Never output calories, BMI, weight comparisons, or performance rankings.
-- You may use **bold** to emphasise key words, but do not use bullet points, numbered lists, or headers."""
+- You may use **bold** to emphasise key words, but do not use bullet points, numbered lists, or headers.
+
+## Context
+- Right now (user's local time): ...
+- User's timezone: ..."""
 ```
 
-**Model choice**: Layer 1 uses `claude-sonnet-4-20250514` (needs tool_use capability + fast response; Sonnet is the best balance. The current advisor uses Opus which is too slow; Haiku's tool_use judgment is not accurate enough).
+**Model choice**: Layer 1 currently uses `claude-sonnet-4-20250514`.
 
 **max_tokens**: 800 (slightly higher than the current 400, since tool_use responses may include tool call JSON).
 
@@ -569,12 +607,12 @@ async def build_analysis_prompt(
         glossary=glossary,
         user_age=user_profile.get("age", "unknown"),
         user_condition=user_profile.get("icd10_code", "none"),
-        target_user_id=target_user_id,
+        user_timezone=user_profile.get("timezone", "UTC"),
         question=question
     )
 ```
 
-**Model choice**: Layer 2 uses `claude-haiku-4-5-20251001` (only needs to generate Python code; Haiku is fast and cost-effective).
+**Model choice**: Layer 2 currently uses `claude-sonnet-4-6`.
 
 **The schema and glossary are maintained by the backend. The LLM must not explore the database structure on its own.**
 
@@ -653,7 +691,7 @@ Content (based on actual Lumie collections):
         "task_name": "string, task name",
         "task_type": "string, Medicine|Life|Study|Exercise|Work|Meditation|Love",
         "status": "string, pending|completed|expired",
-        "open_datetime": "string, start time 'YYYY-MM-DD HH:mm' (note: no Z suffix, stored as local time)",
+        "open_datetime": "string, start time 'YYYY-MM-DD HH:mm' stored in UTC (no Z suffix)",
         "close_datetime": "string, end time",
         "completed_at": "string, completion time ISO datetime (optional)",
         "rpttask_id": "string, associated template ID (optional)",
@@ -793,6 +831,9 @@ Your job: Generate Python code to answer the user's question by querying MongoDB
 - User health condition (ICD-10): {user_condition}
 - Timezone: {user_timezone}
 
+## Timezone Handling (MANDATORY for task queries)
+task open_datetime/close_datetime are stored in UTC (no Z suffix). Convert user-local concepts such as "today", "now", and "this week" using the user's timezone before querying.
+
 ## Task
 Answer this question: {question}
 
@@ -824,13 +865,13 @@ Reuses the existing `ANTHROPIC_API_KEY` environment variable.
 model = "claude-sonnet-4-20250514"     # Accurate tool_use judgment + fast response
 temperature = 0.3                       # Conversation needs some variation
 max_tokens = 800
-tools = [RUN_DATA_ANALYSIS_TOOL]
+tools = [RUN_DATA_ANALYSIS_TOOL, CREATE_TASK_TOOL]
 ```
 
 ### Layer 2: Code Generation (analysis_llm_service.py, new)
 
 ```python
-model = "claude-haiku-4-5-20251001"    # Sufficient for code generation, fast, cost-effective
+model = "claude-sonnet-4-6"            # Current code-generation model
 temperature = 0                         # Deterministic output
 max_tokens = 4000                       # Analysis code tends to be long
 ```
@@ -843,10 +884,10 @@ If Claude's output is not valid Python code, job status → failed, error = "cod
 
 | Path | Model | Estimated tokens/call | Cost/call |
 | --- | --- | --- | --- |
-| Direct reply | Sonnet | ~1500 input + ~200 output | ~$0.006 |
-| Data analysis | Sonnet + Haiku | ~1500 + ~3000 input, ~100 + ~2000 output | ~$0.015 |
+| Direct reply / tool routing | Sonnet | varies | implementation-dependent |
+| Data analysis | Sonnet + Sonnet | varies | implementation-dependent |
 
-The direct reply path is actually cheaper compared to the current Advisor (Opus) — Sonnet is roughly 5x cheaper than Opus.
+Exact cost estimates should be recalculated from current model pricing before using this document for budgeting.
 
 ---
 
@@ -859,7 +900,7 @@ Uses in-memory rate counters (per user_id):
 # Max 5 LLM calls globally per second (to protect Anthropic API quota)
 ```
 
-Exceeding rate limits returns 429 Too Many Requests.
+In the current implementation, analysis rate-limit exhaustion is converted into a conversational direct reply rather than a raw 429 response.
 
 ---
 
@@ -907,28 +948,27 @@ This operation is performed once during deployment; the image is cached on the s
 Starting a container:
 
 ```python
-container = docker_client.containers.run(
-    image="lumie-analysis-sandbox",
-    command=["python", "main.py"],
-    detach=True,
-    mem_limit="256m",
-    cpu_quota=50000,          # 0.5 CPU
-    pids_limit=32,
-    network_mode="bridge",    # Needs MongoDB access, but restrict other network
-    read_only=True,
-    volumes={
-        f"/tmp/lumie_sandbox/{job_id}/main.py": {
-            "bind": "/app/main.py", "mode": "ro"
-        },
-        f"/tmp/lumie_sandbox/{job_id}/output": {
-            "bind": "/output", "mode": "rw"
-        }
-    },
-    environment={
-        "MONGO_URI": SANDBOX_MONGO_URI,       # Read-only user connection
-        "TARGET_USER_ID": target_user_id,
-    },
-    tmpfs={"/tmp": "size=64m,noexec"},
+docker_cmd = [
+    "docker", "run",
+    "--rm",
+    "--name", f"lumie-analysis-{job_id[:12]}",
+    "--memory", "256m",
+    "--cpu-quota", "50000",
+    "--pids-limit", "32",
+    "--network", "bridge",
+    "--read-only",
+    "--tmpfs", "/tmp:size=64m,noexec",
+    "-v", f"{code_path}:/app/main.py:ro",
+    "-v", f"{output_dir}:/output:rw",
+    "-e", f"MONGO_URI={SANDBOX_MONGO_URI}",
+    "-e", f"TARGET_USER_ID={target_user_id}",
+    "lumie-analysis-sandbox",
+]
+
+process = await asyncio.create_subprocess_exec(
+    *docker_cmd,
+    stdout=asyncio.subprocess.PIPE,
+    stderr=asyncio.subprocess.PIPE,
 )
 ```
 
@@ -954,6 +994,8 @@ resource limits (memory, CPU, PIDs)
 ---
 
 # 16 MongoDB Read-Only Access Policy
+
+This remains the intended security model for sandbox access. In the current deployed implementation, MongoDB auth enablement may still be deferred depending on environment, so prompt rules, static scanning, and Docker isolation remain important enforcement layers.
 
 ### Create Read-Only User
 
@@ -1134,7 +1176,8 @@ New and modified files integrated into the existing `lumie_backend/app/` structu
 lumie_backend/app/
  ├── api/
  │   ├── advisor_routes.py           ← Modified: upgraded response model
- │   └── analysis_routes.py          ← New: analysis job query/cancel routes
+ │   ├── analysis_routes.py          ← New: analysis job query/cancel routes
+ │   └── chat_history_routes.py      ← New: advisor history + session routes
  │
  ├── services/
  │   ├── advisor_service.py          ← Modified: add tool_use + routing logic
@@ -1142,10 +1185,10 @@ lumie_backend/app/
  │   ├── analysis_llm_service.py     ← New: Claude code generation (Layer 2)
  │   ├── analysis_prompt_service.py  ← New: prompt context assembly
  │   ├── analysis_sandbox_service.py ← New: Docker container management
- │   └── analysis_security_service.py← New: code security scanning
+ │   ├── analysis_security_service.py← New: code security scanning
+ │   └── chat_history_service.py     ← New: chat persistence
  │
  ├── models/
- │   ├── advisor.py                  ← Modified: upgraded response model (add type + job_id)
  │   └── analysis.py                 ← New: analysis job Pydantic models
  │
  ├── resources/
@@ -1153,7 +1196,7 @@ lumie_backend/app/
  │   │   └── lumie_schema.json       ← New: Lumie database schema
  │   └── glossary.md                 ← New: domain glossary
  │
- └── main.py                         ← Modified: register analysis_routes
+ └── main.py                         ← Modified: register analysis/chat history routes + startup index hooks
 
 lumie_backend/sandbox/
  └── Dockerfile                      ← New: sandbox image definition
@@ -1192,6 +1235,7 @@ class AnalysisResult(BaseModel):
     summary: str
     data: Optional[Dict[str, Any]] = None
     chart_base64: Optional[str] = None
+    nav_hint: Optional[str] = None
 
 
 class AnalysisJobResponse(BaseModel):
@@ -1220,7 +1264,7 @@ Modify `lumie_backend/app/main.py`:
 from app.api.analysis_routes import router as analysis_router
 
 # Add after existing route registrations:
-app.include_router(analysis_router, prefix="/api/v1/analysis", tags=["analysis"])
+app.include_router(analysis_router, prefix="/api/v1")
 ```
 
 ---
@@ -1267,6 +1311,7 @@ class AdvisorService {
       body: json.encode({
         'message': message,
         'history': history.map((m) => m.toJson()).toList(),
+        'session_id': sessionId,
       }),
     ).timeout(const Duration(seconds: 15));
 
@@ -1279,7 +1324,10 @@ class AdvisorService {
         jobId: data['job_id'],
       );
     } else {
-      return AdvisorResponse.direct(reply: data['reply']);
+      return AdvisorResponse.direct(
+        reply: data['reply'],
+        navHint: data['nav_hint'],
+      );
     }
   }
 }
@@ -1289,12 +1337,13 @@ class AdvisorResponse {
   final String type;     // "direct" or "analysis"
   final String reply;
   final String? jobId;
+  final String? navHint;
 
-  AdvisorResponse.direct({required this.reply})
+  AdvisorResponse.direct({required this.reply, this.navHint})
       : type = 'direct', jobId = null;
 
   AdvisorResponse.analysis({required this.reply, required this.jobId})
-      : type = 'analysis';
+      : type = 'analysis', navHint = null;
 }
 ```
 
@@ -1319,7 +1368,11 @@ Future<void> _send() async {
   if (response.type == 'direct') {
     // Fast path: display reply directly
     setState(() {
-      _messages.add(_Message(text: response.reply, isUser: false));
+        _messages.add(_Message(
+          text: response.reply,
+          isUser: false,
+          navHint: response.navHint,
+        ));
       _isTyping = false;
     });
   } else if (response.type == 'analysis') {
@@ -1361,6 +1414,7 @@ class _Message {
   final bool isAnalyzing;        // New: whether analysis is in progress
   final String? jobId;            // New: associated job ID
   final AnalysisResult? analysisResult;  // New: analysis result
+  final String? navHint;         // New: optional navigation affordance
 
   _Message({
     required this.text,
@@ -1368,6 +1422,7 @@ class _Message {
     this.isAnalyzing = false,
     this.jobId,
     this.analysisResult,
+    this.navHint,
   });
 }
 ```
@@ -1412,6 +1467,8 @@ sudo docker build -t lumie-analysis-sandbox .
 ```
 
 ### 25.3 Create MongoDB Read-Only User
+
+Recommended when MongoDB auth is enabled in production. If auth is still disabled in the current environment, this step becomes part of a later hardening pass rather than a prerequisite for the basic architecture.
 
 ```bash
 mongosh lumie_db
@@ -1493,23 +1550,26 @@ These constraints are enforced through the CRITICAL SAFETY RULES section in the 
 Modified existing files:
 1.  advisor_service.py      — Upgrade: add tool_use + intelligent routing logic
 2.  advisor_routes.py       — Upgrade: response model adds type + job_id
-3.  advisor.py (models)     — Upgrade: AdvisorChatResponse adds new fields
+3.  chat_history_routes.py  — Added advisor history and session endpoints
 4.  database.py             — Add analysis_jobs indexes
 5.  main.py                 — Register analysis_routes
+6.  main.py                 — Register chat_history_routes and ensure chat history indexes on startup
 
 New files:
-6.  analysis_routes.py      — 3 API endpoints (query/cancel/history)
-7.  analysis_service.py     — Job lifecycle management + asyncio execution
-8.  analysis_llm_service.py — Claude code generation (Layer 2 LLM call)
-9.  analysis_prompt_service.py — Schema + Glossary + Profile assembly
-10. analysis_sandbox_service.py — Docker container creation/monitoring/cleanup
-11. analysis_security_service.py — Static code security scanning
-12. analysis.py (models)    — Analysis job Pydantic models
-13. lumie_schema.json       — Lumie database schema definition
-14. glossary.md             — Domain glossary mapping
-15. sandbox/Dockerfile      — Sandbox image definition
-16. Subscription limit check — Free: 3/day, Pro: 20/day (analysis path only)
-17. Permission check        — Parent viewing child's data requires team admin role
+7.  analysis_routes.py      — Analysis API endpoints (query/cancel/history)
+8.  analysis_service.py     — Job lifecycle management + asyncio execution
+9.  analysis_llm_service.py — Claude code generation (Layer 2 LLM call)
+10. analysis_prompt_service.py — Schema + Glossary + Profile assembly
+11. analysis_sandbox_service.py — Docker container creation/monitoring/cleanup
+12. analysis_security_service.py — Static code security scanning
+13. chat_history_service.py — Chat persistence in MongoDB
+14. analysis.py (models)    — Analysis job Pydantic models
+15. lumie_schema.json       — Lumie database schema definition
+16. glossary.md             — Domain glossary mapping
+17. sandbox/Dockerfile      — Sandbox image definition
+18. Subscription limit check — Currently implemented as 200/day for all tiers on the analysis path
+19. Permission check        — Parent viewing child's data requires team admin role
+20. Task tool support       — `create_task` direct business-operation path
 ```
 
 ### Frontend (Flutter / Dart)
@@ -1517,13 +1577,14 @@ New files:
 ```
 Modified existing files:
 1.  advisor_service.dart    — Handle new response type (direct / analysis)
-2.  advisor_screen.dart     — _send() upgrade: support two response paths
-3.  _Message class          — Add isAnalyzing, jobId, analysisResult fields
+2.  advisor_screen.dart     — _send() upgrade: support direct, analysis, nav hints, and session flow
+3.  chat_history_service.dart — Session/history fetch + local cache
+4.  _Message class          — Add isAnalyzing, jobId, analysisResult, navHint fields
 
 New files:
-4.  analysis_service.dart   — Analysis job polling logic
-5.  analysis_models.dart    — AnalysisResult, AnalysisJob Dart models
-6.  analysis_result_card.dart — Analysis result card widget (text + chart + data)
+5.  analysis_service.dart   — Analysis job polling logic
+6.  analysis_models.dart    — AnalysisResult, AnalysisJob Dart models
+7.  analysis_result_card.dart — Analysis result card widget (text + chart + data)
 ```
 
 ### Deployment
@@ -1531,7 +1592,7 @@ New files:
 ```
 1.  Install Docker on server
 2.  Build sandbox image
-3.  Create MongoDB read-only user
+3.  Create MongoDB read-only user (recommended hardening step when auth is enabled)
 4.  Update .env environment variables
 5.  Configure MongoDB network
 6.  Deploy backend code
@@ -1542,6 +1603,7 @@ New files:
 ```
 User chats with Advisor → system automatically decides:
   → General questions: direct reply within 1-3 seconds (same speed as current)
+  → Create-task requests: execute immediately through backend service logic
   → Data questions: show "Analyzing..." → 10-30 seconds later, return analysis conclusions + charts
 User doesn't need to manually trigger analysis, switch screens, or understand the underlying mechanism.
 ```
@@ -1569,20 +1631,316 @@ User doesn't need to manually trigger analysis, switch screens, or understand th
 
 | Existing Module | Relationship |
 | --- | --- |
-| Advisor Chat (`advisor_service.py`) | **Direct upgrade**: from pure conversation to intelligent routing; core file of this change |
+| Advisor Chat (`advisor_service.py`) | **Direct upgrade**: now a multi-tool orchestration layer and core file of this change |
 | Advisor Routes (`advisor_routes.py`) | **Modified**: response model extended, endpoint URL unchanged |
 | AI Tips (`ai_tips_service.py`) | Complementary: Tips provide simple statistics (fast, lightweight); analysis system handles custom questions |
 | Team System (`team_service.py`) | Reuses team permission check logic; parents can analyze child data |
-| Subscription (`subscription_helpers.py`) | Reuses subscription tier check (only analysis path counts) |
+| Task System (`task_service.py`) | Reused directly for `create_task` tool execution |
 | Auth (`security.py`) | Reuses JWT auth and `get_current_user_id` |
 | Profile (`profile_service.py`) | Reads user profile as context for both LLM layers |
+| Chat History (`chat_history_service.py`) | Persists sessions and supports Advisor continuity |
 
 ### Model Usage Changes
 
 | Scenario | Before | After |
 | --- | --- | --- |
-| Advisor conversation | Opus (`claude-opus-4-6`), max_tokens=400 | Sonnet (`claude-sonnet-4-20250514`), max_tokens=800, with tool_use |
+| Advisor conversation | Older single-model advisor | Sonnet (`claude-sonnet-4-20250514`), max_tokens=800, with tool_use |
 | AI Tips | Haiku, max_tokens=150 | Unchanged |
-| Data analysis code generation | Did not exist | Haiku, max_tokens=4000 |
+| Data analysis code generation | Did not exist | Sonnet (`claude-sonnet-4-6`), max_tokens=4000 |
 
-The Advisor downgrade from Opus to Sonnet is intentional: Sonnet's tool_use judgment is accurate enough, response time is faster (~1s vs ~3s), and cost is lower (~1/5). Conversation quality at the Sonnet level is already sufficient.
+The current implementation uses Sonnet for both Layer 1 routing and Layer 2 code generation. If pricing or capability priorities change later, this document should be updated alongside the code.
+
+---
+
+# 30 Implementation Reality and Architecture Evolution
+
+This section records the current implemented state of the system as of the latest code review, including places where the implementation has intentionally evolved beyond the original scope of this document.
+
+## 30.1 What Was Actually Built
+
+The original design in this document described an **AI data analysis system** attached to Advisor Chat. That system was implemented, but the production architecture has since evolved into a broader **multi-tool Advisor platform**.
+
+Current implemented behavior:
+
+- Advisor Chat still uses a **single entrypoint**: `POST /api/v1/advisor/chat`
+- Claude still performs **Layer 1 routing** using tool calls
+- `run_data_analysis` still triggers the **async analysis job + code generation + security scan + Docker sandbox** flow
+- The frontend Advisor screen still presents this as one unified chat experience with:
+  - direct replies
+  - analysis placeholders (`Analyzing...`)
+  - final analysis result cards
+  - failure states
+
+However, the system no longer only routes between:
+
+- direct reply
+- read-only data analysis
+
+It now also supports additional tool-driven execution paths and adjacent product behaviors.
+
+## 30.2 The System Is Now a Multi-Tool Advisor Platform
+
+In the current backend implementation, `advisor_service.py` registers **multiple Claude tools**, not just `run_data_analysis`.
+
+Implemented tools / execution paths:
+
+- `run_data_analysis`
+  - For questions requiring personal data lookup
+  - Creates an `analysis_jobs` record
+  - Executes asynchronously through prompt assembly, code generation, security scan, and Docker sandbox execution
+
+- `create_task`
+  - For creating reminders/tasks from natural language
+  - Does **not** use the Docker sandbox
+  - Calls the existing `TaskService` directly because this is a write operation
+  - Returns a normal direct response plus `nav_hint: "task_list"`
+
+This is an important architectural update:
+
+- The sandboxed analysis system is now one execution path inside Advisor, not the entire Advisor execution model
+- Advisor should now be understood as an orchestration layer that can dispatch to multiple backend capabilities
+- New future capabilities should likely follow this same pattern:
+  - direct answer path
+  - direct business-operation tool path
+  - async/sandboxed analysis path
+
+## 30.3 Current Backend Responsibility Split
+
+The codebase currently reflects the following practical architecture:
+
+### `advisor_service.py` = intent routing and orchestration
+
+Responsibilities now include:
+
+- building the Layer 1 system prompt
+- passing conversation history into Claude
+- registering available tools
+- deciding whether the outcome is:
+  - direct reply
+  - task creation
+  - async analysis job creation
+- enforcing analysis rate limits and quota checks
+- enforcing parent/team permission checks for cross-user analysis
+
+### `analysis_service.py` = async analysis job orchestrator
+
+Responsibilities currently include:
+
+- creating `analysis_jobs`
+- managing job status transitions
+- assembling prompts for code generation
+- retrying failed generations / executions
+- invoking static security checks
+- executing code inside the Docker sandbox
+- storing final result payloads
+- queuing analysis-complete notifications
+
+### `analysis_prompt_service.py` + `analysis_llm_service.py` + `analysis_security_service.py` + `analysis_sandbox_service.py`
+
+These now form the concrete **AI code execution subsystem**:
+
+- prompt assembly
+- code generation
+- static security policy enforcement
+- isolated runtime execution
+- output loading and chart packaging
+
+### Flutter Advisor screen = unified presentation layer
+
+The Advisor UI in Flutter now handles:
+
+- normal direct replies
+- async analysis pending state
+- completed analysis rendering
+- task-navigation hint chips
+- session restore and history browsing
+
+This means the screen has evolved from a basic chat view into a UI shell for multiple backend execution modes.
+
+## 30.4 Drift Between Original Design and Current Code
+
+Several implementation details no longer match the older text above.
+
+### Layer 2 model drift
+
+Earlier sections of this document describe Layer 2 code generation as using Haiku.
+
+Current code reality:
+
+- `analysis_llm_service.py` uses `claude-sonnet-4-6`
+
+Implication:
+
+- The architecture remains the same, but the code-generation model choice changed after implementation
+- Any future documentation or planning should treat Sonnet as the current source of truth unless the code changes again
+
+### Analysis quota drift
+
+Earlier sections of this document describe:
+
+- Free: 3 analyses/day
+- Pro: 20 analyses/day
+
+Current code reality in `analysis_service.py`:
+
+- Free: 200/day
+- Pro: 200/day
+
+Implication:
+
+- The business rule implemented in code is currently much looser than the original design
+- The document should not be used as the source of truth for quota behavior without checking code
+- If product intends to restore stricter limits, code and documentation need to be realigned
+
+### Tool scope drift
+
+Original design scope:
+
+- direct reply
+- read-only data analysis
+
+Current implemented scope additionally includes:
+
+- task creation through Claude tool use
+- chat history persistence
+- analysis-complete push notifications
+- advisor session support
+
+Implication:
+
+- Advisor is no longer just an analysis front-end
+- It has become a general AI entrypoint for multiple app capabilities
+
+## 30.5 Additional Capabilities Added After the Original Design
+
+The following capabilities exist in code but were not part of the original document's core scope.
+
+### A. Task creation through Advisor chat
+
+Implemented behavior:
+
+- User can ask Advisor to create reminders/tasks in natural language
+- Claude emits a `create_task` tool call
+- Backend creates one or more tasks through `TaskService`
+- Frontend renders a navigation chip to open the task list
+
+Architectural significance:
+
+- This established the pattern for **non-sandboxed write tools**
+- It proves the Advisor platform can safely branch into business operations that should not be handled by generated code
+
+### B. Chat persistence and session model
+
+Implemented behavior:
+
+- Advisor exchanges are stored in `chat_messages`
+- Messages are grouped by `session_id`
+- Frontend can restore the active session and browse older sessions
+- Local cache is used for fast perceived loading
+
+Architectural significance:
+
+- Advisor is no longer stateless per request
+- Session continuity is now part of the product and should be considered in all future tool additions
+- New capabilities may need to decide whether they store intermediate state, final state, or both in chat history
+
+### C. Analysis-complete notifications
+
+Implemented behavior:
+
+- When an async analysis job succeeds, the backend queues a push notification
+- This allows the user to leave the chat and return when results are ready
+
+Architectural significance:
+
+- Async analysis is now integrated into the broader app notification model
+- Long-running future tools can likely reuse the same completion-notification pattern
+
+## 30.6 How the Frontend Actually Integrates the System
+
+The original design correctly predicted the high-level UX, and the current Flutter implementation confirms it:
+
+- The Advisor screen does not expose internal execution types to the user
+- The user always interacts with a single chat surface
+- Analysis jobs are represented as a placeholder assistant message first
+- Polling replaces that placeholder with a result card or an error
+- Direct tool outcomes such as task creation appear as normal assistant replies with optional navigation affordances
+
+This is an important product truth:
+
+- Advisor is a **unified interaction shell**
+- Execution mode differences are mostly hidden behind message rendering and follow-up UI affordances
+
+## 30.7 Updated Architectural Interpretation Going Forward
+
+For future design discussions, the most accurate framing is:
+
+> Lumie's Advisor is now an AI orchestration layer with multiple execution backends.
+
+Those backends currently include:
+
+- direct LLM response
+- async read-only AI code execution in Docker
+- direct business-operation tool calls into existing services
+
+So the original "AI Code Execution System" remains valid, but it is now best understood as:
+
+- a major subsystem inside Advisor
+- not the complete definition of the Advisor architecture
+
+## 30.8 Practical Guidance for Future Extensions
+
+Based on the code as implemented, new Advisor capabilities will likely fit into one of three categories:
+
+### 1. Direct reply capability
+
+Use when:
+
+- no user data lookup is required
+- no app-side state mutation is required
+
+### 2. Direct tool / business-operation capability
+
+Use when:
+
+- the operation writes or mutates business data
+- existing backend services already contain the domain validation rules
+- generated code would be the wrong abstraction or too risky
+
+Examples:
+
+- task creation
+- future task edit/delete flows
+- preference updates
+
+### 3. Async analysis / sandbox capability
+
+Use when:
+
+- the user asks an open-ended question over personal data
+- the operation benefits from flexible query + analysis logic
+- the task should remain read-only
+- latency of several seconds is acceptable
+
+Examples:
+
+- trends
+- summaries
+- comparisons
+- custom statistics
+
+This classification is a more accurate extension model than the original document's binary direct-vs-analysis framing.
+
+## 30.9 Source of Truth Note
+
+Because the implementation has evolved after this document was first written:
+
+- treat this document as architecture guidance, not a guaranteed exact snapshot
+- for model names, quotas, and tool inventory, check the current code
+- especially use these files as source of truth:
+  - `lumie_backend/app/services/advisor_service.py`
+  - `lumie_backend/app/services/analysis_service.py`
+  - `lumie_backend/app/services/analysis_llm_service.py`
+  - `lumie_backend/app/api/advisor_routes.py`
+  - `lumie_backend/app/api/analysis_routes.py`
+  - `lumie_activity_app/lib/features/advisor/screens/advisor_screen.dart`

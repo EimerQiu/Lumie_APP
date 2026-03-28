@@ -22,6 +22,7 @@ from .api.dayprint_routes import router as dayprint_router
 from .api.checkin_routes import router as checkin_router
 from .api.chat_history_routes import router as chat_history_router
 from .api.sleep_routes import router as sleep_router
+from .api.advisor_v2_routes import router as advisor_v2_router
 
 # Configure logging
 logging.basicConfig(
@@ -44,6 +45,12 @@ async def lifespan(app: FastAPI):
     # Ensure indexes for chat history
     from .services.chat_history_service import ensure_indexes
     await ensure_indexes()
+    # Seed capabilities and scan skills
+    from .services.capability_service import seed_system_capabilities
+    from .services.skill_registry_service import skill_registry
+    await seed_system_capabilities()
+    skill_registry.scan_and_index()
+    logger.info("Advisor v2 system initialized (capabilities seeded, skills indexed)")
     yield
     # Shutdown
     logger.info("Shutting down Lumie API...")
@@ -114,6 +121,7 @@ app.include_router(dayprint_router, prefix="/api/v1")
 app.include_router(checkin_router, prefix="/api/v1")
 app.include_router(chat_history_router, prefix="/api/v1")
 app.include_router(sleep_router, prefix="/api/v1")
+app.include_router(advisor_v2_router, prefix="/api/v2")
 
 
 @app.get("/")

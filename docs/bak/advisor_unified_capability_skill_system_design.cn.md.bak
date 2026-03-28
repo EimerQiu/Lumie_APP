@@ -1,0 +1,2199 @@
+# Lumie Advisor Unified Capability + Skill System
+
+系统设计和开发需求文档
+
+**Version**: v1.2  
+**Date**: 2026-03-26  
+**Status**: Draft for Implementation  
+**Applies To**: `lumie_backend`, `lumie_activity_app`
+
+---
+
+## 1. 目标
+
+在允许大重构的前提下，将 Lumie Advisor 从“聊天 + 分析”系统升级为一个**统一的 capability + skill 执行系统**。
+
+目标是把用户自己在手机或电脑上可以手工完成的数字操作，统一抽象成可被 Advisor 调用的 skill。
+
+本期统一范围包括：
+
+- Lumie 自己的数据与文件访问
+- Email 查询
+- 学校 portal 查询
+- 第三方健康平台读取
+- 浏览器自动化类访问
+
+统一执行路径为：
+
+- capability 开关
+- skill 检索与选择
+- Advisor 编排
+- AI code execution system
+- 对应 runtime / connector 执行
+
+本设计刻意保持简单，优先追求可落地。
+
+因此本期明确接受以下产品/安全取舍：
+
+- 先允许保存第三方用户名和密码
+- 先允许以明文或轻包装形式保存在用户自己的 credential 记录中
+- 由服务端统一取用这些凭证执行 skill
+- 后续再做加密、secret vault、零明文等强化能力
+- 所有 skill 一律先以仓库中的 `.md` 文件保存，不做 skill 落库
+
+---
+
+## 2. 总体思想
+
+新的 Advisor 系统在收到用户消息后，先做两层决策：
+
+- 如果 Claude 可以直接快速回答，就直接回答
+- 如果不能直接回答，就先检索候选 skill，再由 Claude 在候选 skill 中选择一个执行
+
+进入 `skill execution` 后，系统统一处理：
+
+- Lumie 自己数据库与文件系统访问
+- Email 查询
+- 学校 portal 查询
+- 第三方健康平台读取
+- 浏览器自动化
+- 文件读取
+- 未来其它账号系统读取
+
+Lumie 自己的数据访问不再是特殊体系，而是 `runtime_type: lumie_db` 的 skill：
+
+- skill 内部说明“要调用 Lumie DB connector”
+- AI code execution system 根据 skill 生成脚本
+- Lumie DB connector 负责真正访问 Lumie 数据
+
+---
+
+## 3. 设计原则
+
+### 3.1 极简优先
+
+- 不做复杂的 connector 框架抽象
+- 不做过度通用的插件系统
+- 不做先天完美的密钥管理
+- 先把“capability + skill + execution”主链路跑通
+
+### 3.2 能力统一
+
+以下都视为 skill 对应的执行任务：
+
+- `查询 Lumie 自己数据库`
+- `查询 Lumie 文件`
+- `向 Lumie 内部系统新增或更新单条任务/记录`
+- `读取邮件`
+- `在允许范围内处理邮件相关操作`
+- `登录学校网站查询课表`
+- `登录学校网站查询作业`
+- `在学校网站内提交或更新单条可执行事项`
+- `读取 Oura 数据`
+- `读取 Apple Health 数据`
+- `读取 Inbody 数据`
+- `读取 CGM 数据`
+
+### 3.3 能力显式开启
+
+每个 skill 都必须绑定一个 capability。
+
+例子：
+
+- `capability:web_search`
+- `capability:email_read`
+- `capability:school_portal`
+- `capability:lumie_internal_data`
+- `capability:oura_read`
+
+如果 capability 未开启，Advisor 不允许执行对应 skill。
+
+### 3.4 Lumie 内部访问凭证也统一走 skill credential
+
+用户独立的 `ping` 是 Lumie internal skill 使用的一种特殊 credential。
+
+- 用户不会直接把 ping 发给 execution runtime
+- 前端不会看到 ping
+- 只有 Advisor 服务可以从 skill credential 中查询和下发 ping
+- Lumie DB connector 必须校验 ping
+
+---
+
+## 4. 核心术语
+
+### 4.1 Capability
+
+能力开关。控制某类 skill 能不能被 Advisor 使用。
+
+例子：
+
+- `lumie_internal_data`
+- `email_read`
+- `browser_portal_access`
+- `apple_health_read`
+- `oura_read`
+
+### 4.2 Skill
+
+一个可执行任务模板，告诉系统：
+
+- 什么时候用
+- 需要哪些输入
+- 要访问什么系统
+- 是用浏览器还是 connector
+- 输出应该长什么样
+
+本期所有 skill 均保存在仓库 `.md` 文件中。运行时由 `skill_registry_service.py` 扫描仓库、提取元信息、建立索引，并在请求时先检索候选 skill，再按需加载全文。
+
+### 4.3 AI Code Execution System
+
+现有分析执行系统升级后的统一执行引擎。
+
+现在它不只负责数据分析代码，还负责：
+
+- 根据 skill 生成执行脚本
+- 调 browser runtime
+- 调 Lumie DB connector
+- 接收报错并修正脚本重试
+- 汇总结果
+
+### 4.4 Browser Skill Runtime
+
+专门负责浏览器自动化执行的 runtime。
+
+例如：
+
+- 打开学校网站
+- 登录
+- 点击导航
+- 提取课表
+- 提取作业列表
+
+### 4.5 Lumie DB Connector
+
+这是一个**服务端进程**，不是 sandbox。
+
+它拥有对 Lumie 自己数据库和部分文件系统的 full 权限，但不直接对用户开放。
+
+它必须负责：
+
+- 校验 ping
+- 校验访问目标用户
+- 校验 team admin / member 访问范围
+- 校验脚本安全性
+- 执行脚本
+- 返回执行结果或错误
+
+---
+
+## 5. 总体架构
+
+```
+Flutter Advisor Screen
+    │
+    │ POST /api/v2/advisor/chat
+    ▼
+advisor_orchestrator.py
+    │
+    ├── Fast direct reply
+    │
+    └── Skill path
+          │
+          ├── capability_registry
+          ├── user_capability_service
+          ├── skill_registry
+          ├── skill_index
+          ├── skill_credential_service
+          │
+          ▼
+      execution_service.py
+          │
+          ├── retrieve top-k skills
+          ├── send skill summaries to LLM
+          ├── load selected skill full content
+          ├── generate execution script
+          ├── run browser skill runtime
+          ├── call Lumie DB connector
+          ├── call external connector adapters
+          ├── retry on script error
+          └── return structured result
+                │
+                └── advisor_orchestrator.py → user-facing answer
+```
+
+### 5.1 后端进程
+
+本系统建议维持为单服务部署，但逻辑上拆成以下进程角色：
+
+- `lumie-api`
+  - 现有 FastAPI 主进程
+  - 对外提供 API
+  - 包含 advisor orchestrator
+
+- `lumie-execution-worker`
+  - 新增后台执行 worker
+  - 负责 skill execution job
+  - 可与 API 同代码仓、单独 systemd 进程
+
+- `lumie-browser-runtime`
+  - 新增浏览器执行进程
+  - 负责 Playwright 会话
+
+- `lumie-db-connector`
+  - 新增 Lumie 内部数据连接进程
+  - 负责连接 MongoDB 与必要的文件系统
+
+初期也可以先把 `lumie-execution-worker`、`lumie-browser-runtime`、`lumie-db-connector` 都做在 `lumie-api` 进程里，以 Python service 方式存在；但代码边界必须先划清。
+
+---
+
+## 6. 请求处理主流程
+
+### 6.1 通用流程
+
+1. 用户在 Advisor 中发送消息
+2. `advisor_orchestrator.py` 加载：
+   - 当前用户 profile
+   - 当前用户开启的 capability
+   - 仓库中的 skill index
+   - 当前会话历史
+3. 系统先基于用户问题检索 top-k skill 候选
+4. Claude 判断：
+   - 是否可 direct answer
+   - 如果不能，则在候选 skill 中选择一个最合适的 skill
+5. Advisor 检查该 skill 对应 capability 是否启用
+6. Advisor 按需加载该 skill 的完整 `.md`
+7. 如果 skill 需要 ping 或其它 credential，则由 `skill_credential_service` 读取该用户对该 skill 的 credential
+8. Advisor 创建 `execution_job`
+9. `execution_service.py` 根据 skill 全文和用户 prompt 生成执行脚本
+10. 依据 skill 的 `runtime_type` 执行：
+   - `lumie_db`
+   - `browser`
+   - `external_api`
+   - `hybrid`
+11. runtime 返回结果或错误
+12. 若脚本执行错误，可返回错误给 execution system，让其自动修正脚本重试
+13. 成功后，execution system 输出结构化结果
+14. Advisor 把结构化结果转成对用户的自然语言回答
+
+### 6.3 用户闭环 Flow
+
+为了让系统真正形成闭环，不能只定义“聊天后如何执行”，还必须覆盖：
+
+- capability 开通
+- skill 索引与可用性
+- credential 填写
+- execution 发起
+- 执行中可见性
+- 失败修复
+- 结果回看
+- capability 撤销
+- credential 修改
+- skill 文件更新后的重新索引
+
+完整闭环建议如下。
+
+#### Flow A: 用户首次开通某类能力
+
+1. 用户进入 Advisor Settings
+2. 看见 capability 列表
+3. 打开某个 capability
+4. 系统判断该 capability 是否还需要：
+   - 至少存在一个匹配 skill
+   - skill credential（其中可包含 ping）
+5. 如果缺少配置，UI 立即引导下一步
+6. 用户完成配置后，该 capability 才进入 `ready` 状态
+
+系统含义：
+
+- capability 不能只有 `enabled/disabled`
+- 还需要有 `ready/not_ready`
+
+#### Flow B: 系统 skill 准备完成
+
+1. 服务启动时扫描仓库中的 skill `.md` 文件
+2. 提取每个 skill 的 frontmatter / 元信息
+3. 建立 skill index
+4. 若 skill 文件格式不合法，则标记为不可用
+5. Advisor 只使用已通过解析和索引的 skill
+
+系统含义：
+
+- skill 不走 CRUD
+- skill 的生命周期来自文件系统和索引过程
+- 必须有启动扫描和热重建索引机制
+
+#### Flow C: 用户首次为某类 skill 填写 credential
+
+1. 用户选择一个 skill
+2. 查看该 skill 需要什么
+3. 填写：
+   - base_url
+   - username
+   - password
+   - notes
+4. 提交后，系统保存 credential
+5. 系统自动执行一次 `connection test`
+6. 如果成功，skill 状态变为 `ready`
+7. 如果失败，UI 要告诉用户哪一步失败
+
+系统含义：
+
+- 仅保存 credential 不够
+- 必须有 “测试连接/测试 skill” 的流程
+
+#### Flow D: 用户发起执行
+
+1. 用户在聊天中发问
+2. Advisor 判断需要 skill
+3. 检查：
+   - capability 已启用
+   - capability 已 ready
+   - skill 已被索引且可用
+   - skill 所需 credential 已存在
+4. 任一项不满足，不进入 execution job，而是返回明确的引导回复
+5. 全部满足才创建 execution job
+
+系统含义：
+
+- Advisor 不能只做 “让 LLM 自由想 skill”
+- 必须先走检索，再让 LLM 在候选 skill 中选择
+- 还必须做 execution 前置条件检查
+
+#### Flow E: 执行中的用户感知
+
+1. 前端显示 “正在查看…”
+2. job 状态从 `pending → generating → running → retrying → success/failed`
+3. 如果是长任务，前端要能看到当前阶段
+4. 如果执行失败，要给出：
+   - 是 skill 未配置
+   - 是登录失败
+   - 是权限不足
+   - 是脚本错误且重试后仍失败
+
+系统含义：
+
+- 前端不能只轮询 success/failed
+- 需要更细的状态和错误类型
+
+#### Flow F: 结果回看和持续使用
+
+1. job 完成后结果写入 `execution_jobs`
+2. Advisor 将结果回复写入 chat history
+3. 用户以后打开历史会话时，能看到：
+   - 当时调用了哪个 skill
+   - 得到了什么结果
+   - 是否失败过
+4. 若 skill 长期失效，系统能引导用户重新配置 credential 或等待 skill 文件修复
+
+系统含义：
+
+- execution 结果不能只存在运行内存里
+- 必须和 chat history、session 恢复打通
+
+#### Flow G: 用户撤销能力或修改配置
+
+1. 用户关闭 capability
+2. 对应 skill 不再可被 Advisor 调用
+3. 已有 credential 仍保留，但状态变为不可用
+4. 用户也可以删除 credential 或重新测试
+
+系统含义：
+
+- capability、skill-index状态、credential 三者的状态必须解耦
+
+### 6.4 从当前项目出发的缺口推导
+
+基于当前代码库，系统离“完整闭环”还缺以下环节。
+
+| 闭环步骤 | 当前系统现状 | 缺失内容 | 必须补充 |
+| --- | --- | --- | --- |
+| 用户打开某种能力 | 目前没有 capability 系统 | 无 capability 数据模型、无开关 UI、无 ready 状态 | 新增 capability collection、service、routes、settings UI |
+| skill 文件准备 | 当前只有固定后端工具，无 skill registry | 无 skill 文件规范、无 skill 扫描、无索引、无 top-k 检索 | 新增 `app/skills/**/*.md`、`skill_registry_service.py`、skill index、skill test |
+| 用户保存第三方账号 | 当前没有通用 credential 存储 | 无 credential collection、无录入界面、无更新逻辑 | 新增 `advisor_skill_credentials`、前端 credential sheet |
+| 用户配置 Lumie 内部访问凭证 | 当前没有 ping 概念 | 无 skill credential 中的 ping 字段、无生成/轮换逻辑、无 UI 提示 | 在 `advisor_skill_credentials` 中支持 `ping` 字段，并新增对应 service/UI |
+| 用户发问前检查 | 当前 Advisor 只看 direct / analysis / create_task | 无 capability 检查、无 skill 检索、无 skill 可用性检查、无 credential readiness 检查 | `advisor_orchestrator.py` 增加 retrieval + preflight pipeline |
+| 长任务执行 | 当前只有 `analysis_jobs` | 无统一 execution_jobs、无多 runtime 路由 | 用 `execution_jobs` 替换单用途 `analysis_jobs` |
+| 浏览器执行 | 当前没有 browser runtime | 无 Playwright 进程、无 screenshot、无 DOM trace | 新增 `browser_skill_runtime.py` |
+| Lumie 内部数据统一访问 | 当前 analysis sandbox 直接连 Mongo | 没有独立 Lumie DB connector，权限规则分散 | 新增 `lumie_db_connector.py`，收口权限判断 |
+| 权限闭环 | 当前有 team 权限逻辑，但分散在 `task_service.py`、`advisor_service.py`、`team_service.py` | 无统一 requester→target 权限裁决层 | 把 Lumie 权限判定沉到 DB connector |
+| 执行错误修复 | 当前 analysis 有重试，但只针对分析代码 | 无 browser skill 错误回灌、无 connector 级错误分类 | `execution_service.py` 增加 runtime-specific retry loop |
+| 执行中用户反馈 | 当前前端只显示分析 spinner | 无多阶段状态 UI、无 skill 名称、无错误类别 | 新增 job state UI 和错误说明映射 |
+| 结果回看 | 当前有 chat history，但没有 execution 结果与 skill 绑定 | 无 skill_id、runtime_type、error_type 等历史展示字段 | 扩展 chat history metadata |
+| 用户后续维护 | 当前没有 “测试 credential / 查看 skill 状态 / 重新索引结果” 流程 | 无 maintenance UI | 新增 Advisor Settings + Skill detail screens |
+
+### 6.5 当前代码里可以复用什么
+
+本次重构不是从零开始，当前项目已有几个成熟基础设施可以直接复用。
+
+#### 可复用
+
+- `lumie_backend/app/services/advisor_service.py`
+  - 可复用 Claude 路由思路
+- `lumie_backend/app/services/analysis_service.py`
+  - 可复用 job lifecycle、轮询模型、重试模型
+- `lumie_backend/app/services/analysis_prompt_service.py`
+  - 可复用 prompt assembly 思路
+- `lumie_backend/app/services/analysis_sandbox_service.py`
+  - 可复用 sandbox 执行基础
+- `lumie_backend/app/services/chat_history_service.py`
+  - 可复用 session/history 持久化
+- `lumie_backend/app/services/team_service.py`
+  - 可复用 team / member / admin 关系数据
+- `lumie_backend/app/services/task_service.py`
+  - 可参考其 team admin 判断方式
+- `lumie_activity_app/lib/features/advisor/screens/advisor_screen.dart`
+  - 可复用统一聊天入口和 job 轮询 UI 结构
+
+#### 不应继续沿用原样
+
+- `analysis_jobs`
+  - 语义过窄，不能承载 browser / external / hybrid execution
+- `advisor_service.py` 直接承载所有编排
+  - 会继续膨胀，应该拆成 orchestrator + registry + execution service
+- sandbox 直接连 Lumie Mongo 的设计
+  - 无法承载统一权限裁决，需要改为由 DB connector 收口
+- 让 LLM 直接面对全部 skill 全文
+  - 1000+ skill 时不可扩展，必须改为先检索候选再按需加载全文
+
+### 6.6 当前用户 Flow 里真正缺的页面和交互
+
+如果只补后端，不补这些前端 flow，系统仍然不会闭环。
+
+必须新增：
+
+- `Advisor Settings` 页面
+  - 展示 capability 开关
+  - 展示 capability 是否 ready
+
+- `Skill List` 页面
+  - 展示系统 skill
+  - 展示每个 skill 当前状态
+
+- `Skill Detail` 页面
+  - 查看 skill 描述、用途、所需字段、skill 文件状态
+
+- `Credential Entry` Sheet / Screen
+  - 输入网址、用户名、密码、notes
+  - 提供 test 按钮
+
+- `Execution Status` UI
+  - 显示正在执行哪个 skill
+  - 显示当前阶段
+  - 显示失败原因
+
+- `Repair Prompt` 弹性提示
+  - 当 credential 失效、selector 失效、权限不足时，引导用户修复，而不是只说失败
+
+### 6.7 缺少的系统状态定义
+
+要形成闭环，文档必须明确每个对象的状态机。
+
+#### Capability 状态
+
+- `disabled`
+- `enabled_not_ready`
+- `ready`
+
+#### Skill 状态
+
+- `indexed`
+- `invalid_frontmatter`
+- `disabled_by_capability`
+- `broken`
+
+#### Credential 状态
+
+- `missing`
+- `saved_not_tested`
+- `valid`
+- `invalid`
+
+#### Ping 状态
+
+- `missing`
+- `active`
+- `rotated`
+- `disabled`
+
+#### Execution Job 状态
+
+- `pending`
+- `generating`
+- `running`
+- `retrying`
+- `success`
+- `failed`
+- `cancelled`
+
+如果这些状态不落库，前端和后端就无法稳定协作。
+
+### 6.2 Lumie 内部数据访问流程
+
+以“用户 A 问：我女儿 B 最近的健康情况”为例：
+
+1. Advisor 识别到需要 skill：`综合健康评估`
+2. skill 定义说明需读取：
+   - sleep
+   - activity
+   - HRV
+   - RHR
+   - task / medication
+3. skill 同时声明：
+   - `runtime_type = lumie_db`
+   - `requires_ping = true`
+   - `capability = lumie_internal_data`
+4. Advisor 校验用户 A 已开启 capability
+5. Advisor 读取 A 的 ping
+6. Advisor 把：
+   - 原始需求
+   - skill 内容
+   - ping
+   - requester_user_id = A
+   - target hints = B
+   发给 `execution_service.py`
+7. execution system 生成数据请求脚本
+8. execution system 调用 `lumie_db_connector.py`
+9. Lumie DB connector：
+   - 校验 A 的 ping
+   - 识别脚本在访问谁的数据
+   - 判断 A 是否对 B 有权限
+   - 根据 team/admin/data-sharing 规则限制范围
+   - 执行脚本
+10. 若脚本报错，connector 返回错误
+11. execution system 接收错误，自动修正脚本并重试
+12. connector 返回原始数据
+13. execution system 对多源数据进行综合分析
+14. Advisor 输出对 A 的综合健康评估
+
+---
+
+## 7. 新系统模块设计
+
+## 7.1 Advisor Orchestrator
+
+建议文件：
+
+- `lumie_backend/app/services/advisor_orchestrator.py`
+- `lumie_backend/app/api/advisor_v2_routes.py`
+
+职责：
+
+- 处理 `/api/v2/advisor/chat`
+- 读取用户 capability
+- 读取可用 skill
+- 获取 ping
+- 做 Layer 1 tool routing
+- 决定 direct reply 或 execution job
+- 向前端返回：
+  - direct
+  - executing
+  - completed
+  - failed
+
+### 输入
+
+- `user_id`
+- `message`
+- `history`
+- `session_id`
+
+### 输出
+
+- `type`
+- `reply`
+- `job_id`
+- `skill_id`
+- `status`
+
+### `advisor_orchestrator.py` 执行流程
+
+`advisor_orchestrator.py` 的执行顺序必须固定如下：
+
+1. 读取用户基础上下文
+   - profile
+   - 当前已开启 capability
+   - 当前会话 history
+
+2. 从 skill index 检索 top-k 候选 skill
+   - 只基于当前用户已开启的 capability 检索
+   - 默认 `top_k = 8`
+
+3. 调 LLM 做路由判断
+   - 要么直接回答
+   - 要么在候选 skill 中选择一个 skill
+
+4. 如果是 direct answer
+   - 立即返回 `type=direct`
+   - 不创建 execution job
+
+5. 如果选中了 skill
+   - 读取该 skill 对应的 capability 状态
+   - 若 capability 未开启，则返回引导文案
+   - 若 capability 处于 `enabled_not_ready`，则继续检查缺失项
+
+6. 按需加载选中的 skill 全文
+   - 只加载被选中的 skill，不加载全部 skill 正文
+
+7. 按 `(user_id, skill_id)` 读取 credential
+   - 若 `requires_credentials = false`，允许空 credential
+   - 若 `requires_credentials = true`，必须存在一条 `status=valid` 的 credential
+   - 若 skill 是 Lumie internal skill，还必须存在 `credential.ping`
+
+8. 前置条件检查失败时
+   - 不创建 execution job
+   - 直接返回指导用户去配置 capability 或 credential 的回复
+
+9. 前置条件全部满足时
+   - 创建 `execution_job`
+   - 写入 `skill_id / capability_id / runtime_type / prompt`
+
+10. 异步启动 `execution_service`
+   - 传入：
+     - 完整 skill 正文
+     - 选中 skill 的索引项
+     - 对应 credential
+     - 会话 history
+
+11. 立即向前端返回
+   - `type=execution`
+   - `job_id`
+   - `skill_id`
+   - `status=pending`
+
+### Orchestrator 对 credential 的判断逻辑
+
+1. 先检索候选 skill
+2. 让 LLM 在候选 skill 中选 skill
+3. 选中 skill 后，再读取该 skill 对应的 credential
+4. 不在 skill 选中前盲目读取所有 credential
+5. 对于 Lumie internal skill：
+   - `requires_credentials = true`
+   - `credential.ping` 必须存在
+6. 对于 browser/email/external skill：
+   - `username/password/base_url` 等字段按 skill 需要读取
+7. credential 只作为 runtime 输入，不进入对用户可见回复
+
+## 7.2 Skill Registry
+
+建议文件：
+
+- `lumie_backend/app/services/skill_registry_service.py`
+
+职责：
+
+- 扫描仓库中的 skill `.md` 文件
+- 解析 frontmatter
+- 建立 skill 索引
+- 根据关键词/标签/能力做 top-k 检索
+- 在选中后加载 skill 全文
+
+### 检索流程
+
+1. 启动时扫描 `lumie_backend/app/skills/**/*.md`
+2. 解析每个文件的 frontmatter，提取：
+   - `skill_id`
+   - `title`
+   - `capability_id`
+   - `runtime_type`
+   - `tags`
+   - `keywords`
+   - `summary`
+3. 建立内存索引
+4. 用户发问时，先按 capability 和关键词做候选过滤
+5. 返回 top-k skill 摘要给 Advisor LLM
+6. LLM 只在这些候选中选 skill
+7. 选中后再加载完整 `.md` 正文给 execution system
+
+默认建议：
+
+- `top_k = 8`
+
+这可以保证：
+
+- skill 数量很大时仍然可扩展
+- 不需要把全部 skill 正文塞进模型上下文
+
+### `skill_registry_service.py` 执行流程
+
+`skill_registry_service.py` 必须承担 4 个阶段的工作：
+
+1. 启动扫描
+   - 扫描 `lumie_backend/app/skills/**/*.md`
+   - 找出所有 skill 文件
+
+2. frontmatter 解析
+   - 读取每个文件的 frontmatter
+   - 提取必填字段：
+     - `skill_id`
+     - `title`
+     - `capability_id`
+     - `runtime_type`
+     - `requires_ping`
+     - `requires_credentials`
+     - `target_system`
+     - `summary`
+   - 缺字段或格式错误时，标记为 `invalid_frontmatter`
+
+3. 建立索引
+   - 以 `skill_id` 建立主映射
+   - 以 `capability_id` 建立 capability 级映射
+   - 以 `title / summary / tags / keywords` 建倒排索引
+   - 仅 `status=indexed` 的 skill 可进入可用索引
+
+4. 运行时检索
+   - 根据用户 query 分词召回候选
+   - 先按 capability 过滤
+   - 再按关键词命中数排序
+   - 返回 top-k skill 摘要
+   - 真正被选中后，再读取该 skill 全文
+
+### 索引结构
+
+建议使用 3 层结构：
+
+1. `skills_by_id`
+   - `skill_id -> SkillIndexItem`
+   - 用于快速定位 skill 元信息和文件路径
+
+2. `skills_by_capability`
+   - `capability_id -> set(skill_id)`
+   - 用于 capability 级过滤
+
+3. `inverted_index`
+   - `term -> set(skill_id)`
+   - 用于关键词召回 top-k 候选
+
+推荐召回字段：
+
+- `title`
+- `summary`
+- `tags`
+- `keywords`
+- 用户原问题中的分词
+
+推荐排序信号：
+
+- 命中 term 数量
+- `keywords` 命中权重高于 `summary`
+- capability 已开启优先
+- `status == indexed` 才可进入候选集
+
+## 7.3 Execution Service
+
+建议文件：
+
+- `lumie_backend/app/services/execution_service.py`
+
+职责：
+
+- 创建 execution job
+- 把 skill + prompt 组装成执行 prompt
+- 调 AI code execution system
+- 分发到不同 runtime
+- 处理脚本报错重试
+- 保存 stdout/stderr/result
+
+## 7.4 Browser Skill Runtime
+
+建议文件：
+
+- `lumie_backend/app/services/browser_skill_runtime.py`
+
+职责：
+
+- 用 Playwright 启动浏览器
+- 读取 skill 中的步骤与 selector
+- 登录网站
+- 导航
+- 提取数据
+- 返回 JSON 结果
+
+## 7.5 Lumie DB Connector
+
+建议文件：
+
+- `lumie_backend/app/services/lumie_db_connector.py`
+
+职责：
+
+- 校验 ping
+- 检查请求者与目标用户关系
+- 检查 team 权限和数据共享权限
+- 执行 DB script
+- 执行必要的 Lumie 文件读取
+- 对返回数据做大小与字段控制
+
+说明：
+
+- Lumie DB Connector 本身不是 skill
+- 但它只通过 skill 被调用
+- 与 Lumie 内部数据读写相关的能力，应拆成多个 skill，例如：
+  - `comprehensive_health_assessment`
+  - `today_tasks_and_medications`
+  - `team_member_health_snapshot`
+  - `update_internal_note`
+- 这些 skill 在 frontmatter 中统一声明：
+  - `runtime_type: lumie_db`
+  - `allowed_connectors: [lumie_db_connector]`
+  - 如果需要内部访问凭证，则 `requires_credentials: true`
+  - 且 credential 中可包含 `ping`
+
+## 7.6 Skill Credential Service
+
+建议文件：
+
+- `lumie_backend/app/services/skill_credential_service.py`
+
+职责：
+
+- 读取和保存用户对某个 skill 的 credential
+- 支持普通凭证字段：
+  - `base_url`
+  - `username`
+  - `password`
+  - `notes`
+- 支持 Lumie 内部 skill 使用的特殊凭证字段：
+  - `ping`
+- 只有 Advisor / execution system 可以读取完整 credential
+
+---
+
+## 8. 数据库设计
+
+以下集合均新增到 `lumie_db`。
+
+## 8.1 `advisor_capabilities`
+
+定义系统支持的 capability。
+
+```json
+{
+  "capability_id": "lumie_internal_data",
+  "display_name": "Lumie Internal Data",
+  "description": "Allow Advisor to access Lumie's own data and files for this user",
+  "enabled": true,
+  "created_at": "ISO datetime",
+  "updated_at": "ISO datetime"
+}
+```
+
+建议索引：
+
+```python
+await db.advisor_capabilities.create_index("capability_id", unique=True)
+```
+
+## 8.2 `user_advisor_capabilities`
+
+记录每个用户开启了哪些 capability。
+
+```json
+{
+  "user_id": "uuid",
+  "capability_id": "email_read",
+  "status": "disabled | enabled_not_ready | ready",
+  "granted_at": "ISO datetime",
+  "updated_at": "ISO datetime",
+  "notes": "optional"
+}
+```
+
+建议索引：
+
+```python
+await db.user_advisor_capabilities.create_index([("user_id", 1), ("capability_id", 1)], unique=True)
+```
+
+## 8.3 Skill 文件系统设计
+
+所有 skill 均保存在仓库文件中，建议目录：
+
+```text
+lumie_backend/app/skills/
+  system/
+    lumie_internal/
+      comprehensive_health_assessment.md
+      today_tasks_and_medications.md
+    browser/
+      school_schedule_query.md
+      school_homework_query.md
+    email/
+      email_keyword_search.md
+```
+
+每个 `.md` 文件必须带有结构化 frontmatter，示例：
+
+```md
+---
+skill_id: comprehensive_health_assessment
+title: Comprehensive Health Assessment
+capability_id: lumie_internal_data
+runtime_type: lumie_db
+requires_ping: true
+requires_credentials: false
+target_system: lumie_db
+tags: [health, sleep, activity, hrv, rhr, medication]
+keywords: [health summary, daughter health, recent condition, comprehensive]
+summary: Query sleep, activity, HRV, RHR, and medication/task adherence for a target user.
+allowed_connectors: [lumie_db_connector]
+input_schema:
+  type: object
+output_schema:
+  type: object
+---
+
+# Skill
+...
+```
+
+### Skill `.md` 标准模板格式
+
+每个 skill 文件必须遵循同一模板，分为两部分：
+
+1. frontmatter
+2. 正文说明
+
+建议模板如下：
+
+```md
+---
+skill_id: unique_skill_id
+title: Human Readable Title
+capability_id: lumie_internal_data
+runtime_type: lumie_db
+requires_ping: true
+requires_credentials: true
+target_system: lumie_db
+tags: [tag1, tag2]
+keywords: [keyword1, keyword2]
+summary: One short summary sentence for retrieval.
+allowed_connectors: [lumie_db_connector]
+input_schema:
+  type: object
+  properties:
+    target_user_hint:
+      type: string
+    time_range:
+      type: string
+output_schema:
+  type: object
+  properties:
+    summary:
+      type: string
+---
+
+# Purpose
+说明这个 skill 解决什么问题，适用于什么用户问题。
+
+# When To Use
+- 触发条件 1
+- 触发条件 2
+
+# Required Inputs
+- 需要从用户问题中提取哪些输入
+
+# Runtime Rules
+- 使用哪个 runtime
+- 是否必须带 ping
+- 是否必须先读取 credential
+
+# Connector Rules
+- 允许调用哪些 connector
+- 不允许访问什么
+
+# Execution Plan
+1. 第一步做什么
+2. 第二步做什么
+3. 第三步做什么
+
+# Output Guidance
+- 结果必须返回哪些字段
+- 如何组织成结构化 JSON
+
+# Failure Handling
+- 哪些错误允许重试
+- 哪些错误应直接失败返回
+```
+
+### Frontmatter 必填字段
+
+- `skill_id`
+- `title`
+- `capability_id`
+- `runtime_type`
+- `requires_ping`
+- `requires_credentials`
+- `target_system`
+- `summary`
+- `input_schema`
+- `output_schema`
+
+### Frontmatter 推荐字段
+
+- `tags`
+- `keywords`
+- `allowed_connectors`
+
+### 正文建议章节
+
+- `# Purpose`
+- `# When To Use`
+- `# Required Inputs`
+- `# Runtime Rules`
+- `# Connector Rules`
+- `# Execution Plan`
+- `# Output Guidance`
+- `# Failure Handling`
+
+缺少推荐章节不阻止索引，但缺少必填 frontmatter 字段会使 skill 进入 `invalid_frontmatter` 状态。
+
+### 3 个示例 Skill 文件
+
+#### 示例 1: Lumie 内部数据 skill
+
+文件路径：
+
+```text
+lumie_backend/app/skills/system/lumie_internal/comprehensive_health_assessment.md
+```
+
+```md
+---
+skill_id: comprehensive_health_assessment
+title: Comprehensive Health Assessment
+capability_id: lumie_internal_data
+runtime_type: lumie_db
+requires_ping: true
+requires_credentials: false
+target_system: lumie_db
+tags: [health, sleep, activity, hrv, rhr, medication]
+keywords: [health summary, recent condition, daughter health, overall health]
+summary: Query sleep, activity, HRV, RHR, and medication/task adherence for the target user and produce a combined health assessment.
+allowed_connectors: [lumie_db_connector]
+input_schema:
+  type: object
+  properties:
+    target_user_hint:
+      type: string
+    time_range:
+      type: string
+output_schema:
+  type: object
+  properties:
+    summary:
+      type: string
+    sleep:
+      type: object
+    activity:
+      type: object
+    hrv_rhr:
+      type: object
+    medications:
+      type: object
+---
+
+# Purpose
+Use this skill when the user asks for an overall health view that spans multiple Lumie data domains.
+
+# When To Use
+- The user asks how they or their child have been doing recently.
+- The question requires combining sleep, activity, HRV, RHR, and medication/task adherence.
+
+# Required Inputs
+- target user hint
+- requested time range
+
+# Runtime Rules
+- Use `lumie_db` runtime.
+- Must include the requester's ping from this skill's credential record.
+- All target-user access must be validated by `lumie_db_connector`.
+
+# Connector Rules
+- Allowed connector: `lumie_db_connector`
+- Do not access unrestricted files directly from sandbox code.
+
+# Execution Plan
+1. Resolve target user from question context.
+2. Query sleep, activity, HRV/RHR, and task/medication adherence.
+3. Normalize all returned data.
+4. Generate a combined assessment with trends and noteworthy issues.
+
+# Output Guidance
+- Return structured sections for sleep, activity, hrv_rhr, medications, and summary.
+
+# Failure Handling
+- Retry if the DB script fails due to field mismatch or query error.
+- Fail immediately on permission denied or invalid ping.
+```
+
+#### 示例 2: Browser school portal skill
+
+文件路径：
+
+```text
+lumie_backend/app/skills/system/browser/school_homework_query.md
+```
+
+```md
+---
+skill_id: school_homework_query
+title: School Homework Query
+capability_id: school_portal
+runtime_type: browser
+requires_ping: false
+requires_credentials: true
+target_system: school_portal
+tags: [school, homework, assignments, portal]
+keywords: [homework, assignment, due date, school portal, classwork]
+summary: Log into the user's school portal and retrieve homework or assignments due soon.
+allowed_connectors: [browser_skill_runtime]
+input_schema:
+  type: object
+  properties:
+    time_range:
+      type: string
+output_schema:
+  type: object
+  properties:
+    summary:
+      type: string
+    assignments:
+      type: array
+---
+
+# Purpose
+Use this skill when the user asks about homework, assignments, or due dates from their school portal.
+
+# When To Use
+- The user asks what homework is due.
+- The user asks whether they have assignments today or this week.
+
+# Required Inputs
+- requested time range
+
+# Runtime Rules
+- Use `browser` runtime.
+- Requires stored credential for this skill.
+
+# Connector Rules
+- Use Playwright browser session.
+- The runtime should log in with saved username/password and follow the selectors defined for this portal.
+
+# Execution Plan
+1. Load credential and base_url.
+2. Open login page.
+3. Log in.
+4. Navigate to homework/assignments section.
+5. Extract assignment title, course, due date, and status.
+
+# Output Guidance
+- Return `assignments` as a list of structured objects.
+- Include a concise user-facing summary.
+
+# Failure Handling
+- Retry if selector is missing or navigation fails.
+- Mark credential invalid if login is rejected by the site.
+```
+
+#### 示例 3: Email keyword search skill
+
+文件路径：
+
+```text
+lumie_backend/app/skills/system/email/email_keyword_search.md
+```
+
+```md
+---
+skill_id: email_keyword_search
+title: Email Keyword Search
+capability_id: email_read
+runtime_type: external_api
+requires_ping: false
+requires_credentials: true
+target_system: email
+tags: [email, inbox, search, message]
+keywords: [email, inbox, unread, keyword, school email, reminder email]
+summary: Search the user's email inbox for messages matching a keyword or topic and summarize the relevant results.
+allowed_connectors: [email_connector]
+input_schema:
+  type: object
+  properties:
+    keyword:
+      type: string
+    time_range:
+      type: string
+output_schema:
+  type: object
+  properties:
+    summary:
+      type: string
+    messages:
+      type: array
+---
+
+# Purpose
+Use this skill when the user asks the advisor to check their email for a topic, sender, or recent message.
+
+# When To Use
+- The user asks if they received an email about something.
+- The user asks the advisor to search the inbox.
+
+# Required Inputs
+- keyword or topic
+- optional time range
+
+# Runtime Rules
+- Use `external_api` runtime.
+- Requires stored credential or authorized email connection.
+
+# Connector Rules
+- Use email connector only.
+- Return matched messages in structured form.
+
+# Execution Plan
+1. Search inbox using keyword and optional time constraint.
+2. Fetch a small list of relevant messages.
+3. Summarize the matching results.
+
+# Output Guidance
+- Return sender, subject, date, and short preview for each message.
+- Provide a concise summary first.
+
+# Failure Handling
+- Retry on transient connector failure.
+- Fail directly if credential is missing or revoked.
+```
+
+运行时不把这些 skill 全文存入 Mongo，而是：
+
+- 启动时扫描文件
+- 解析 frontmatter
+- 建立内存索引
+- 只在选中 skill 后再加载全文
+
+## 8.4 `advisor_skill_index_cache`
+
+可选缓存集合，用于保存扫描后的 skill 元信息和索引状态。
+
+```json
+{
+  "skill_id": "comprehensive_health_assessment",
+  "path": "lumie_backend/app/skills/system/lumie_internal/comprehensive_health_assessment.md",
+  "title": "Comprehensive Health Assessment",
+  "capability_id": "lumie_internal_data",
+  "runtime_type": "lumie_db",
+  "requires_ping": true,
+  "requires_credentials": false,
+  "target_system": "lumie_db",
+  "tags": ["health", "sleep", "activity"],
+  "keywords": ["health summary", "recent condition"],
+  "summary": "Query sleep, activity, HRV, RHR, and medication/task adherence for a target user.",
+  "status": "indexed | invalid_frontmatter | broken",
+  "last_scanned_at": "ISO datetime",
+  "last_error": null
+}
+```
+
+建议索引：
+
+```python
+await db.advisor_skill_index_cache.create_index("skill_id", unique=True)
+await db.advisor_skill_index_cache.create_index([("capability_id", 1), ("status", 1)])
+```
+
+## 8.5 `advisor_skill_credentials`
+
+用于保存用户给某个 skill 的 credential。
+
+按当前产品要求，本期允许明文存储。
+
+```json
+{
+  "credential_id": "uuid",
+  "user_id": "uuid",
+  "skill_id": "uuid",
+  "status": "missing | saved_not_tested | valid | invalid",
+  "system_name": "School Portal",
+  "base_url": "https://portal.example.edu",
+  "username": "student_123",
+  "password": "plain-text-for-now",
+  "ping": null,
+  "notes": "登录后点 Academics > Homework",
+  "created_at": "ISO datetime",
+  "updated_at": "ISO datetime"
+}
+```
+
+说明：
+
+- 对 browser / email / external skills，主要使用：
+  - `base_url`
+  - `username`
+  - `password`
+  - `notes`
+- 对 Lumie internal data skills，主要使用：
+  - `ping`
+- 同一 skill 的 credential 结构可以按需要部分留空
+- `skill_id` 是 credential 的主绑定键
+
+对于 Lumie internal skill，可存成：
+
+```json
+{
+  "credential_id": "uuid",
+  "user_id": "user_a",
+  "skill_id": "comprehensive_health_assessment",
+  "status": "valid",
+  "system_name": "Lumie Internal Access",
+  "base_url": null,
+  "username": null,
+  "password": null,
+  "ping": "A1B2C3D4",
+  "notes": "internal-only",
+  "created_at": "ISO datetime",
+  "updated_at": "ISO datetime"
+}
+```
+
+建议索引：
+
+```python
+await db.advisor_skill_credentials.create_index([("user_id", 1), ("skill_id", 1)], unique=True)
+```
+
+### `advisor_skill_credentials` 字段规范
+
+本集合用于统一保存用户对某个 skill 的所有 secret / credential 信息。
+
+推荐字段定义：
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `credential_id` | string | 唯一 ID |
+| `user_id` | string | 凭证所属用户 |
+| `skill_id` | string | 绑定的 skill ID |
+| `status` | string | `missing | saved_not_tested | valid | invalid` |
+| `system_name` | string | 方便前端展示的人类可读名称 |
+| `base_url` | string \| null | 站点入口地址 |
+| `username` | string \| null | 登录用户名 |
+| `password` | string \| null | 登录密码，本期允许明文 |
+| `ping` | string \| null | Lumie internal skill 使用的内部访问码 |
+| `notes` | string \| null | 用户补充说明，如“登录后点 Academics > Homework” |
+| `last_tested_at` | string \| null | 最近一次测试时间 |
+| `last_test_result` | string \| null | 最近一次测试结果摘要 |
+| `created_at` | string | 创建时间 |
+| `updated_at` | string | 更新时间 |
+
+### 不同 skill 类型的 credential 示例
+
+#### 示例 A: Browser school portal
+
+```json
+{
+  "credential_id": "cred_school_hw_user_a",
+  "user_id": "user_a",
+  "skill_id": "school_homework_query",
+  "status": "valid",
+  "system_name": "School Portal",
+  "base_url": "https://portal.example.edu",
+  "username": "alice_2026",
+  "password": "plain-text-for-now",
+  "ping": null,
+  "notes": "Login first, then go to Academics > Homework",
+  "last_tested_at": "2026-03-26T18:20:00Z",
+  "last_test_result": "login_ok",
+  "created_at": "2026-03-26T18:00:00Z",
+  "updated_at": "2026-03-26T18:20:00Z"
+}
+```
+
+#### 示例 B: Lumie internal data skill
+
+```json
+{
+  "credential_id": "cred_lumie_health_user_a",
+  "user_id": "user_a",
+  "skill_id": "comprehensive_health_assessment",
+  "status": "valid",
+  "system_name": "Lumie Internal Access",
+  "base_url": null,
+  "username": null,
+  "password": null,
+  "ping": "A1B2C3D4",
+  "notes": "internal access only",
+  "last_tested_at": "2026-03-26T18:25:00Z",
+  "last_test_result": "ping_ok",
+  "created_at": "2026-03-26T18:00:00Z",
+  "updated_at": "2026-03-26T18:25:00Z"
+}
+```
+
+#### 示例 C: Email read skill
+
+```json
+{
+  "credential_id": "cred_email_user_a",
+  "user_id": "user_a",
+  "skill_id": "email_keyword_search",
+  "status": "valid",
+  "system_name": "Email Access",
+  "base_url": "gmail",
+  "username": "alice@example.com",
+  "password": "plain-text-for-now-or-app-password",
+  "ping": null,
+  "notes": "personal inbox",
+  "last_tested_at": "2026-03-26T18:30:00Z",
+  "last_test_result": "connector_ok",
+  "created_at": "2026-03-26T18:00:00Z",
+  "updated_at": "2026-03-26T18:30:00Z"
+}
+```
+
+### Credential 读取规则
+
+运行时按以下规则读取：
+
+1. 先确定最终选中的 `skill_id`
+2. 再按 `(user_id, skill_id)` 查询 `advisor_skill_credentials`
+3. 如果该 skill：
+   - `requires_credentials = false`
+     则允许无 credential 执行
+   - `requires_credentials = true`
+     则必须找到一条 credential 记录且 `status = valid`
+4. 如果 skill 是 Lumie internal skill，且需要内部访问，则必须存在 `ping`
+5. 执行时只向对应 runtime 暴露必要字段，不把完整 credential 写入日志、chat history、stdout/stderr
+
+## 8.6 `execution_jobs`
+
+统一 execution job 记录，替代现有 `analysis_jobs` 的单一语义。
+
+```json
+{
+  "job_id": "uuid",
+  "user_id": "requesting user",
+  "session_id": "chat session id",
+  "skill_id": "uuid",
+  "capability_id": "lumie_internal_data",
+  "runtime_type": "lumie_db | browser | external_api | hybrid",
+  "prompt": "original user message",
+  "normalized_request": {},
+  "status": "pending | generating | running | retrying | success | failed | cancelled",
+  "generated_script": "python/js text",
+  "retry_count": 0,
+  "max_retries": 2,
+  "stdout": "",
+  "stderr": "",
+  "error": "",
+  "result": {},
+  "created_at": "ISO datetime",
+  "started_at": "ISO datetime",
+  "finished_at": "ISO datetime"
+}
+```
+
+建议索引：
+
+```python
+await db.execution_jobs.create_index("job_id", unique=True)
+await db.execution_jobs.create_index([("user_id", 1), ("created_at", -1)])
+await db.execution_jobs.create_index("status")
+```
+
+## 8.7 `execution_audit_logs`
+
+审计日志。
+
+```json
+{
+  "log_id": "uuid",
+  "job_id": "uuid",
+  "user_id": "uuid",
+  "skill_id": "uuid",
+  "capability_id": "lumie_internal_data",
+  "runtime_type": "lumie_db",
+  "request_summary": "access daughter health summary",
+  "target_user_id": "uuid",
+  "decision": "allowed | denied",
+  "reason": "team admin access allowed",
+  "created_at": "ISO datetime"
+}
+```
+
+---
+
+## 9. Lumie DB Connector 设计
+
+## 9.1 为什么必须单独存在
+
+Lumie DB connector 对业务规则最了解：
+
+- team admin 是否可访问 member 数据
+- 哪些 collection 属于敏感信息
+- 哪些字段可返回给 Advisor
+- 哪些写操作被允许
+
+这些规则不能交给 sandbox 自己判断。
+
+第一版明确约束如下：
+
+- `lumie_db_connector` 采用**进程内 service 调用**
+- 不通过 HTTP，不通过单独 RPC
+- 输入是 **Python 查询脚本**
+- connector 负责从脚本中识别：
+  - `request_user_id`
+  - `target_user_id`
+  - 涉及的 collection
+  - 涉及的操作类型
+
+## 9.2 调用方式
+
+第一版固定为：
+
+- `execution_service.py` 在 `lumie-api` 进程内直接调用 `lumie_db_connector.py`
+- connector 不单独暴露对外 API
+- connector 只作为内部 service 被 execution system 调用
+
+这样做的目的：
+
+- 减少部署复杂度
+- 减少内部协议设计成本
+- 先把权限和脚本执行链路跑通
+
+## 9.2 输入
+
+建议内部调用请求结构：
+
+```json
+{
+  "request_user_id": "A",
+  "ping": "user-A-ping",
+  "skill_id": "skill-uuid",
+  "job_id": "job-uuid",
+  "script": "generated script text",
+  "history_context": {},
+  "request_summary": "health summary for daughter",
+  "expected_output_schema": {}
+}
+```
+
+说明：
+
+- 第一版不依赖 `declared_target_user_id`
+- 也不依赖显式 `mode`
+- connector 直接通过脚本内容识别 request user、target user、操作类型
+
+## 9.3 脚本格式
+
+第一版脚本格式固定为：
+
+- Python 查询脚本
+
+但它不是“任意 Python”，必须符合这些要求：
+
+- 只能用于 connector 允许的 Lumie 数据访问
+- 不允许删除
+- 不允许批量修改
+- 可读
+- 可做受限的单条写入或单条更新
+- 所有对 `tasks` 的查询和新增都必须受 `team_id` 约束
+
+脚本来源：
+
+- 由 `execution_service.py` 根据 skill 正文、用户问题、history、credential 生成
+
+connector 不负责生成脚本，但负责：
+
+- 解析脚本
+- 检查脚本
+- 执行脚本
+- 拒绝违规脚本
+
+## 9.4 执行流程
+
+`lumie_db_connector.py` 的执行顺序必须固定如下：
+
+1. 接收 execution system 的内部调用请求
+2. 校验 `request_user_id`
+3. 校验 `ping`
+   - ping 必须来自该 skill 的 credential
+   - ping 必须属于 `request_user_id`
+4. 解析 Python 脚本，识别：
+   - request user
+   - target user
+   - 访问的 collection
+   - 是否存在写操作
+5. 如果脚本无法明确识别 target user，直接失败
+6. 判断 `request_user_id == target_user_id` 是否成立
+7. 若不成立，则检查：
+   - request user 是否是 target user 的 team admin
+8. 检查写规则：
+   - 规则 1：不可删除
+   - 规则 2：不可做批量修改
+   - 规则 3：若 request user != target user，则 request user 必须是 target user 的 team admin
+   - 规则 4：如果查询或增加 `tasks`，即使 request user 是 team admin，也只能处理带对应 `team_id` 的 task
+9. 检查脚本是否访问不允许的敏感字段
+10. 构造受限执行上下文
+11. 执行脚本
+12. 对返回结果做字段裁剪
+13. 写入 audit log
+14. 返回结构化结果或结构化错误
+
+## 9.5 第一版写规则
+
+第一版不区分单独的 read mode / write mode 接口，但写操作必须严格受限。
+
+允许：
+
+- 读取 Lumie 数据
+- 对允许的 collection 做受限单条新增或单条更新
+
+禁止：
+
+- 任何删除
+- 任何批量修改
+- 没有 team admin 权限时替别人写数据
+- 绕过 `team_id` 操作 team task
+
+对于 `tasks`：
+
+- 如果 `request_user_id != target_user_id`
+- 且 request user 是 target user 的 team admin
+- 那么对 `tasks` 的查询或新增也必须带正确的 `team_id`
+- 不允许访问或写入不属于该 team 的 task
+
+## 9.6 返回
+
+```json
+{
+  "success": true,
+  "data": {},
+  "stdout": "",
+  "stderr": "",
+  "error": null,
+  "target_user_id": "B",
+  "collections": ["sleep_sessions", "activities", "tasks"]
+}
+```
+
+失败时：
+
+```json
+{
+  "success": false,
+  "error_type": "permission_denied | ping_invalid | script_parse_error | script_execute_error | invalid_collection | unsafe_write",
+  "error_stage": "ping_validation | permission_check | script_parse | script_execute | result_filter",
+  "retryable": false,
+  "error": "detailed message",
+  "stdout": "",
+  "stderr": "traceback text"
+}
+```
+
+错误返回规则：
+
+- `ping_invalid`
+  - `retryable = false`
+- `permission_denied`
+  - `retryable = false`
+- `invalid_collection`
+  - `retryable = false`
+- `unsafe_write`
+  - `retryable = false`
+- `script_parse_error`
+  - `retryable = true`
+- `script_execute_error`
+  - `retryable = true`
+
+execution system 必须依据：
+
+- `error_type`
+- `error_stage`
+- `retryable`
+
+决定是：
+
+- 直接失败返回 Advisor
+- 还是回灌错误并自动修正脚本重试
+
+## 9.7 Lumie DB Connector 可访问范围
+
+可访问：
+
+- `users`
+- `profiles`
+- `activities`
+- `walk_tests`
+- `tasks`
+- `task_templates`
+- `teams`
+- `team_members`
+- `sleep_sessions` 或实际 sleep collection
+- `analysis_jobs` / `execution_jobs`
+- 与 Lumie 自身业务相关的必要文件
+
+返回前必须做字段裁剪。
+
+例如不直接返回：
+
+- `hashed_password`
+- `verification_token`
+- `device_token`
+- 不必要的内部 `_id`
+
+---
+
+## 10. Browser Skill Runtime 设计
+
+## 10.1 技术方案
+
+建议使用：
+
+- Playwright Python
+
+建议文件：
+
+- `lumie_backend/app/services/browser_skill_runtime.py`
+
+## 10.2 Skill 定义内容
+
+Browser skill 至少包含：
+
+- `base_url`
+- `login_url`
+- `username_selector`
+- `password_selector`
+- `submit_selector`
+- `post_login_wait_selector`
+- `navigation_steps`
+- `extraction_selectors`
+
+## 10.3 执行流程
+
+1. 读取 skill 定义
+2. 读取该用户为 skill 保存的 credential
+3. 打开浏览器
+4. 登录
+5. 执行导航步骤
+6. 提取页面内容
+7. 结构化输出 JSON
+
+## 10.4 错误恢复
+
+浏览器执行失败时，返回以下信息给 execution system：
+
+- 当前 URL
+- 截图路径
+- 失败 step
+- DOM 摘要
+- 报错文本
+
+execution system 可以据此重新生成修正版执行脚本并重试。
+
+---
+
+## 11. AI Code Execution System 升级要求
+
+现有 `analysis_service.py`、`analysis_prompt_service.py`、`analysis_sandbox_service.py` 需要重构为更通用的执行系统。
+
+建议新文件：
+
+- `lumie_backend/app/services/execution_service.py`
+- `lumie_backend/app/services/execution_prompt_service.py`
+- `lumie_backend/app/services/execution_runtime_router.py`
+- `lumie_backend/app/services/execution_security_service.py`
+
+### 11.1 新职责
+
+- 统一处理 skill execution
+- 不再只面向“数据分析”
+- 支持多 runtime
+- 支持错误修复重试
+
+### 11.2 runtime 路由
+
+根据 skill 的 `runtime_type` 决定执行位置：
+
+- `lumie_db`
+  - 调 `lumie_db_connector.py`
+
+- `browser`
+  - 调 `browser_skill_runtime.py`
+
+- `external_api`
+  - 调对应 adapter
+
+- `hybrid`
+  - 先 browser，再 lumie_db，或多段组合
+
+### 11.3 脚本生成
+
+execution prompt 里必须注入：
+
+- 用户原始需求
+- skill 完整定义
+- capability 名称
+- runtime 限制
+- 目标输出 schema
+- 允许调用的 connector 名称
+- 如果需要 ping，则说明已提供 ping，仅可用于指定 connector
+- 如果 skill 需要 Lumie internal access，则从该 skill 的 credential 记录中取 `ping`
+
+### 11.4 自动重试
+
+当 runtime 返回：
+
+- `script_error`
+- `selector_not_found`
+- `target_not_found`
+- `missing_field`
+
+execution system 必须把错误回灌给 LLM，要求其修正脚本后再次执行。
+
+默认：
+
+- `max_retries = 2`
+
+---
+
+## 12. 权限模型
+
+## 12.1 对外权限
+
+用户通过 capability 开关赋权。
+
+## 12.2 对内权限
+
+Lumie DB connector 做最终判定。
+
+对于 Lumie 自己的数据：
+
+- 自己的数据：默认允许
+- parent/admin 访问 member：按 team 规则判断
+- 无 team 关系：拒绝
+
+## 12.3 ping 规则
+
+- ping 作为某些 Lumie internal skill 的特殊 credential 字段存在于 `advisor_skill_credentials`
+- ping 不通过前端明文下发
+- ping 不写入 chat history
+- ping 只在 Advisor → execution system → Lumie DB connector 的内部链路流动
+
+---
+
+## 13. API 设计
+
+## 13.1 Advisor Chat
+
+新接口：
+
+```http
+POST /api/v2/advisor/chat
+```
+
+请求：
+
+```json
+{
+  "message": "我女儿最近的健康情况怎么样？",
+  "history": [],
+  "session_id": "uuid"
+}
+```
+
+返回：
+
+直接回复：
+
+```json
+{
+  "type": "direct",
+  "reply": "..."
+}
+```
+
+执行中：
+
+```json
+{
+  "type": "execution",
+  "reply": "我正在为你查看相关信息。",
+  "job_id": "uuid",
+  "skill_id": "uuid"
+}
+```
+
+## 13.2 Execution Job Status
+
+```http
+GET /api/v2/advisor/jobs/{job_id}
+```
+
+返回：
+
+```json
+{
+  "job_id": "uuid",
+  "status": "pending | generating | running | retrying | success | failed",
+  "result": {},
+  "error": null
+}
+```
+
+## 13.3 Capability 管理
+
+```http
+GET /api/v2/advisor/capabilities
+PATCH /api/v2/advisor/capabilities/{capability_id}
+```
+
+用于前端 capability 开关界面。
+
+## 13.4 Skill 管理
+
+```http
+GET /api/v2/advisor/skills
+POST /api/v2/advisor/skills/reindex
+```
+
+说明：
+
+- `GET /api/v2/advisor/skills` 返回 skill index 中的系统 skill 列表与状态
+- `POST /api/v2/advisor/skills/reindex` 触发重新扫描仓库 skill 文件
+
+## 13.5 Skill Credential 管理
+
+```http
+GET /api/v2/advisor/skills/{skill_id}/credential
+PUT /api/v2/advisor/skills/{skill_id}/credential
+```
+
+## 13.6 Skill Test
+
+```http
+POST /api/v2/advisor/skills/{skill_id}/test
+```
+
+用途：
+
+- 测试 credential 是否可用
+- 测试 browser selector 是否仍有效
+- 将 credential 状态更新为 `valid` 或 `invalid`
+
+---
+
+## 14. 代码结构建议
+
+### 后端新增文件
+
+```text
+lumie_backend/app/api/
+  advisor_v2_routes.py
+  advisor_capability_routes.py
+  advisor_skill_routes.py
+
+lumie_backend/app/services/
+  advisor_orchestrator.py
+  capability_service.py
+  skill_registry_service.py
+  skill_index_service.py
+  skill_credential_service.py
+  execution_service.py
+  execution_prompt_service.py
+  execution_runtime_router.py
+  execution_security_service.py
+  browser_skill_runtime.py
+  lumie_db_connector.py
+  external_connector_service.py
+
+lumie_backend/app/models/
+  advisor_capability.py
+  advisor_skill_credential.py
+  execution_job.py
+```
+
+### 现有文件重构建议
+
+- `advisor_service.py`
+  - 迁移为兼容层，最终由 `advisor_orchestrator.py` 取代
+
+- `analysis_service.py`
+  - 重构并合并进 `execution_service.py`
+
+- `analysis_prompt_service.py`
+  - 重构为 `execution_prompt_service.py`
+
+- `analysis_sandbox_service.py`
+  - 保留为其中一个 runtime 实现
+
+### 前端新增/修改文件
+
+```text
+lumie_activity_app/lib/core/services/
+  advisor_service.dart              # 升级到 /api/v2/advisor/chat
+  advisor_capability_service.dart   # capability 开关
+  advisor_skill_service.dart        # skill 列表与状态查看
+  advisor_credential_service.dart   # credential 保存与测试
+  advisor_job_service.dart          # execution job 轮询
+
+lumie_activity_app/lib/features/advisor/screens/
+  advisor_settings_screen.dart
+  advisor_skill_list_screen.dart
+  advisor_credential_screen.dart
+
+lumie_activity_app/lib/features/advisor/widgets/
+  capability_toggle_tile.dart
+  skill_card.dart
+  skill_credential_sheet.dart
+```
+
+---
+
+## 15. Prompt 设计要求
+
+Advisor 层 system prompt 需要新增：
+
+- 当前用户 capability 列表
+- 当前用户可用 skill 摘要
+- skill 选择原则
+- direct vs execution 判断规则
+
+Execution 层 prompt 需要新增：
+
+- skill 完整定义
+- 运行环境说明
+- 允许调用的 connector
+- 错误修复机制
+- 输出 schema
+
+Lumie DB connector prompt 或 script policy 需要新增：
+
+- 不允许越权访问
+- 必须显式 target user
+- 必须遵守 Lumie team/data-sharing 规则
+
+---
+
+## 16. 错误处理
+
+### 16.1 Advisor 层
+
+- capability 未开启
+- skill 未找到
+- credential 未配置
+- skill 所需 ping 缺失
+
+### 16.2 Execution 层
+
+- LLM 生成脚本失败
+- runtime 路由失败
+- runtime 超时
+- runtime 返回不可解析结果
+
+### 16.3 Lumie DB connector
+
+- ping 无效
+- 越权访问
+- 非法 collection
+- 非法写操作
+- 脚本执行异常
+
+### 16.4 Browser runtime
+
+- 登录失败
+- selector 不存在
+- 页面结构变更
+- captcha / 2FA
+
+---
+
+## 17. MVP 实施范围
+
+第一阶段建议只做以下 4 类 capability：
+
+1. `lumie_internal_data`
+2. `browser_portal_access`
+3. `email_read`
+4. `web_read`
+
+第一阶段建议只做以下 5 个 skill：
+
+1. `综合健康评估`
+2. `今日任务与服药情况`
+3. `学校课表查询`
+4. `学校作业查询`
+5. `邮件关键词查询`
+
+不建议第一阶段就做：
+
+- credential 加密托管
+- 自动写第三方平台
+- 多步 agent 自主探索全网
+
+---
+
+## 18. 开发分期
+
+### Phase 1
+
+- 建立 capability / skill credential / execution_jobs 数据模型
+- 新建 `advisor_orchestrator.py`
+- 新建 `/api/v2/advisor/chat`
+
+### Phase 2
+
+- 建立 `lumie_db_connector.py`
+- 实现 Lumie 自身数据 skill
+- 打通基于 skill credential 的 ping 校验
+
+### Phase 3
+
+- 建立 `browser_skill_runtime.py`
+- 支持学校 portal skill
+- 支持 credential 存储
+
+### Phase 4
+
+- 建立 `email_read` skill
+- 打通用户邮箱读取
+
+### Phase 5
+
+- 将现有 analysis system 合并到统一 execution system
+- 逐步废弃旧 `analysis_jobs`
+
+---
+
+## 19. 验收标准
+
+开发完成后必须满足：
+
+1. 用户可以在设置中单独开启 capability
+2. 用户可以为某个 skill 保存网站地址、用户名、密码、notes
+3. Advisor 对不能快速回答的问题，会自动选择 skill
+4. Lumie 自有数据访问必须经过 skill credential 中的 ping + Lumie DB connector
+5. Lumie DB connector 能正确识别 requester 与 target 用户
+6. team admin 能访问 member 被允许的数据
+7. 越权访问会被拒绝并记录 audit log
+8. Browser skill 执行失败时，execution system 能至少自动重试一次
+9. 执行结果最终以统一 chat message 形式回到 Advisor
+
+---
+
+## 20. 关键决策总结
+
+本设计最重要的决策只有 5 个：
+
+1. 把一切“用户自己能手工做的事”统一建模成 skill
+2. 用 capability 开关控制 skill 可用性
+3. 把 Lumie 自己的数据访问也视为 skill
+4. 用 skill credential 中的用户独立 ping 保护 Lumie 内部数据访问
+5. 让 Lumie DB connector 成为最终权限裁决者，而不是 sandbox
+
+这套方案不追求第一次就安全完美，而是追求：
+
+- 形态统一
+- 开发简单
+- 快速落地
+- 后续可持续增强
