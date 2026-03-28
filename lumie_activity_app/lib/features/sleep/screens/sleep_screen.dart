@@ -54,8 +54,15 @@ class _SleepScreenState extends State<SleepScreen> {
         _sleepService.getSleepTarget(),
       ]);
 
+      final session = results[0] as SleepSession?;
+      // Only display sessions that came from actual ring sensor readings and
+      // have a non-zero sleep duration. Discard anything that looks synthetic.
+      final isRealRingData = session != null &&
+          session.source == 'ring' &&
+          session.totalSleepTime.inMinutes > 0;
+
       setState(() {
-        _latestSleep = results[0] as SleepSession?;
+        _latestSleep = isRealRingData ? session : null;
         _sleepTarget = results[1] as SleepTarget;
         _isLoading = false;
       });
@@ -411,18 +418,21 @@ class _SleepScreenState extends State<SleepScreen> {
   Widget _buildMetricsGrid() {
     if (_latestSleep == null) return const SizedBox();
 
+    final hasRestingHr = _latestSleep!.restingHeartRate > 0;
     return Row(
       children: [
-        Expanded(
-          child: SleepMetricCard(
-            title: 'Resting HR',
-            value: '${_latestSleep!.restingHeartRate}',
-            unit: 'bpm',
-            icon: Icons.favorite_outline,
-            gradient: AppColors.warmGradient,
+        if (hasRestingHr) ...[
+          Expanded(
+            child: SleepMetricCard(
+              title: 'Resting HR',
+              value: '${_latestSleep!.restingHeartRate}',
+              unit: 'bpm',
+              icon: Icons.favorite_outline,
+              gradient: AppColors.warmGradient,
+            ),
           ),
-        ),
-        const SizedBox(width: 12),
+          const SizedBox(width: 12),
+        ],
         Expanded(
           child: SleepMetricCard(
             title: 'Sleep Quality',

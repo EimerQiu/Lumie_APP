@@ -15,7 +15,8 @@ enum RingProviderState {
   scanning,
   connecting,
   paired,
-  disconnected, // paired ring exists but BLE is not currently connected
+  disconnected,  // paired ring exists but BLE is not currently connected
+  reconnecting,  // actively attempting background reconnect (direct or scan)
   unpaired,
   error,
 }
@@ -84,12 +85,25 @@ class RingProvider extends ChangeNotifier {
   Future<void> tryReconnect() => _tryReconnect();
 
   Future<void> _tryReconnect() async {
-    if (_bleService.isConnected) return; // Already connected
+    if (_bleService.isConnected) return;
     final deviceId = _ringInfo?.ringDeviceId;
     if (deviceId == null) return;
     debugPrint('[Ring] tryReconnect: $deviceId');
+
+    _state = RingProviderState.reconnecting;
+    notifyListeners();
+
     try {
-      await _bleService.reconnect(deviceId);
+      // Fast path: direct connect by stored device ID (works on Android and
+      // when the ring has been seen recently on iOS).
+      try {
+        await _bleService.reconnect(deviceId);
+      } catch (directError) {
+        // Slow path: scan for X6B rings and connect to the one that matches.
+        // Required on iOS cold-start where CoreBluetooth needs to re-discover.
+        debugPrint('[Ring] Direct reconnect failed ($directError) — trying scan fallback');
+        await _bleService.scanAndReconnect(deviceId);
+      }
       final battery = await _bleService.fetchBatteryLevel();
       _ringInfo = _ringInfo?.copyWith(
         connectionStatus: RingConnectionStatus.connected,
@@ -123,7 +137,12 @@ class RingProvider extends ChangeNotifier {
       if (_bleService.isConnected || _ringInfo?.ringDeviceId == null) return;
 
       try {
-        await _bleService.reconnect(deviceId);
+        try {
+          await _bleService.reconnect(deviceId);
+        } catch (directError) {
+          debugPrint('[Ring] Auto-reconnect direct failed ($directError) — trying scan');
+          await _bleService.scanAndReconnect(deviceId);
+        }
         final battery = await _bleService.fetchBatteryLevel();
         _ringInfo = _ringInfo?.copyWith(
           connectionStatus: RingConnectionStatus.connected,

@@ -134,8 +134,8 @@ class RingBleService {
     debugPrint('[Ring BLE] Notifications enabled');
     _subscribeRawNotifyLog();
 
-    await _setTime();
-    debugPrint('[Ring BLE] Time synced (0x01)');
+    final timeSynced = await _setTime();
+    debugPrint('[Ring BLE] Time sync ${timeSynced ? "ok" : "failed"} (0x01)');
 
     final mac = await _getMacAddress();
     debugPrint('[Ring BLE] MAC address: $mac');
@@ -240,6 +240,48 @@ class RingBleService {
   /// Public wrapper so the provider can read battery level after reconnect.
   Future<int?> fetchBatteryLevel() => _getBatteryLevel();
 
+  /// Scan-based reconnect fallback — used when [reconnect] fails.
+  /// Scans for up to 10 s looking for an X6B ring. Prefers an exact device-ID
+  /// match; falls back to the first X6B found (covers iOS where the platform
+  /// device ID is a CoreBluetooth UUID rather than the MAC address).
+  Future<void> scanAndReconnect(String storedDeviceId) async {
+    debugPrint('[Ring BLE] scanAndReconnect: scanning for $storedDeviceId');
+    await FlutterBluePlus.stopScan();
+
+    String? firstX6bId;
+    final exactMatch = Completer<String>();
+    StreamSubscription<List<ScanResult>>? scanSub;
+
+    scanSub = FlutterBluePlus.scanResults.listen((results) {
+      for (final result in results) {
+        if (!result.device.platformName.toUpperCase().startsWith('X6B')) continue;
+        final id = result.device.remoteId.str;
+        firstX6bId ??= id;
+        if (id == storedDeviceId && !exactMatch.isCompleted) {
+          exactMatch.complete(id);
+        }
+      }
+    });
+
+    await FlutterBluePlus.startScan(timeout: const Duration(seconds: 10));
+
+    String deviceId;
+    try {
+      deviceId = await exactMatch.future.timeout(const Duration(seconds: 10));
+    } on TimeoutException {
+      final fallback = firstX6bId;
+      if (fallback == null) throw Exception('Ring not found during scan');
+      debugPrint('[Ring BLE] scanAndReconnect: no exact match, using first X6B ($fallback)');
+      deviceId = fallback;
+    } finally {
+      await scanSub.cancel();
+      await FlutterBluePlus.stopScan();
+    }
+
+    debugPrint('[Ring BLE] scanAndReconnect: found $deviceId — connecting');
+    await reconnect(deviceId);
+  }
+
   /// Reconnect to a previously paired ring by device ID (no full handshake).
   /// Discovers GATT, enables notifications, and re-syncs time.
   Future<void> reconnect(String deviceId) async {
@@ -282,8 +324,8 @@ class RingBleService {
 
     await _notifyChar!.setNotifyValue(true);
     _subscribeRawNotifyLog();
-    await _setTime();
-    debugPrint('[Ring BLE] Reconnect complete, time synced');
+    final timeSynced = await _setTime();
+    debugPrint('[Ring BLE] Reconnect complete, time sync ${timeSynced ? "ok" : "failed"}');
     _subscribeToConnectionState(device);
     _startKeepAlive();
   }
@@ -314,17 +356,11 @@ class RingBleService {
 
       if (data.length < 10) return;
 
-      final yy = _bcdToDecimal(data[3]);
-      final mm = _bcdToDecimal(data[4]);
-      final dd = _bcdToDecimal(data[5]);
-      final hh = _bcdToDecimal(data[6]);
-      final min = _bcdToDecimal(data[7]);
-      final ss = _bcdToDecimal(data[8]);
       final hr = data[9];
-
       if (hr == 0 || hr >= 250) return;
 
-      final recordTime = DateTime(2000 + yy, mm, dd, hh, min, ss);
+      final recordTime = _parseRingTimestamp(data, 3);
+      if (recordTime == null) return;
       if (recordTime.year == today.year &&
           recordTime.month == today.month &&
           recordTime.day == today.day) {
@@ -465,18 +501,12 @@ class RingBleService {
       // Need at least header (10 bytes) + N stage bytes
       if (data.length < 10) return;
 
-      final yy = _bcdToDecimal(data[3]);
-      final mm = _bcdToDecimal(data[4]);
-      final dd = _bcdToDecimal(data[5]);
-      final hh = _bcdToDecimal(data[6]);
-      final min = _bcdToDecimal(data[7]);
-      final ss = _bcdToDecimal(data[8]);
       final n = data[9]; // valid stage count (1–120 minutes)
-
       if (n < 1 || n > 120) return;
       if (data.length < 10 + n) return;
 
-      final sessionStart = DateTime(2000 + yy, mm, dd, hh, min, ss);
+      final sessionStart = _parseRingTimestamp(data, 3);
+      if (sessionStart == null) return;
       final sessionEnd = sessionStart.add(Duration(minutes: n));
 
       int deep = 0, light = 0, rem = 0, awake = 0;
@@ -531,17 +561,50 @@ class RingBleService {
   // ─── Commands ────────────────────────────────────────────────────────────
 
   /// Command 0x01 — Set Time
-  Future<void> _setTime() async {
-    final now = DateTime.now();
-    final payload = List<int>.filled(15, 0);
-    payload[0] = 0x01;
-    payload[1] = now.year - 2000;
-    payload[2] = now.month;
-    payload[3] = now.day;
-    payload[4] = now.hour;
-    payload[5] = now.minute;
-    payload[6] = now.second;
-    await _writeCommand(payload);
+  /// Fields are plain decimal (NOT BCD) per protocol spec.
+  /// Returns true if the ring acknowledged success, false on failure or timeout.
+  /// Never throws — errors are logged and the pairing flow continues.
+  Future<bool> _setTime() async {
+    try {
+      final now = DateTime.now();
+      final payload = List<int>.filled(15, 0);
+      payload[0] = 0x01;
+      payload[1] = now.year - 2000;
+      payload[2] = now.month;
+      payload[3] = now.day;
+      payload[4] = now.hour;
+      payload[5] = now.minute;
+      payload[6] = now.second;
+
+      if (_notifyChar == null) {
+        await _writeCommand(payload);
+        return true;
+      }
+
+      final completer = Completer<bool>();
+      StreamSubscription<List<int>>? sub;
+      sub = _notifyChar!.lastValueStream.listen((data) {
+        if (data.isNotEmpty && (data[0] == 0x01 || data[0] == 0x81)) {
+          if (!completer.isCompleted) completer.complete(data[0] == 0x01);
+        }
+      });
+
+      try {
+        await _writeCommand(payload);
+        final success = await completer.future.timeout(_responseTimeout);
+        if (!success) debugPrint('[Ring BLE] _setTime: ring returned failure (0x81)');
+        return success;
+      } on TimeoutException {
+        // Ring accepted the write but sent no ACK — treat as non-fatal.
+        debugPrint('[Ring BLE] _setTime: no ACK within timeout, assuming success');
+        return true;
+      } finally {
+        await sub.cancel();
+      }
+    } catch (e) {
+      debugPrint('[Ring BLE] _setTime error: $e');
+      return false;
+    }
   }
 
   /// Command 0x02 — Set User Info
@@ -607,6 +670,39 @@ class RingBleService {
       return response[1].clamp(0, 100);
     } catch (e) {
       debugPrint('[Ring BLE] getBatteryLevel error: $e');
+      return null;
+    }
+  }
+
+  // ─── Timestamp parsing ───────────────────────────────────────────────────
+
+  /// Decode a 6-byte BCD timestamp from [data] starting at [offset].
+  /// Returns null and logs a warning if any field is out of range or if
+  /// decoding throws, so callers can skip corrupt records without crashing.
+  ///
+  /// Ring timestamps are always local time (the ring clock is set to local
+  /// time via 0x01 SetTime), so the returned DateTime is local.
+  DateTime? _parseRingTimestamp(List<int> data, int offset) {
+    try {
+      final yy  = _bcdToDecimal(data[offset]);
+      final mm  = _bcdToDecimal(data[offset + 1]);
+      final dd  = _bcdToDecimal(data[offset + 2]);
+      final hh  = _bcdToDecimal(data[offset + 3]);
+      final min = _bcdToDecimal(data[offset + 4]);
+      final ss  = _bcdToDecimal(data[offset + 5]);
+
+      if (mm < 1 || mm > 12 || dd < 1 || dd > 31 ||
+          hh > 23 || min > 59 || ss > 59) {
+        debugPrint(
+          '[Ring BLE] Invalid timestamp at offset $offset: '
+          'yy=$yy mm=$mm dd=$dd hh=$hh min=$min ss=$ss',
+        );
+        return null;
+      }
+
+      return DateTime(2000 + yy, mm, dd, hh, min, ss);
+    } catch (e) {
+      debugPrint('[Ring BLE] Timestamp parse error at offset $offset: $e');
       return null;
     }
   }

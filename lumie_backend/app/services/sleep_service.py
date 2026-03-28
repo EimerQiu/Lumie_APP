@@ -33,6 +33,7 @@ class SleepService:
                         "stages": [stage.model_dump() for stage in s.stages],
                         "resting_heart_rate": s.resting_heart_rate,
                         "sleep_quality_score": s.sleep_quality_score,
+                        "source": s.source,
                         "created_at": s.wake_time,
                     }
                 },
@@ -145,6 +146,7 @@ class SleepService:
             resting_heart_rate=doc.get("resting_heart_rate", 0),
             sleep_quality_score=doc["sleep_quality_score"],
             created_at=doc["created_at"],
+            source=doc.get("source", "ring"),  # default for records before this field existed
         )
 
 

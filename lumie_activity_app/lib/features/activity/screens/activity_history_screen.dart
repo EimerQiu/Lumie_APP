@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../../core/theme/app_colors.dart';
+import '../../../core/services/rest_days_service.dart';
 import '../../../shared/models/activity_models.dart';
 import '../../../shared/widgets/gradient_card.dart';
 import '../../../shared/widgets/intensity_badge.dart';
@@ -16,6 +17,15 @@ class ActivityHistoryScreen extends StatefulWidget {
 
 class _ActivityHistoryScreenState extends State<ActivityHistoryScreen> {
   int _selectedDayIndex = 0;
+  bool _isTodayRestDay = false;
+
+  @override
+  void initState() {
+    super.initState();
+    RestDaysService().checkTodayIsRestDay().then((value) {
+      if (mounted) setState(() => _isTodayRestDay = value);
+    });
+  }
 
   // Mock data for the week
   final List<DailyActivitySummary> _weekData = [
@@ -309,11 +319,36 @@ class _ActivityHistoryScreenState extends State<ActivityHistoryScreen> {
   Widget _buildSelectedDaySummary() {
     final selected = _weekData[_selectedDayIndex];
     final progress = selected.goalProgress.clamp(0.0, 1.0);
+    final isViewingTodayOnRestDay = _selectedDayIndex == 0 && _isTodayRestDay;
 
     return GradientCard(
       gradient: AppColors.cardGradient,
       child: Column(
         children: [
+          if (isViewingTodayOnRestDay) ...[
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              decoration: BoxDecoration(
+                color: AppColors.accentMint.withValues(alpha: 0.15),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: AppColors.accentMint.withValues(alpha: 0.4)),
+              ),
+              child: Row(
+                children: [
+                  const Icon(Icons.self_improvement, size: 16, color: AppColors.accentMint),
+                  const SizedBox(width: 8),
+                  const Expanded(
+                    child: Text(
+                      'Rest Day — light movement only. Your full data is shown below.',
+                      style: TextStyle(fontSize: 12, color: AppColors.textSecondary),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 14),
+          ],
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [

@@ -65,6 +65,9 @@ class SleepSession {
   final int restingHeartRate;
   final double sleepQualityScore;
   final DateTime createdAt;
+  /// Where this session originated. Only "ring" sessions contain real sensor
+  /// data and should be displayed to the user.
+  final String source;
 
   const SleepSession({
     required this.sessionId,
@@ -77,6 +80,7 @@ class SleepSession {
     required this.restingHeartRate,
     required this.sleepQualityScore,
     required this.createdAt,
+    this.source = 'ring',
   });
 
   /// Get total time in bed (from bedtime to wake time)
@@ -129,6 +133,7 @@ class SleepSession {
       restingHeartRate: (json['resting_heart_rate'] as int?) ?? 0,
       sleepQualityScore: (json['sleep_quality_score'] as num).toDouble(),
       createdAt: DateTime.parse(json['created_at'] as String),
+      source: (json['source'] as String?) ?? 'ring',
     );
   }
 

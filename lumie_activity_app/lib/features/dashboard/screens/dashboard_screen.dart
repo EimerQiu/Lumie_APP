@@ -32,9 +32,16 @@ class _DashboardScreenState extends State<DashboardScreen>
   // Mock data for demo
   final int _currentMinutes = 42;
   final int _goalMinutes = 60;
+  static const int _restDayGoalMinutes = 20;
   final ActivityIntensity _dominantIntensity = ActivityIntensity.moderate;
 
   bool _isRestDay = false;
+
+  /// Activity score relative to whichever goal is active today.
+  int get _activityScore {
+    final goal = _isRestDay ? _restDayGoalMinutes : _goalMinutes;
+    return ((_currentMinutes / goal) * 100).round().clamp(0, 100);
+  }
 
   @override
   void initState() {
@@ -135,10 +142,12 @@ class _DashboardScreenState extends State<DashboardScreen>
                 const SizedBox(height: 12),
                 const ActiveTasksCard(),
                 const SizedBox(height: 12),
-                _buildMainActivityRing(),
-                const SizedBox(height: 24),
-                _buildTodaysSummary(),
-                const SizedBox(height: 16),
+                if (!_isRestDay) ...[
+                  _buildMainActivityRing(),
+                  const SizedBox(height: 24),
+                  _buildTodaysSummary(),
+                  const SizedBox(height: 16),
+                ],
                 AdaptiveGoalCard(
                   recommendedMinutes: _isRestDay ? 20 : _goalMinutes,
                   currentMinutes: _currentMinutes,
@@ -193,7 +202,7 @@ class _DashboardScreenState extends State<DashboardScreen>
       ),
       _ScoreData(
         label: 'Activity',
-        score: 68,
+        score: _activityScore,
         icon: Icons.directions_run,
         color: const Color(0xFFFFB74D),
         onTap: () => Navigator.push(

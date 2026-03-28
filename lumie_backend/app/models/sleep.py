@@ -20,6 +20,7 @@ class SleepSessionSync(BaseModel):
     stages: list[SleepStageData]
     resting_heart_rate: int = 0
     sleep_quality_score: float
+    source: str = "ring"  # always "ring" for BLE-synced data
 
 
 class SleepSyncRequest(BaseModel):
@@ -37,6 +38,7 @@ class SleepSessionResponse(BaseModel):
     resting_heart_rate: int
     sleep_quality_score: float
     created_at: datetime
+    source: str = "ring"  # defaults to "ring" for records predating this field
 
 
 class SleepSummaryResponse(BaseModel):
