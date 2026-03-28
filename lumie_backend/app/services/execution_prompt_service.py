@@ -92,7 +92,9 @@ Write a Python async script that:
 
 ## Script Rules
 
-- You can use: `db`, `target_user_id`, `request_user_id`, `datetime`, `timedelta`, `ZoneInfo`, `json`, `print`, `str`, `int`, `float`, `len`, `list`, `dict`, `bool`, `isinstance`, `range`, `enumerate`, `sorted`, `min`, `max`, `sum`, `round`, `abs`, `any`, `all`, `zip`, `map`, `filter`, `set`, `tuple`, `type`
+- You can use: `db`, `target_user_id`, `request_user_id`, `user_timezone`, `datetime`, `timedelta`, `timezone`, `ZoneInfo`, `json`, `print`, `str`, `int`, `float`, `len`, `list`, `dict`, `bool`, `isinstance`, `range`, `enumerate`, `sorted`, `min`, `max`, `sum`, `round`, `abs`, `any`, `all`, `zip`, `map`, `filter`, `set`, `tuple`, `type`
+- `user_timezone` is a pre-set string variable (e.g. "America/Los_Angeles") — use it directly: `local_tz = ZoneInfo(user_timezone)`
+- `timezone` is the `datetime.timezone` module — use `timezone.utc` for UTC-aware datetimes
 - All DB calls must use `await` (Motor is async)
 - READ ONLY: No insert, update, or delete operations
 - CRITICAL: Do NOT use `import` or `from ... import` — ALL modules and builtins are already pre-loaded in the namespace. `datetime`, `timedelta`, `json` are all available directly. Using import will cause your script to be rejected.
@@ -137,21 +139,32 @@ Tasks collection fields:
 - `team_id`: string (optional), for team-scoped tasks
 - `task_info`: string (optional), extra notes
 
-To query today's tasks for a user in timezone {timezone}:
+To query today's or yesterday's tasks/sleep for a user in their local timezone:
 ```python
-# timedelta is already available — do NOT import it
-# Calculate today boundaries in UTC
-# Example for America/Los_Angeles (UTC-7):
-# today_start_utc = datetime(2026,3,27,7,0,0)  # midnight PT = 7am UTC
-# today_end_utc = datetime(2026,3,28,7,0,0)
-now_utc = datetime.utcnow()
-# Simplification: query tasks whose windows overlap with the last 24h and next 24h
-start_range = now_utc - timedelta(hours=24)
-end_range = now_utc + timedelta(hours=24)
+# user_timezone, ZoneInfo, timezone, datetime, timedelta are all pre-loaded variables
+local_tz = ZoneInfo(user_timezone)          # use user_timezone variable directly
+today_local = datetime.now(local_tz).date()
+
+# Today range in UTC:
+today_start_utc = datetime(today_local.year, today_local.month, today_local.day, tzinfo=local_tz).astimezone(timezone.utc)
+today_end_utc = today_start_utc + timedelta(days=1)
+
+# Yesterday range in UTC (for "last night" sleep queries):
+yesterday_start_utc = today_start_utc - timedelta(days=1)
+yesterday_end_utc = today_start_utc
+
+# Query sleep for last night:
+sessions = await db.sleep_sessions.find({{
+    "user_id": target_user_id,
+    "bedtime": {{"$gte": yesterday_start_utc, "$lt": yesterday_end_utc}},
+}}).to_list(10)
+
+# Query today's tasks (open_datetime stored as string 'YYYY-MM-DD HH:mm'):
+start_str = today_start_utc.strftime("%Y-%m-%d %H:%M")
+end_str = today_end_utc.strftime("%Y-%m-%d %H:%M")
 tasks = await db.tasks.find({{
     "user_id": target_user_id,
-    "open_datetime": {{"$lte": end_range}},
-    "close_datetime": {{"$gte": start_range}},
+    "open_datetime": {{"$gte": start_str, "$lt": end_str}},
 }}).to_list(100)
 ```
 

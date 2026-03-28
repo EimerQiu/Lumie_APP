@@ -121,28 +121,6 @@ async def get_execution_job(
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
 
-    # If job completed, save the result to chat history
-    if job.get("status") == "success" and job.get("result"):
-        result_data = job["result"]
-        summary = ""
-        if isinstance(result_data, dict):
-            summary = result_data.get("summary", str(result_data)[:500])
-        else:
-            summary = str(result_data)[:500]
-
-        if summary:
-            await save_message(
-                user_id=user_id,
-                session_id=job.get("session_id", "default"),
-                role="assistant",
-                content=summary,
-                metadata={
-                    "type": "execution_result",
-                    "job_id": job_id,
-                    "skill_id": job.get("skill_id"),
-                },
-            )
-
     return job
 
 

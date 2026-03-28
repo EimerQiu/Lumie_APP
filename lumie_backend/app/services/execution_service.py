@@ -173,6 +173,12 @@ async def _execute_lumie_db(
     last_error = None
 
     for attempt in range(retry_count, MAX_RETRIES + 1):
+        # Check if job was cancelled before each attempt
+        current = await db.execution_jobs.find_one({"job_id": job_id}, {"status": 1})
+        if current and current.get("status") == "cancelled":
+            logger.info(f"Job {job_id} was cancelled, stopping execution")
+            return
+
         # Generate script
         gen_prompt = build_lumie_db_execution_prompt(
             user_request=prompt,
@@ -190,6 +196,14 @@ async def _execute_lumie_db(
         script = await _generate_script(gen_prompt)
         if not script:
             await _fail_job(db, job_id, "LLM failed to generate a script")
+            return
+
+        logger.info(f"Job {job_id} generated script:\n{script}")
+
+        # Check again after LLM call (user may have cancelled during generation)
+        current = await db.execution_jobs.find_one({"job_id": job_id}, {"status": 1})
+        if current and current.get("status") == "cancelled":
+            logger.info(f"Job {job_id} was cancelled after script generation, not executing")
             return
 
         # Update job with generated script
@@ -211,19 +225,24 @@ async def _execute_lumie_db(
             script=script,
             target_user_id=target_user_id,
             request_summary=prompt,
+            user_timezone=user_context.get("timezone", "UTC"),
         )
+
+        stdout = result.get("stdout", "")
+        stderr = result.get("stderr", "")
+        if stdout:
+            logger.info(f"Job {job_id} stdout:\n{stdout}")
+        if stderr:
+            logger.warning(f"Job {job_id} stderr:\n{stderr}")
 
         if result["success"]:
             # Success!
-            await _complete_job(db, job_id, result["data"],
-                                result.get("stdout", ""),
-                                result.get("stderr", ""))
+            await _complete_job(db, job_id, result["data"], stdout, stderr)
             return
 
         # Check if retryable
         if not result.get("retryable", False) or attempt >= MAX_RETRIES:
-            await _fail_job(db, job_id, result.get("error", "Execution failed"),
-                            result.get("stdout", ""), result.get("stderr", ""))
+            await _fail_job(db, job_id, result.get("error", "Execution failed"), stdout, stderr)
             return
 
         # Retry
@@ -407,13 +426,13 @@ async def get_job(job_id: str, user_id: str) -> Optional[dict]:
 
 
 async def cancel_job(job_id: str, user_id: str) -> bool:
-    """Cancel a pending or generating job."""
+    """Cancel a pending, generating, or running job."""
     db = get_database()
     result = await db.execution_jobs.update_one(
         {
             "job_id": job_id,
             "user_id": user_id,
-            "status": {"$in": ["pending", "generating"]},
+            "status": {"$in": ["pending", "generating", "running", "retrying"]},
         },
         {"$set": {
             "status": "cancelled",

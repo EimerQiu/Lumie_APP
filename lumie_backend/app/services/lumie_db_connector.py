@@ -52,6 +52,7 @@ async def execute(
     target_user_id: Optional[str] = None,
     request_summary: str = "",
     history_context: Optional[dict] = None,
+    user_timezone: str = "UTC",
 ) -> dict:
     """Execute a data-access script with full permission enforcement.
 
@@ -71,9 +72,12 @@ async def execute(
         return _error("ping_invalid", "ping_validation", False,
                        "Invalid or missing ping token")
 
+    logger.info(f"[connector] job={job_id} skill={skill_id} target={target_user_id or request_user_id} tz={user_timezone}")
+
     # ── Step 2: Parse and validate the script ────────────────────────────
     parse_result = _validate_script(script)
     if not parse_result["valid"]:
+        logger.warning(f"[connector] job={job_id} script parse error: {parse_result['error']}")
         return _error("script_parse_error", "script_parse", True,
                        parse_result["error"])
 
@@ -88,9 +92,12 @@ async def execute(
     has_writes = analysis.get("has_writes", False)
     has_deletes = analysis.get("has_deletes", False)
 
+    logger.info(f"[connector] job={job_id} collections={accessed_collections} writes={has_writes} deletes={has_deletes}")
+
     # ── Step 4: Check collection access ──────────────────────────────────
     invalid_collections = accessed_collections - ALLOWED_COLLECTIONS
     if invalid_collections:
+        logger.warning(f"[connector] job={job_id} DENIED invalid collections: {invalid_collections}")
         await _write_audit_log(db, job_id, request_user_id, skill_id,
                                target_user_id, "denied",
                                f"Invalid collections: {invalid_collections}")
@@ -99,6 +106,7 @@ async def execute(
 
     # ── Step 5: Check write safety ───────────────────────────────────────
     if has_deletes:
+        logger.warning(f"[connector] job={job_id} DENIED delete operation attempted")
         await _write_audit_log(db, job_id, request_user_id, skill_id,
                                target_user_id, "denied", "Delete operation attempted")
         return _error("unsafe_write", "permission_check", False,
@@ -110,6 +118,7 @@ async def execute(
             # Check if write targets are all in writable collections
             write_collections = analysis.get("write_collections", set())
             if write_collections - WRITABLE_COLLECTIONS:
+                logger.warning(f"[connector] job={job_id} DENIED write to non-writable: {write_collections - WRITABLE_COLLECTIONS}")
                 await _write_audit_log(db, job_id, request_user_id, skill_id,
                                        target_user_id, "denied",
                                        f"Write to non-writable: {write_collections - WRITABLE_COLLECTIONS}")
@@ -122,6 +131,7 @@ async def execute(
             db, request_user_id, target_user_id
         )
         if not has_access:
+            logger.warning(f"[connector] job={job_id} DENIED no team admin access from {request_user_id} to {target_user_id}")
             await _write_audit_log(db, job_id, request_user_id, skill_id,
                                    target_user_id, "denied",
                                    "No team admin relationship")
@@ -129,12 +139,16 @@ async def execute(
                            "You do not have permission to access this user's data")
 
     # ── Step 7: Execute the script ───────────────────────────────────────
+    logger.info(f"[connector] job={job_id} executing script...")
     try:
-        result = await _execute_script(db, script, request_user_id, target_user_id)
+        result = await _execute_script(db, script, request_user_id, target_user_id, user_timezone)
     except Exception as e:
         tb = traceback.format_exc()
+        logger.error(f"[connector] job={job_id} script execution exception: {e}")
         return _error("script_execute_error", "script_execute", True,
                        str(e), stderr=tb)
+
+    logger.info(f"[connector] job={job_id} script done. stdout_len={len(result.get('stdout',''))} stderr_len={len(result.get('stderr',''))}")
 
     # ── Step 8: Filter sensitive fields ──────────────────────────────────
     filtered_data = _filter_sensitive(result.get("data"))
@@ -236,6 +250,7 @@ async def _execute_script(
     script: str,
     request_user_id: str,
     target_user_id: Optional[str],
+    user_timezone: str = "UTC",
 ) -> dict:
     """Execute the script in a restricted context with DB access.
 
@@ -248,7 +263,7 @@ async def _execute_script(
     stderr_buf = io.StringIO()
 
     # Build the execution namespace
-    from datetime import timedelta
+    from datetime import timedelta, timezone
     from zoneinfo import ZoneInfo
     namespace = {
         "db": db_instance,
@@ -256,10 +271,12 @@ async def _execute_script(
         "target_user_id": target_user_id or request_user_id,
         "TARGET_USER_ID": target_user_id or request_user_id,
         "REQUEST_USER_ID": request_user_id,
+        "user_timezone": user_timezone,
         "_result": None,
         "json": json,
         "datetime": datetime,
         "timedelta": timedelta,
+        "timezone": timezone,
         "ZoneInfo": ZoneInfo,
         "str": str,
         "int": int,

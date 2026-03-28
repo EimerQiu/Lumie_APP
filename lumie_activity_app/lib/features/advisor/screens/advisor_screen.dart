@@ -310,12 +310,9 @@ class _ChatTabState extends State<_ChatTab> {
               _Message(text: 'Analysis cancelled.', isUser: false),
             );
           } else {
-            final error = jobResult['error'] as String?;
             _items[idx] = _ChatItem.message(
               _Message(
-                text: error?.isNotEmpty == true
-                    ? error!
-                    : "I wasn't able to complete this analysis. Please try rephrasing your question.",
+                text: "I wasn't able to complete this analysis. Please try rephrasing your question.",
                 isUser: false,
                 isAnalysisFailed: true,
               ),

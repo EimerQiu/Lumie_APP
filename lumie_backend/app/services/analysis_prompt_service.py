@@ -65,20 +65,30 @@ Your job: Generate Python code to answer the user's question by querying MongoDB
 - User health condition (ICD-10): {user_condition}
 - Timezone: {user_timezone}
 
-## Timezone Handling (MANDATORY for task queries)
-task open_datetime/close_datetime are stored in **UTC** (no Z suffix). Never treat them as local time.
-When the question involves "today", "now", "this week", or any local date, always convert using the user's timezone above:
+## Timezone Handling (MANDATORY for all date/time queries)
+All timestamps in the DB are stored in **UTC** (no Z suffix). Never treat them as local time.
+When the question involves "today", "now", "yesterday", "last night", "this week", or any local date, always convert using the user's timezone above:
 ```python
 from zoneinfo import ZoneInfo
 from datetime import datetime, timezone, timedelta
 local_tz = ZoneInfo("{user_timezone}")
 today_local = datetime.now(local_tz).date()
+
+# "today" range in UTC:
 day_start_utc = datetime(today_local.year, today_local.month, today_local.day, tzinfo=local_tz).astimezone(timezone.utc)
 day_end_utc = day_start_utc + timedelta(days=1)
-start_str = day_start_utc.strftime("%Y-%m-%d %H:%M")
-end_str = day_end_utc.strftime("%Y-%m-%d %H:%M")
-# query: open_datetime $gte start_str AND open_datetime $lt end_str
+
+# "yesterday" / "last night" range in UTC:
+yesterday_local = today_local - timedelta(days=1)
+yesterday_start_utc = datetime(yesterday_local.year, yesterday_local.month, yesterday_local.day, tzinfo=local_tz).astimezone(timezone.utc)
+yesterday_end_utc = yesterday_start_utc + timedelta(days=1)
+
+start_str = yesterday_start_utc.strftime("%Y-%m-%dT%H:%M:%S")
+end_str = yesterday_end_utc.strftime("%Y-%m-%dT%H:%M:%S")
+# query: bedtime $gte start_str AND bedtime $lt end_str
 ```
+
+CRITICAL: `tzinfo` must always be a `ZoneInfo` or `timezone` object — NEVER pass a function/method like `datetime.utcnow` or `datetime.now` as tzinfo.
 
 ## Task
 Answer this question: {question}
@@ -136,7 +146,12 @@ Return ONLY valid Python code. No markdown fencing, no explanation.
 - NEVER use backslashes inside f-string expressions (Python 3.11 limitation). Instead assign to a variable first:
   BAD:  f"{{'\\n'.join(items)}}"
   GOOD: sep = '\\n'; f"{{sep.join(items)}}"
-- Always handle empty query results gracefully (check `if not results` before processing).\
+- Always handle empty query results gracefully (check `if not results` before processing).
+- NEVER pass a function or method as the `tzinfo` argument. These are all WRONG:
+  BAD:  datetime(y, m, d, tzinfo=datetime.utcnow)   # utcnow is a method, not a tzinfo
+  BAD:  datetime(y, m, d, tzinfo=datetime.now)       # same error
+  GOOD: datetime(y, m, d, tzinfo=ZoneInfo("America/Los_Angeles"))
+  GOOD: datetime(y, m, d, tzinfo=timezone.utc)\
 """
 
 

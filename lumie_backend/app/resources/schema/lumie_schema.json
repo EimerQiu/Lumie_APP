@@ -1,5 +1,6 @@
 {
   "database": "lumie_db",
+  "restricted_collections": ["users", "advisor_skill_credentials", "execution_jobs", "analysis_jobs", "execution_audit_logs", "notification_queue"],
   "collections": [
     {
       "name": "profiles",
@@ -14,8 +15,27 @@
         "icd10_code": "string, ICD-10 diagnosis code (e.g., E10 = Type 1 Diabetes)",
         "advisor_name": "string, AI advisor nickname",
         "timezone": "string, user timezone (e.g., America/Los_Angeles)",
-        "created_at": "string, ISO datetime"
+        "created_at": "string, ISO datetime",
+        "updated_at": "string, ISO datetime (optional)"
       }
+    },
+    {
+      "name": "sleep_sessions",
+      "description": "Sleep sessions synced from smart ring. Each record is one night of sleep.",
+      "fields": {
+        "user_id": "string",
+        "session_id": "string, unique per user (ring-generated ID)",
+        "bedtime": "datetime (UTC), when the user fell asleep",
+        "wake_time": "datetime (UTC), when the user woke up",
+        "total_sleep_minutes": "number, total sleep duration in minutes",
+        "time_awake_minutes": "number, time spent awake during sleep window",
+        "stages": "array of {stage: string ('light'|'deep'|'rem'|'awake'), duration_minutes: number, percentage: float}",
+        "resting_heart_rate": "number, average resting heart rate during sleep (BPM)",
+        "sleep_quality_score": "float, 0–100 quality score",
+        "source": "string, 'ring' or 'manual' (defaults to 'ring')",
+        "created_at": "datetime (UTC)"
+      },
+      "notes": "bedtime and wake_time are MongoDB datetime objects (UTC). To query 'last night', compute yesterday's local date range and convert to UTC using the user's timezone. Example: yesterday_local = today_local - timedelta(days=1); yesterday_start_utc = datetime(yesterday_local.year, yesterday_local.month, yesterday_local.day, tzinfo=local_tz).astimezone(timezone.utc); yesterday_end_utc = yesterday_start_utc + timedelta(days=1); then filter bedtime $gte yesterday_start_utc $lt yesterday_end_utc."
     },
     {
       "name": "activities",
@@ -80,6 +100,68 @@
         "time_window_list": "array of TimeWindow objects",
         "min_interval": "number, minimum interval in minutes",
         "created_at": "string, ISO datetime"
+      }
+    },
+    {
+      "name": "teams",
+      "description": "Teams connecting teens with parents, coaches, or caregivers",
+      "fields": {
+        "team_id": "string, unique team ID",
+        "name": "string, team display name",
+        "description": "string, optional",
+        "created_by": "string, user_id of creator",
+        "created_at": "datetime",
+        "updated_at": "datetime (optional)",
+        "is_deleted": "boolean, true if soft-deleted",
+        "deleted_at": "datetime (optional)"
+      },
+      "notes": "Soft-deleted teams have is_deleted=true. Always filter {is_deleted: {$ne: true}} unless specifically querying deleted teams."
+    },
+    {
+      "name": "team_members",
+      "description": "Team membership records. Tracks both active members and pending invitations for registered users.",
+      "fields": {
+        "team_id": "string",
+        "user_id": "string",
+        "role": "string, 'admin' or 'member'",
+        "status": "string, 'member' (active) or 'pending' (invitation not yet accepted)",
+        "invited_by": "string, user_id of the person who sent the invite",
+        "invited_at": "datetime",
+        "joined_at": "datetime (present only when status='member')"
+      },
+      "notes": "Only status='member' records count as active team members. status='pending' means the user was invited but hasn't accepted yet. Pending members have no access to team data."
+    },
+    {
+      "name": "pending_invitations",
+      "description": "Email invitations sent to users who are not yet registered in the system",
+      "fields": {
+        "email": "string, invitee email (lowercased)",
+        "team_id": "string",
+        "invited_by": "string, user_id of inviter",
+        "invited_at": "datetime"
+      },
+      "notes": "These are for unregistered users only. Registered users get a team_members record with status='pending' instead."
+    },
+    {
+      "name": "dayprints",
+      "description": "Daily action logs — a per-user, per-day record of notable events (task completions, advisor interactions, insights)",
+      "fields": {
+        "user_id": "string",
+        "date": "string, YYYY-MM-DD in UTC",
+        "events": "array of {event_id: string, type: string ('task_completed'|'advisor_chat'|'important_insight'), timestamp: datetime, data: object (varies by type)}"
+      },
+      "notes": "One document per user per day. The 'date' field is UTC date string. Query by user_id + date range to get a user's daily activity log."
+    },
+    {
+      "name": "advisor_checkins",
+      "description": "Per-user advisor check-in schedule preferences",
+      "fields": {
+        "user_id": "string, unique",
+        "enabled": "boolean",
+        "frequency": "string, 'daily' or 'weekdays'",
+        "hour_utc": "number, scheduled hour in UTC (0–23)",
+        "minute_utc": "number, scheduled minute (0–59)",
+        "last_sent_date": "string, YYYY-MM-DD of last check-in sent (optional)"
       }
     }
   ]
