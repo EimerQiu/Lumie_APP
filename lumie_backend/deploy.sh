@@ -115,3 +115,15 @@ echo "  - View logs: sudo journalctl -u lumie-api -f"
 echo "  - Restart API: sudo systemctl restart lumie-api"
 echo "  - Test API: curl https://api.yumo.org/health"
 echo ""
+echo "Setting up local log aliases..."
+# Add log viewing aliases (LA timezone)
+cat >> ~/.zshrc << 'ENDALIASES'
+
+# Lumie API log viewing aliases (LA timezone)
+alias lumie-logs="TZ=America/Los_Angeles ssh -i ~/.ssh/Lumie_Key.pem ubuntu@$SERVER_IP 'sudo journalctl -u lumie-api -f'"
+alias lumie-logs-recent="TZ=America/Los_Angeles ssh -i ~/.ssh/Lumie_Key.pem ubuntu@$SERVER_IP 'sudo journalctl -u lumie-api -n 100 --no-pager'"
+alias lumie-logs-errors="TZ=America/Los_Angeles ssh -i ~/.ssh/Lumie_Key.pem ubuntu@$SERVER_IP 'sudo journalctl -u lumie-api -p err -n 50 --no-pager'"
+ENDALIASES
+source ~/.zshrc
+echo "✅ Log aliases added! Use: lumie-logs, lumie-logs-recent, lumie-logs-errors"
+echo ""

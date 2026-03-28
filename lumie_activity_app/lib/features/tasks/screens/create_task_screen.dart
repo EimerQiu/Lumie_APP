@@ -118,10 +118,13 @@ class _CreateTaskScreenState extends State<CreateTaskScreen> {
             // Task name
             TextFormField(
               controller: _nameController,
-              decoration: const InputDecoration(
+              decoration: InputDecoration(
                 labelText: 'Task Name',
+                labelStyle: TextStyle(fontSize: 12, color: AppColors.textLight, fontWeight: FontWeight.w400),
+                floatingLabelStyle: TextStyle(fontSize: 12, color: AppColors.textLight, fontWeight: FontWeight.w400),
                 hintText: 'e.g. Take medication',
-                border: OutlineInputBorder(),
+                hintStyle: TextStyle(fontSize: 13, color: AppColors.textLight, fontWeight: FontWeight.w400),
+                border: const OutlineInputBorder(),
               ),
               validator: (value) {
                 if (value == null || value.trim().isEmpty) {
@@ -181,7 +184,7 @@ class _CreateTaskScreenState extends State<CreateTaskScreen> {
                         const SizedBox(height: 4),
                         Text(
                           _getDetectedTimezone(),
-                          style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: AppColors.textOnYellow),
+                          style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500, color: AppColors.textOnYellow),
                         ),
                       ],
                     ),
@@ -234,10 +237,13 @@ class _CreateTaskScreenState extends State<CreateTaskScreen> {
             // Additional info
             TextFormField(
               controller: _infoController,
-              decoration: const InputDecoration(
+              decoration: InputDecoration(
                 labelText: 'Notes (optional)',
+                labelStyle: TextStyle(fontSize: 12, color: AppColors.textLight, fontWeight: FontWeight.w400),
+                floatingLabelStyle: TextStyle(fontSize: 12, color: AppColors.textLight, fontWeight: FontWeight.w400),
                 hintText: 'Additional information about this task',
-                border: OutlineInputBorder(),
+                hintStyle: TextStyle(fontSize: 13, color: AppColors.textLight, fontWeight: FontWeight.w400),
+                border: const OutlineInputBorder(),
               ),
               maxLines: 3,
               maxLength: 500,

@@ -171,7 +171,7 @@ class _TemplateCard extends StatelessWidget {
                   template.templateName,
                   style: const TextStyle(
                     fontSize: 18,
-                    fontWeight: FontWeight.w600,
+                    fontWeight: FontWeight.w500,
                     color: AppColors.textPrimary,
                   ),
                 ),

@@ -64,10 +64,11 @@ class _CreateTemplateScreenState extends State<CreateTemplateScreen> {
             // Template name
             TextFormField(
               controller: _nameController,
-              decoration: const InputDecoration(
-                labelText: 'Template Name',
-                hintText: 'e.g. Daily Medication Schedule',
-                border: OutlineInputBorder(),
+              decoration: InputDecoration(
+                labelText: 'Template Name e.g. Daily Medication',
+                labelStyle: TextStyle(fontSize: 12, color: AppColors.textLight, fontWeight: FontWeight.w400),
+                floatingLabelStyle: TextStyle(fontSize: 12, color: AppColors.textLight, fontWeight: FontWeight.w400),
+                border: const OutlineInputBorder(),
               ),
               validator: (value) {
                 if (value == null || value.trim().isEmpty) {
@@ -100,10 +101,13 @@ class _CreateTemplateScreenState extends State<CreateTemplateScreen> {
             // Description
             TextFormField(
               controller: _descController,
-              decoration: const InputDecoration(
+              decoration: InputDecoration(
                 labelText: 'Description (optional)',
+                labelStyle: TextStyle(fontSize: 12, color: AppColors.textLight, fontWeight: FontWeight.w400),
+                floatingLabelStyle: TextStyle(fontSize: 12, color: AppColors.textLight, fontWeight: FontWeight.w400),
                 hintText: 'Brief description of this template',
-                border: OutlineInputBorder(),
+                hintStyle: TextStyle(fontSize: 13, color: AppColors.textLight, fontWeight: FontWeight.w400),
+                border: const OutlineInputBorder(),
               ),
               maxLines: 2,
               maxLength: 500,
@@ -113,10 +117,12 @@ class _CreateTemplateScreenState extends State<CreateTemplateScreen> {
             // Min interval
             TextFormField(
               controller: _intervalController,
-              decoration: const InputDecoration(
+              decoration: InputDecoration(
                 labelText: 'Minimum Interval (minutes)',
+                labelStyle: TextStyle(fontSize: 12, color: AppColors.textLight, fontWeight: FontWeight.w400),
+                floatingLabelStyle: TextStyle(fontSize: 12, color: AppColors.textLight, fontWeight: FontWeight.w400),
                 hintText: '0',
-                border: OutlineInputBorder(),
+                border: const OutlineInputBorder(),
               ),
               keyboardType: TextInputType.number,
               validator: (value) {
@@ -131,30 +137,6 @@ class _CreateTemplateScreenState extends State<CreateTemplateScreen> {
             ),
             const SizedBox(height: 24),
 
-            // Time windows header
-            Row(
-              children: [
-                const Text(
-                  'Time Windows',
-                  style: TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.w600,
-                    color: AppColors.textPrimary,
-                  ),
-                ),
-                const Spacer(),
-                TextButton.icon(
-                  onPressed: _addWindow,
-                  icon: const Icon(Icons.add, size: 18),
-                  label: const Text('Add Window'),
-                  style: TextButton.styleFrom(
-                    foregroundColor: AppColors.primaryLemonDark,
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 8),
-
             // Time window editors
             ...List.generate(_windows.length, (index) {
               return TimeWindowEditor(
@@ -168,6 +150,20 @@ class _CreateTemplateScreenState extends State<CreateTemplateScreen> {
                     : null,
               );
             }),
+
+            // Add window button
+            Align(
+              alignment: Alignment.centerRight,
+              child: TextButton.icon(
+                onPressed: _addWindow,
+                icon: const Icon(Icons.add, size: 18),
+                label: const Text('Add Window'),
+                style: TextButton.styleFrom(
+                  foregroundColor: AppColors.primaryLemonDark,
+                ),
+              ),
+            ),
+            const SizedBox(height: 8),
 
             const SizedBox(height: 24),
 

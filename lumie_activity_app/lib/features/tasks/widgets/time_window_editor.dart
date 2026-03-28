@@ -53,31 +53,18 @@ class TimeWindowEditor extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.fromLTRB(16, 16, 16, 16),
       decoration: BoxDecoration(
         color: AppColors.backgroundWhite,
         borderRadius: BorderRadius.circular(12),
         border: Border.all(color: AppColors.surfaceLight),
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+      child: Stack(
         children: [
-          // Delete button
-          if (onDelete != null) ...[
-            Align(
-              alignment: Alignment.centerRight,
-              child: IconButton(
-                onPressed: onDelete,
-                icon: const Icon(Icons.close, size: 20),
-                color: AppColors.textSecondary,
-                padding: EdgeInsets.zero,
-                constraints: const BoxConstraints(),
-              ),
-            ),
-            const SizedBox(height: 4),
-          ],
-
-          // Window name
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // Window name
           TextField(
             onChanged: (value) {
               data.name = value;
@@ -85,12 +72,15 @@ class TimeWindowEditor extends StatelessWidget {
             },
             controller: TextEditingController(text: data.name)
               ..selection = TextSelection.collapsed(offset: data.name.length),
-            decoration: const InputDecoration(
+            decoration: InputDecoration(
               labelText: 'Window Name',
+              labelStyle: TextStyle(fontSize: 12, color: AppColors.textLight, fontWeight: FontWeight.w400),
+              floatingLabelStyle: TextStyle(fontSize: 12, color: AppColors.textLight, fontWeight: FontWeight.w400),
               hintText: 'e.g. Morning, Afternoon',
-              border: OutlineInputBorder(),
+              hintStyle: TextStyle(fontSize: 13, color: AppColors.textLight, fontWeight: FontWeight.w400),
+              border: const OutlineInputBorder(),
               contentPadding:
-                  EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                  const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
             ),
           ),
           const SizedBox(height: 12),
@@ -144,7 +134,7 @@ class TimeWindowEditor extends StatelessWidget {
                   data.isNextDay = value;
                   onChanged(data);
                 },
-                activeColor: AppColors.primaryLemonDark,
+                activeThumbColor: AppColors.primaryLemonDark,
               ),
               const Text(
                 'Crosses midnight',
@@ -155,6 +145,21 @@ class TimeWindowEditor extends StatelessWidget {
               ),
             ],
           ),
+            ],
+          ),
+          // Delete button positioned at top right
+          if (onDelete != null)
+            Positioned(
+              top: 8,
+              right: 8,
+              child: IconButton(
+                onPressed: onDelete,
+                icon: const Icon(Icons.close, size: 20),
+                color: AppColors.textSecondary,
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(),
+              ),
+            ),
         ],
       ),
     );
@@ -192,15 +197,16 @@ class _TimePickerButton extends StatelessWidget {
             Text(
               label,
               style: const TextStyle(
-                fontSize: 13,
-                color: AppColors.textSecondary,
+                fontSize: 12,
+                color: AppColors.textLight,
+                fontWeight: FontWeight.w400,
               ),
             ),
             Text(
               timeStr,
               style: const TextStyle(
-                fontSize: 16,
-                fontWeight: FontWeight.w500,
+                fontSize: 14,
+                fontWeight: FontWeight.w400,
                 color: AppColors.textPrimary,
               ),
             ),
