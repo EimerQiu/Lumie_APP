@@ -23,11 +23,40 @@ class _SleepScreenState extends State<SleepScreen> {
   bool _isLoading = true;
   String? _errorMessage;
   String _syncMessage = 'Loading…';
+  bool _lastConnected = false;
+  RingProvider? _ringProvider;
 
   @override
   void initState() {
     super.initState();
     _loadSleepData();
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final ringProvider = Provider.of<RingProvider>(context, listen: false);
+    if (_ringProvider != ringProvider) {
+      _ringProvider?.removeListener(_onRingStateChanged);
+      _ringProvider = ringProvider;
+      _lastConnected = ringProvider.isConnected;
+      ringProvider.addListener(_onRingStateChanged);
+    }
+  }
+
+  void _onRingStateChanged() {
+    if (!mounted) return;
+    final connected = _ringProvider?.isConnected ?? false;
+    if (connected && !_lastConnected) {
+      _loadSleepData();
+    }
+    _lastConnected = connected;
+  }
+
+  @override
+  void dispose() {
+    _ringProvider?.removeListener(_onRingStateChanged);
+    super.dispose();
   }
 
   Future<void> _loadSleepData() async {
