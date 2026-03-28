@@ -116,6 +116,24 @@ After completing a feature or significant implementation work, **always** create
   - Future work / what's deferred
 - This is a **team-wide rule** — every developer must log their work so others can understand what was built and how
 
+## smart_ring_ble_lib (iOS / Xcode)
+
+The `smart_ring_ble_lib/` directory is a standalone Flutter app for communicating with the Lumie Ring over BLE.
+
+### Building for Xcode
+
+Run these two commands before opening Xcode:
+
+```bash
+cd smart_ring_ble_lib
+flutter pub get
+flutter build ios --config-only --debug
+```
+
+Then open `ios/Runner.xcworkspace` in Xcode (not `Runner.xcodeproj`).
+
+**Why the second step matters:** `flutter pub get` generates `flutter_export_environment.sh` without `DART_DEFINES`. Building directly from Xcode without it causes: `Improperly formatted define flag`. Re-run `flutter build ios --config-only --debug` after every `flutter pub get`.
+
 ## Docs to Read Before Working on a Feature
 - `docs/PRD.md` — full product requirements
 - `docs/TEAM_SYSTEM_DESIGN.md` — team system API + screen design

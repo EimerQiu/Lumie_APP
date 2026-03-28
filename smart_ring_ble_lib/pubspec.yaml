@@ -1,0 +1,23 @@
+name: smart_ring_ble_lib
+description: A Flutter BLE library to connect and communicate with smart ring devices
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_bluetooth_serial: ^0.4.0
+  flutter_blue_plus: ^1.14.8
+  permission_handler: ^11.0.1
+  cupertino_icons: ^1.0.2
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^3.0.0
+
+flutter:
+  uses-material-design: true
