@@ -6,6 +6,53 @@ import 'dart:math' as math;
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 
 // =============================
+// Time models (top-level)
+// =============================
+class RingTimeResult {
+  final DateTime ringTime;
+  final int weekday; // 1=Mon..7=Sun (unreliable per protocol)
+  final int maxMtu;
+
+  RingTimeResult({
+    required this.ringTime,
+    required this.weekday,
+    required this.maxMtu,
+  });
+
+  @override
+  String toString() {
+    final iso = ringTime.toIso8601String();
+    return 'RingTime: $iso (weekday=$weekday, MTU=$maxMtu)';
+  }
+}
+
+class SyncTimeResult {
+  final DateTime phoneSentAt;
+  final DateTime? ringReadback;
+  final int? maxMtu;
+
+  SyncTimeResult({
+    required this.phoneSentAt,
+    this.ringReadback,
+    this.maxMtu,
+  });
+
+  /// Difference in seconds between phone time sent and ring readback.
+  int? get driftSeconds {
+    if (ringReadback == null) return null;
+    return ringReadback!.difference(phoneSentAt).inSeconds;
+  }
+
+  @override
+  String toString() {
+    final sent = phoneSentAt.toIso8601String();
+    final rb = ringReadback?.toIso8601String() ?? 'N/A';
+    final drift = driftSeconds;
+    return 'SyncTime: sent=$sent readback=$rb drift=${drift != null ? "${drift}s" : "N/A"}';
+  }
+}
+
+// =============================
 // HRV model (top-level)
 // =============================
 class HrvRecord {
@@ -796,6 +843,998 @@ class BleService {
         hints.map((h) => h.trim()).where((h) => h.isNotEmpty).toList();
     _connectionStatusController
         .add('Fuzzy hints updated: ${_fuzzyNameHints.join(', ')}');
+  }
+
+  // =============================
+  // Structured Fetch Methods
+  // =============================
+
+  // ---------- Single-response commands ----------
+
+  /// Fetch battery status (0x13). Returns map with battery_level, charging, voltage.
+  Future<Map<String, dynamic>?> fetchBattery({Duration timeout = const Duration(seconds: 2)}) async {
+    Map<String, dynamic>? result;
+    late final StreamSubscription<String> sub;
+    final completer = Completer<Map<String, dynamic>?>();
+
+    sub = messageStream.listen((msg) {
+      final bytes = _extractHexBytes(msg);
+      if (bytes.isEmpty) return;
+      if (bytes.length >= 5 && bytes[0] == 0x13) {
+        final batteryLevel = bytes[1];
+        final charging = bytes[2] == 1;
+        final voltageHigh = _bcdToDecimal(bytes[3]) / 10.0;
+        final voltageLow = _bcdToDecimal(bytes[4]) / 10.0;
+        result = {
+          'battery_level': batteryLevel,
+          'charging': charging,
+          'voltage_high': voltageHigh,
+          'voltage_low': voltageLow,
+          'raw_byte3': bytes[3],
+          'raw_byte4': bytes[4],
+        };
+      } else if (bytes.length >= 1 && bytes[0] == 0x93) {
+        result = null;
+      }
+    }, onError: (_) {}, onDone: () {
+      if (!completer.isCompleted) completer.complete(result);
+    });
+
+    final t = Timer(timeout, () async {
+      await sub.cancel();
+      if (!completer.isCompleted) completer.complete(result);
+    });
+
+    try {
+      await sendGetBatteryCommand();
+    } catch (e) {
+      t.cancel();
+      await sub.cancel();
+      rethrow;
+    }
+
+    final res = await completer.future;
+    t.cancel();
+    await sub.cancel();
+    return res;
+  }
+
+  /// Fetch MAC address (0x22). Returns map with mac_address string.
+  Future<Map<String, dynamic>?> fetchMacAddress({Duration timeout = const Duration(seconds: 2)}) async {
+    Map<String, dynamic>? result;
+    late final StreamSubscription<String> sub;
+    final completer = Completer<Map<String, dynamic>?>();
+
+    sub = messageStream.listen((msg) {
+      final bytes = _extractHexBytes(msg);
+      if (bytes.isEmpty) return;
+      if (bytes.length >= 7 && bytes[0] == 0x22) {
+        final mac = bytes.sublist(1, 7)
+            .map((b) => b.toRadixString(16).padLeft(2, '0').toUpperCase())
+            .join(':');
+        result = {'mac': mac};
+      } else if (bytes.length >= 1 && bytes[0] == 0xA2) {
+        result = null;
+      }
+    }, onError: (_) {}, onDone: () {
+      if (!completer.isCompleted) completer.complete(result);
+    });
+
+    final t = Timer(timeout, () async {
+      await sub.cancel();
+      if (!completer.isCompleted) completer.complete(result);
+    });
+
+    try {
+      await sendGetMacAddressCommand();
+    } catch (e) {
+      t.cancel();
+      await sub.cancel();
+      rethrow;
+    }
+
+    final res = await completer.future;
+    t.cancel();
+    await sub.cancel();
+    return res;
+  }
+
+  /// Fetch firmware version (0x27). Returns map with version and build_date.
+  Future<Map<String, dynamic>?> fetchFirmwareVersion({Duration timeout = const Duration(seconds: 2)}) async {
+    Map<String, dynamic>? result;
+    late final StreamSubscription<String> sub;
+    final completer = Completer<Map<String, dynamic>?>();
+
+    sub = messageStream.listen((msg) {
+      final bytes = _extractHexBytes(msg);
+      if (bytes.isEmpty) return;
+      if (bytes.length >= 8 && bytes[0] == 0x27) {
+        final a = _bcdToDecimal(bytes[1]);
+        final b = _bcdToDecimal(bytes[2]);
+        final c = _bcdToDecimal(bytes[3]);
+        final d = _bcdToDecimal(bytes[4]);
+        final yy = _bcdToDecimal(bytes[5]);
+        final mm = _bcdToDecimal(bytes[6]);
+        final dd = _bcdToDecimal(bytes[7]);
+        result = {
+          'version': '$a.$b.$c.$d',
+          'build_date': '20${yy.toString().padLeft(2, '0')}-${mm.toString().padLeft(2, '0')}-${dd.toString().padLeft(2, '0')}',
+        };
+      } else if (bytes.length >= 1 && bytes[0] == 0xA7) {
+        result = null;
+      }
+    }, onError: (_) {}, onDone: () {
+      if (!completer.isCompleted) completer.complete(result);
+    });
+
+    final t = Timer(timeout, () async {
+      await sub.cancel();
+      if (!completer.isCompleted) completer.complete(result);
+    });
+
+    try {
+      await sendGetFirmwareVersionCommand();
+    } catch (e) {
+      t.cancel();
+      await sub.cancel();
+      rethrow;
+    }
+
+    final res = await completer.future;
+    t.cancel();
+    await sub.cancel();
+    return res;
+  }
+
+  /// Fetch measurement interval (0x2B). Returns map with measurement_type, working_mode, schedule, interval, weekday_bits.
+  Future<Map<String, dynamic>?> fetchMeasurementInterval(int measurementType, {Duration timeout = const Duration(seconds: 2)}) async {
+    Map<String, dynamic>? result;
+    late final StreamSubscription<String> sub;
+    final completer = Completer<Map<String, dynamic>?>();
+
+    sub = messageStream.listen((msg) {
+      final bytes = _extractHexBytes(msg);
+      if (bytes.isEmpty) return;
+      if (bytes.length >= 10 && bytes[0] == 0x2B) {
+        final mType = bytes[1];
+        final workingMode = bytes[2]; // 0=Off, 2=Interval
+        final String modeStr = workingMode == 0 ? 'off' : (workingMode == 2 ? 'interval' : 'unknown($workingMode)');
+        int startHour, startMin, endHour, endMin, interval;
+        if (bytes[6] == 0xFF) {
+          // FF-variant
+          startHour = _bcdToDecimal(bytes[3]);
+          startMin = 0;
+          endHour = _bcdToDecimal(bytes[4]);
+          endMin = _bcdToDecimal(bytes[5]);
+          interval = bytes[8];
+        } else {
+          // Standard
+          startHour = _bcdToDecimal(bytes[3]);
+          startMin = _bcdToDecimal(bytes[4]);
+          endHour = _bcdToDecimal(bytes[5]);
+          endMin = _bcdToDecimal(bytes[6]);
+          interval = bytes[8] | (bytes[9] << 8);
+        }
+        final weekdayBits = bytes[7];
+        result = {
+          'measurement_type': mType,
+          'working_mode': modeStr,
+          'start_hour': startHour,
+          'start_min': startMin,
+          'end_hour': endHour,
+          'end_min': endMin,
+          'interval_minutes': interval,
+          'weekday_bits': weekdayBits,
+        };
+      } else if (bytes.length >= 1 && bytes[0] == 0xAB) {
+        result = null;
+      }
+    }, onError: (_) {}, onDone: () {
+      if (!completer.isCompleted) completer.complete(result);
+    });
+
+    final t = Timer(timeout, () async {
+      await sub.cancel();
+      if (!completer.isCompleted) completer.complete(result);
+    });
+
+    try {
+      await sendGetMeasurementIntervalCommand(measurementType);
+    } catch (e) {
+      t.cancel();
+      await sub.cancel();
+      rethrow;
+    }
+
+    final res = await completer.future;
+    t.cancel();
+    await sub.cancel();
+    return res;
+  }
+
+  /// Fetch exercise status (0x19). Returns map with status, is_active, timestamp.
+  Future<Map<String, dynamic>?> fetchExerciseStatus({Duration timeout = const Duration(seconds: 2)}) async {
+    Map<String, dynamic>? result;
+    late final StreamSubscription<String> sub;
+    final completer = Completer<Map<String, dynamic>?>();
+
+    sub = messageStream.listen((msg) {
+      final bytes = _extractHexBytes(msg);
+      if (bytes.isEmpty) return;
+      if (bytes.length >= 9 && bytes[0] == 0x19) {
+        final status = bytes[1];
+        final isActive = status == 0x01;
+        final hasTimestamp = (bytes[3] | bytes[4] | bytes[5] | bytes[6] | bytes[7] | bytes[8]) != 0;
+        String? timestamp;
+        if (hasTimestamp) {
+          final year = 2000 + _bcdToDecimal(bytes[3]);
+          final month = _bcdToDecimal(bytes[4]);
+          final day = _bcdToDecimal(bytes[5]);
+          final hour = _bcdToDecimal(bytes[6]);
+          final minute = _bcdToDecimal(bytes[7]);
+          final second = _bcdToDecimal(bytes[8]);
+          timestamp = '$year-${month.toString().padLeft(2, '0')}-${day.toString().padLeft(2, '0')} ${hour.toString().padLeft(2, '0')}:${minute.toString().padLeft(2, '0')}:${second.toString().padLeft(2, '0')}';
+        }
+        result = {
+          'status': status,
+          'is_active': isActive,
+          'has_timestamp': hasTimestamp,
+          'timestamp': timestamp,
+        };
+      } else if (bytes.length >= 1 && bytes[0] == 0xA6) {
+        result = null;
+      }
+    }, onError: (_) {}, onDone: () {
+      if (!completer.isCompleted) completer.complete(result);
+    });
+
+    final t = Timer(timeout, () async {
+      await sub.cancel();
+      if (!completer.isCompleted) completer.complete(result);
+    });
+
+    try {
+      await sendGetExerciseDataCommand();
+    } catch (e) {
+      t.cancel();
+      await sub.cancel();
+      rethrow;
+    }
+
+    final res = await completer.future;
+    t.cancel();
+    await sub.cancel();
+    return res;
+  }
+
+  /// Fetch user info (0x42). Returns map with gender, age, height_cm, weight_kg, step_len_cm, ring_id.
+  Future<Map<String, dynamic>?> fetchUserInfo({Duration timeout = const Duration(seconds: 2)}) async {
+    Map<String, dynamic>? result;
+    late final StreamSubscription<String> sub;
+    final completer = Completer<Map<String, dynamic>?>();
+
+    sub = messageStream.listen((msg) {
+      final bytes = _extractHexBytes(msg);
+      if (bytes.isEmpty) return;
+      if (bytes.length >= 12 && bytes[0] == 0x42) {
+        final genderRaw = bytes[1];
+        final gender = genderRaw == 0 ? 'female' : 'male';
+        final age = bytes[2];
+        final heightCm = bytes[3];
+        final weightKg = bytes[4];
+        final stepLenCm = bytes[5];
+        // Sanitize ring ID: keep printable ASCII (0x20..0x7E), replace others with '?'
+        final idSlice = bytes.sublist(6, math.min(12, bytes.length));
+        final chars = idSlice.map((b) => (b >= 0x20 && b <= 0x7E) ? b : 0x3F).toList();
+        final ringId = String.fromCharCodes(chars).trim();
+        result = {
+          'gender': genderRaw,
+          'gender_name': gender,
+          'age': age,
+          'height_cm': heightCm,
+          'weight_kg': weightKg,
+          'step_len_cm': stepLenCm,
+          'ring_id': ringId,
+        };
+      } else if (bytes.length >= 1 && bytes[0] == 0xC2) {
+        result = null;
+      }
+    }, onError: (_) {}, onDone: () {
+      if (!completer.isCompleted) completer.complete(result);
+    });
+
+    final t = Timer(timeout, () async {
+      await sub.cancel();
+      if (!completer.isCompleted) completer.complete(result);
+    });
+
+    try {
+      await sendGetUserInfoCommand();
+    } catch (e) {
+      t.cancel();
+      await sub.cancel();
+      rethrow;
+    }
+
+    final res = await completer.future;
+    t.cancel();
+    await sub.cancel();
+    return res;
+  }
+
+  /// Fetch ring temperature (0x14). Returns map with highest_temp, decimal_temp, ntc1, ntc2, ntc3.
+  Future<Map<String, dynamic>?> fetchRingTemperature({Duration timeout = const Duration(seconds: 2)}) async {
+    Map<String, dynamic>? result;
+    late final StreamSubscription<String> sub;
+    final completer = Completer<Map<String, dynamic>?>();
+
+    sub = messageStream.listen((msg) {
+      final bytes = _extractHexBytes(msg);
+      if (bytes.isEmpty) return;
+      if (bytes.length >= 11 && bytes[0] == 0x14) {
+        final highestTemp = ((bytes[2] << 8) | bytes[1]) / 10.0;
+        final cc = _bcdToDecimal(bytes[3]);
+        final dd = _bcdToDecimal(bytes[4]);
+        final decimalTemp = (cc * 100 + dd) / 10.0;
+        final ntc1 = ((bytes[6] << 8) | bytes[5]) / 10.0;
+        final ntc2 = ((bytes[8] << 8) | bytes[7]) / 10.0;
+        final ntc3 = ((bytes[10] << 8) | bytes[9]) / 10.0;
+        result = {
+          'highest_temp': highestTemp,
+          'decimal_temp': decimalTemp,
+          'ntc1': ntc1,
+          'ntc2': ntc2,
+          'ntc3': ntc3,
+        };
+      }
+    }, onError: (_) {}, onDone: () {
+      if (!completer.isCompleted) completer.complete(result);
+    });
+
+    final t = Timer(timeout, () async {
+      await sub.cancel();
+      if (!completer.isCompleted) completer.complete(result);
+    });
+
+    try {
+      await sendGetRingTemperatureCommand();
+    } catch (e) {
+      t.cancel();
+      await sub.cancel();
+      rethrow;
+    }
+
+    final res = await completer.future;
+    t.cancel();
+    await sub.cancel();
+    return res;
+  }
+
+  // ---------- Multi-record commands ----------
+
+  /// Fetch total step counts (0x51). 27-byte records, end marker 0x51 0xFF.
+  Future<List<Map<String, dynamic>>> fetchTotalSteps({Duration timeout = const Duration(seconds: 4)}) async {
+    final List<Map<String, dynamic>> out = [];
+    late final StreamSubscription<String> sub;
+    final completer = Completer<List<Map<String, dynamic>>>();
+    Timer? t;
+
+    void finish() {
+      if (!completer.isCompleted) completer.complete(List.unmodifiable(out));
+    }
+
+    sub = messageStream.listen((msg) {
+      final bytes = _extractHexBytes(msg);
+      if (bytes.isEmpty) return;
+      int i = 0;
+      while (i + 27 <= bytes.length) {
+        if (bytes[i] == 0x51) {
+          if (bytes[i + 1] == 0xFF) { i += 2; continue; } // end marker
+          final year = 2000 + _bcdToDecimal(bytes[i + 2]);
+          final month = _bcdToDecimal(bytes[i + 3]);
+          final day = _bcdToDecimal(bytes[i + 4]);
+          final steps = (bytes[i + 8] << 24) | (bytes[i + 7] << 16) | (bytes[i + 6] << 8) | bytes[i + 5];
+          final exerciseTime = (bytes[i + 12] << 24) | (bytes[i + 11] << 16) | (bytes[i + 10] << 8) | bytes[i + 9];
+          final distance = (bytes[i + 16] << 24) | (bytes[i + 15] << 16) | (bytes[i + 14] << 8) | bytes[i + 13];
+          final calories = (bytes[i + 20] << 24) | (bytes[i + 19] << 16) | (bytes[i + 18] << 8) | bytes[i + 17];
+          out.add({
+            'date': '$year-${month.toString().padLeft(2, '0')}-${day.toString().padLeft(2, '0')}',
+            'steps': steps,
+            'exercise_time_seconds': exerciseTime,
+            'distance_km': distance / 100.0,
+            'calories_kcal': calories / 100.0,
+          });
+          i += 27;
+        } else {
+          i++;
+        }
+      }
+    }, onError: (_) {}, onDone: finish);
+
+    t = Timer(timeout, () async {
+      await sub.cancel();
+      finish();
+    });
+
+    try {
+      await sendGetTotalStepCountCommand();
+    } catch (e) {
+      t?.cancel();
+      await sub.cancel();
+      rethrow;
+    }
+
+    final results = await completer.future;
+    t?.cancel();
+    await sub.cancel();
+    return results;
+  }
+
+  /// Fetch detailed step counts (0x52). 25-byte records, end marker 0x52 0xFF.
+  Future<List<Map<String, dynamic>>> fetchDetailedSteps({Duration timeout = const Duration(seconds: 4)}) async {
+    final List<Map<String, dynamic>> out = [];
+    late final StreamSubscription<String> sub;
+    final completer = Completer<List<Map<String, dynamic>>>();
+    Timer? t;
+
+    void finish() {
+      if (!completer.isCompleted) completer.complete(List.unmodifiable(out));
+    }
+
+    sub = messageStream.listen((msg) {
+      final bytes = _extractHexBytes(msg);
+      if (bytes.isEmpty) return;
+      int i = 0;
+      while (i + 25 <= bytes.length) {
+        if (bytes[i] == 0x52) {
+          if (bytes[i + 1] == 0xFF) { i += 2; continue; } // end marker
+          final year = 2000 + _bcdToDecimal(bytes[i + 3]);
+          final month = _bcdToDecimal(bytes[i + 4]);
+          final day = _bcdToDecimal(bytes[i + 5]);
+          final hour = _bcdToDecimal(bytes[i + 6]);
+          final minute = _bcdToDecimal(bytes[i + 7]);
+          final second = _bcdToDecimal(bytes[i + 8]);
+          final totalSteps = (bytes[i + 10] << 8) | bytes[i + 9];
+          final calories = (bytes[i + 12] << 8) | bytes[i + 11];
+          final distance = (bytes[i + 14] << 8) | bytes[i + 13];
+          final perMinute = bytes.sublist(i + 15, i + 25);
+          out.add({
+            'timestamp': '$year-${month.toString().padLeft(2, '0')}-${day.toString().padLeft(2, '0')} ${hour.toString().padLeft(2, '0')}:${minute.toString().padLeft(2, '0')}:${second.toString().padLeft(2, '0')}',
+            'steps': totalSteps,
+            'calories': calories / 100.0,
+            'distance': distance / 100.0,
+            'per_minute': List<int>.from(perMinute),
+          });
+          i += 25;
+        } else {
+          i++;
+        }
+      }
+    }, onError: (_) {}, onDone: finish);
+
+    t = Timer(timeout, () async {
+      await sub.cancel();
+      finish();
+    });
+
+    try {
+      await sendGetDetailedStepCountCommand();
+    } catch (e) {
+      t?.cancel();
+      await sub.cancel();
+      rethrow;
+    }
+
+    final results = await completer.future;
+    t?.cancel();
+    await sub.cancel();
+    return results;
+  }
+
+  /// Fetch detailed heart rate (0x54). 24-byte records, end marker 0x54 0xFF.
+  Future<List<Map<String, dynamic>>> fetchDetailedHeartRate({Duration timeout = const Duration(seconds: 4)}) async {
+    final List<Map<String, dynamic>> out = [];
+    late final StreamSubscription<String> sub;
+    final completer = Completer<List<Map<String, dynamic>>>();
+    Timer? t;
+
+    void finish() {
+      if (!completer.isCompleted) completer.complete(List.unmodifiable(out));
+    }
+
+    sub = messageStream.listen((msg) {
+      final bytes = _extractHexBytes(msg);
+      if (bytes.isEmpty) return;
+      int i = 0;
+      while (i + 24 <= bytes.length) {
+        if (bytes[i] == 0x54) {
+          if (bytes[i + 1] == 0xFF) { i += 2; continue; } // end marker
+          final year = 2000 + _bcdToDecimal(bytes[i + 3]);
+          final month = _bcdToDecimal(bytes[i + 4]);
+          final day = _bcdToDecimal(bytes[i + 5]);
+          final hour = _bcdToDecimal(bytes[i + 6]);
+          final minute = _bcdToDecimal(bytes[i + 7]);
+          final second = _bcdToDecimal(bytes[i + 8]);
+          final heartRates = <int>[];
+          for (int j = 9; j < 24; j++) {
+            heartRates.add(bytes[i + j]);
+          }
+          out.add({
+            'timestamp': '$year-${month.toString().padLeft(2, '0')}-${day.toString().padLeft(2, '0')} ${hour.toString().padLeft(2, '0')}:${minute.toString().padLeft(2, '0')}:${second.toString().padLeft(2, '0')}',
+            'heart_rates': heartRates,
+          });
+          i += 24;
+        } else {
+          i++;
+        }
+      }
+    }, onError: (_) {}, onDone: finish);
+
+    t = Timer(timeout, () async {
+      await sub.cancel();
+      finish();
+    });
+
+    try {
+      await sendGetDetailedHeartRateCommand();
+    } catch (e) {
+      t?.cancel();
+      await sub.cancel();
+      rethrow;
+    }
+
+    final results = await completer.future;
+    t?.cancel();
+    await sub.cancel();
+    return results;
+  }
+
+  /// Fetch heart rate history (0x55). 10-byte records, end marker 0x55 0xFF.
+  Future<List<Map<String, dynamic>>> fetchHeartRateHistory({Duration timeout = const Duration(seconds: 4)}) async {
+    final List<Map<String, dynamic>> out = [];
+    late final StreamSubscription<String> sub;
+    final completer = Completer<List<Map<String, dynamic>>>();
+    Timer? t;
+
+    void finish() {
+      if (!completer.isCompleted) completer.complete(List.unmodifiable(out));
+    }
+
+    sub = messageStream.listen((msg) {
+      final bytes = _extractHexBytes(msg);
+      if (bytes.isEmpty) return;
+      int i = 0;
+      while (i + 10 <= bytes.length) {
+        if (bytes[i] == 0x55) {
+          if (bytes[i + 1] == 0xFF) { i += 2; continue; } // end marker
+          final year = 2000 + _bcdToDecimal(bytes[i + 3]);
+          final month = _bcdToDecimal(bytes[i + 4]);
+          final day = _bcdToDecimal(bytes[i + 5]);
+          final hour = _bcdToDecimal(bytes[i + 6]);
+          final minute = _bcdToDecimal(bytes[i + 7]);
+          final second = _bcdToDecimal(bytes[i + 8]);
+          final heartRate = bytes[i + 9];
+          out.add({
+            'timestamp': '$year-${month.toString().padLeft(2, '0')}-${day.toString().padLeft(2, '0')} ${hour.toString().padLeft(2, '0')}:${minute.toString().padLeft(2, '0')}:${second.toString().padLeft(2, '0')}',
+            'heart_rate': heartRate,
+          });
+          i += 10;
+        } else {
+          i++;
+        }
+      }
+    }, onError: (_) {}, onDone: finish);
+
+    t = Timer(timeout, () async {
+      await sub.cancel();
+      finish();
+    });
+
+    try {
+      await sendGetHeartRateHistoryCommand();
+    } catch (e) {
+      t?.cancel();
+      await sub.cancel();
+      rethrow;
+    }
+
+    final results = await completer.future;
+    t?.cancel();
+    await sub.cancel();
+    return results;
+  }
+
+  /// Fetch temperature data (0x62). 15-byte records, end marker 0x62 0xFF.
+  Future<List<Map<String, dynamic>>> fetchTemperatureData({Duration timeout = const Duration(seconds: 4)}) async {
+    final List<Map<String, dynamic>> out = [];
+    late final StreamSubscription<String> sub;
+    final completer = Completer<List<Map<String, dynamic>>>();
+    Timer? t;
+
+    void finish() {
+      if (!completer.isCompleted) completer.complete(List.unmodifiable(out));
+    }
+
+    sub = messageStream.listen((msg) {
+      final bytes = _extractHexBytes(msg);
+      if (bytes.isEmpty) return;
+      int i = 0;
+      while (i + 15 <= bytes.length) {
+        if (bytes[i] == 0x62) {
+          if (bytes[i + 1] == 0xFF) { i += 2; continue; } // end marker
+          final year = 2000 + _bcdToDecimal(bytes[i + 3]);
+          final month = _bcdToDecimal(bytes[i + 4]);
+          final day = _bcdToDecimal(bytes[i + 5]);
+          final hour = _bcdToDecimal(bytes[i + 6]);
+          final minute = _bcdToDecimal(bytes[i + 7]);
+          final second = _bcdToDecimal(bytes[i + 8]);
+          // Temperature values in little-endian format (divide by 10 for C)
+          final temperatures = <double>[];
+          for (int j = 9; j < 15 && (i + j + 1) < bytes.length; j += 2) {
+            int tempRaw = (bytes[i + j + 1] << 8) | bytes[i + j];
+            temperatures.add(tempRaw / 10.0);
+          }
+          out.add({
+            'timestamp': '$year-${month.toString().padLeft(2, '0')}-${day.toString().padLeft(2, '0')} ${hour.toString().padLeft(2, '0')}:${minute.toString().padLeft(2, '0')}:${second.toString().padLeft(2, '0')}',
+            'temperatures': temperatures,
+          });
+          i += 15;
+        } else {
+          i++;
+        }
+      }
+    }, onError: (_) {}, onDone: finish);
+
+    t = Timer(timeout, () async {
+      await sub.cancel();
+      finish();
+    });
+
+    try {
+      await sendGetTemperatureDataCommand();
+    } catch (e) {
+      t?.cancel();
+      await sub.cancel();
+      rethrow;
+    }
+
+    final results = await completer.future;
+    t?.cancel();
+    await sub.cancel();
+    return results;
+  }
+
+  /// Fetch blood oxygen data (0x66). 10-byte records, end marker 0x66 0xFF.
+  Future<List<Map<String, dynamic>>> fetchBloodOxygenData({Duration timeout = const Duration(seconds: 4)}) async {
+    final List<Map<String, dynamic>> out = [];
+    late final StreamSubscription<String> sub;
+    final completer = Completer<List<Map<String, dynamic>>>();
+    Timer? t;
+
+    void finish() {
+      if (!completer.isCompleted) completer.complete(List.unmodifiable(out));
+    }
+
+    sub = messageStream.listen((msg) {
+      final bytes = _extractHexBytes(msg);
+      if (bytes.isEmpty) return;
+      int i = 0;
+      while (i + 10 <= bytes.length) {
+        if (bytes[i] == 0x66) {
+          if (bytes[i + 1] == 0xFF) { i += 2; continue; } // end marker
+          final year = 2000 + _bcdToDecimal(bytes[i + 3]);
+          final month = _bcdToDecimal(bytes[i + 4]);
+          final day = _bcdToDecimal(bytes[i + 5]);
+          final hour = _bcdToDecimal(bytes[i + 6]);
+          final minute = _bcdToDecimal(bytes[i + 7]);
+          final second = _bcdToDecimal(bytes[i + 8]);
+          final spo2 = bytes[i + 9];
+          out.add({
+            'timestamp': '$year-${month.toString().padLeft(2, '0')}-${day.toString().padLeft(2, '0')} ${hour.toString().padLeft(2, '0')}:${minute.toString().padLeft(2, '0')}:${second.toString().padLeft(2, '0')}',
+            'spo2': spo2,
+          });
+          i += 10;
+        } else {
+          i++;
+        }
+      }
+    }, onError: (_) {}, onDone: finish);
+
+    t = Timer(timeout, () async {
+      await sub.cancel();
+      finish();
+    });
+
+    try {
+      await sendGetBloodOxygenDataCommand();
+    } catch (e) {
+      t?.cancel();
+      await sub.cancel();
+      rethrow;
+    }
+
+    final results = await completer.future;
+    t?.cancel();
+    await sub.cancel();
+    return results;
+  }
+
+  static const List<String> _exerciseTypeNames = [
+    'Running', 'Walking', 'Cycling', 'Hiking', 'Yoga',
+    'Basketball', 'Football', 'Badminton', 'Table Tennis',
+    'Rope Skipping', 'Sit-ups', 'Push-ups', 'Swimming',
+  ];
+
+  /// Fetch exercise mode history (0x5C) — latest. 27-byte records with per-record CRC, end marker 0x5C 0xFF.
+  Future<List<Map<String, dynamic>>> fetchExerciseLatest({Duration timeout = const Duration(seconds: 4)}) async {
+    final List<Map<String, dynamic>> out = [];
+    late final StreamSubscription<String> sub;
+    final completer = Completer<List<Map<String, dynamic>>>();
+    Timer? t;
+
+    void finish() {
+      if (!completer.isCompleted) completer.complete(List.unmodifiable(out));
+    }
+
+    sub = messageStream.listen((msg) {
+      final bytes = _extractHexBytes(msg);
+      if (bytes.isEmpty) return;
+      int i = 0;
+      while (i + 27 <= bytes.length) {
+        if (bytes[i] == 0x5C) {
+          if (bytes[i + 1] == 0xFF) { i += 2; continue; } // end marker
+          // CRC validation: sum of bytes[0..25] & 0xFF == bytes[26]
+          int crcCalc = 0;
+          for (int j = 0; j < 26; j++) {
+            crcCalc = (crcCalc + bytes[i + j]) & 0xFF;
+          }
+          if (crcCalc != bytes[i + 26]) {
+            i += 27; // skip invalid record
+            continue;
+          }
+          final year = 2000 + _bcdToDecimal(bytes[i + 3]);
+          final month = _bcdToDecimal(bytes[i + 4]);
+          final day = _bcdToDecimal(bytes[i + 5]);
+          final hour = _bcdToDecimal(bytes[i + 6]);
+          final minute = _bcdToDecimal(bytes[i + 7]);
+          final second = _bcdToDecimal(bytes[i + 8]);
+          final exerciseType = bytes[i + 9];
+          final heartRate = bytes[i + 10];
+          final duration = (bytes[i + 12] << 8) | bytes[i + 11];
+          final steps = (bytes[i + 14] << 8) | bytes[i + 13];
+          final paceMin = _bcdToDecimal(bytes[i + 15]);
+          final paceSec = _bcdToDecimal(bytes[i + 16]);
+          final calories = _toFloat32Le(bytes[i + 17], bytes[i + 18], bytes[i + 19], bytes[i + 20]);
+          final distance = _toFloat32Le(bytes[i + 21], bytes[i + 22], bytes[i + 23], bytes[i + 24]);
+          final typeName = exerciseType < _exerciseTypeNames.length ? _exerciseTypeNames[exerciseType] : 'Unknown($exerciseType)';
+          out.add({
+            'timestamp': '$year-${month.toString().padLeft(2, '0')}-${day.toString().padLeft(2, '0')} ${hour.toString().padLeft(2, '0')}:${minute.toString().padLeft(2, '0')}:${second.toString().padLeft(2, '0')}',
+            'exercise_type': exerciseType,
+            'exercise_type_name': typeName,
+            'heart_rate': heartRate,
+            'duration_seconds': duration,
+            'steps': steps,
+            'pace': '${paceMin.toString().padLeft(2, '0')}:${paceSec.toString().padLeft(2, '0')}',
+            'calories': calories,
+            'distance': distance,
+          });
+          i += 27;
+        } else {
+          i++;
+        }
+      }
+    }, onError: (_) {}, onDone: finish);
+
+    t = Timer(timeout, () async {
+      await sub.cancel();
+      finish();
+    });
+
+    try {
+      await sendGetExerciseModeDataLatest();
+    } catch (e) {
+      t?.cancel();
+      await sub.cancel();
+      rethrow;
+    }
+
+    final results = await completer.future;
+    t?.cancel();
+    await sub.cancel();
+    return results;
+  }
+
+  /// Fetch exercise mode history (0x5C) — continue reading next segment.
+  Future<List<Map<String, dynamic>>> fetchExerciseContinue({Duration timeout = const Duration(seconds: 4)}) async {
+    final List<Map<String, dynamic>> out = [];
+    late final StreamSubscription<String> sub;
+    final completer = Completer<List<Map<String, dynamic>>>();
+    Timer? t;
+
+    void finish() {
+      if (!completer.isCompleted) completer.complete(List.unmodifiable(out));
+    }
+
+    sub = messageStream.listen((msg) {
+      final bytes = _extractHexBytes(msg);
+      if (bytes.isEmpty) return;
+      int i = 0;
+      while (i + 27 <= bytes.length) {
+        if (bytes[i] == 0x5C) {
+          if (bytes[i + 1] == 0xFF) { i += 2; continue; } // end marker
+          int crcCalc = 0;
+          for (int j = 0; j < 26; j++) {
+            crcCalc = (crcCalc + bytes[i + j]) & 0xFF;
+          }
+          if (crcCalc != bytes[i + 26]) {
+            i += 27;
+            continue;
+          }
+          final year = 2000 + _bcdToDecimal(bytes[i + 3]);
+          final month = _bcdToDecimal(bytes[i + 4]);
+          final day = _bcdToDecimal(bytes[i + 5]);
+          final hour = _bcdToDecimal(bytes[i + 6]);
+          final minute = _bcdToDecimal(bytes[i + 7]);
+          final second = _bcdToDecimal(bytes[i + 8]);
+          final exerciseType = bytes[i + 9];
+          final heartRate = bytes[i + 10];
+          final duration = (bytes[i + 12] << 8) | bytes[i + 11];
+          final steps = (bytes[i + 14] << 8) | bytes[i + 13];
+          final paceMin = _bcdToDecimal(bytes[i + 15]);
+          final paceSec = _bcdToDecimal(bytes[i + 16]);
+          final calories = _toFloat32Le(bytes[i + 17], bytes[i + 18], bytes[i + 19], bytes[i + 20]);
+          final distance = _toFloat32Le(bytes[i + 21], bytes[i + 22], bytes[i + 23], bytes[i + 24]);
+          final typeName = exerciseType < _exerciseTypeNames.length ? _exerciseTypeNames[exerciseType] : 'Unknown($exerciseType)';
+          out.add({
+            'timestamp': '$year-${month.toString().padLeft(2, '0')}-${day.toString().padLeft(2, '0')} ${hour.toString().padLeft(2, '0')}:${minute.toString().padLeft(2, '0')}:${second.toString().padLeft(2, '0')}',
+            'exercise_type': exerciseType,
+            'exercise_type_name': typeName,
+            'heart_rate': heartRate,
+            'duration_seconds': duration,
+            'steps': steps,
+            'pace': '${paceMin.toString().padLeft(2, '0')}:${paceSec.toString().padLeft(2, '0')}',
+            'calories': calories,
+            'distance': distance,
+          });
+          i += 27;
+        } else {
+          i++;
+        }
+      }
+    }, onError: (_) {}, onDone: finish);
+
+    t = Timer(timeout, () async {
+      await sub.cancel();
+      finish();
+    });
+
+    try {
+      await sendGetExerciseModeDataContinue();
+    } catch (e) {
+      t?.cancel();
+      await sub.cancel();
+      rethrow;
+    }
+
+    final results = await completer.future;
+    t?.cancel();
+    await sub.cancel();
+    return results;
+  }
+
+  /// Delete exercise mode history (0x5C 0x99). Returns true on success, false on timeout.
+  Future<bool> deleteExerciseHistory({Duration timeout = const Duration(seconds: 2)}) async {
+    bool? success;
+    late final StreamSubscription<String> sub;
+    final completer = Completer<bool>();
+
+    sub = messageStream.listen((msg) {
+      final bytes = _extractHexBytes(msg);
+      if (bytes.isEmpty) return;
+      if (bytes.length >= 2 && bytes[0] == 0x5C) {
+        // Any response from 0x5C after delete command indicates acknowledgement
+        success = true;
+      }
+    }, onError: (_) {}, onDone: () {
+      if (!completer.isCompleted) completer.complete(success ?? false);
+    });
+
+    final t = Timer(timeout, () async {
+      await sub.cancel();
+      if (!completer.isCompleted) completer.complete(success ?? false);
+    });
+
+    try {
+      await sendDeleteExerciseModeDetails();
+    } catch (e) {
+      t.cancel();
+      await sub.cancel();
+      rethrow;
+    }
+
+    final res = await completer.future;
+    t.cancel();
+    await sub.cancel();
+    return res;
+  }
+
+  // =============================
+  // Time: Structured Request/Parse
+  // =============================
+
+  /// Send 0x41 (Get Time) and parse the ring's current time from the response.
+  /// Returns a [RingTimeResult] with the ring's clock, or null on timeout/failure.
+  Future<RingTimeResult?> fetchTime(
+      {Duration timeout = const Duration(seconds: 2)}) async {
+    RingTimeResult? result;
+
+    late final StreamSubscription<String> sub;
+    final completer = Completer<RingTimeResult?>();
+
+    sub = messageStream.listen((msg) {
+      final bytes = _extractHexBytes(msg);
+      if (bytes.isEmpty) return;
+      if (bytes.length >= 16 && bytes[0] == 0x41) {
+        final year = 2000 + _bcdToDecimal(bytes[1]);
+        final month = _bcdToDecimal(bytes[2]);
+        final day = _bcdToDecimal(bytes[3]);
+        final hour = _bcdToDecimal(bytes[4]);
+        final minute = _bcdToDecimal(bytes[5]);
+        final second = _bcdToDecimal(bytes[6]);
+        final weekday = bytes[7]; // 1=Mon..7=Sun (unreliable per protocol)
+        final maxMtu = bytes[8];
+        result = RingTimeResult(
+          ringTime: DateTime(year, month, day, hour, minute, second),
+          weekday: weekday,
+          maxMtu: maxMtu,
+        );
+      } else if (bytes.length >= 1 && bytes[0] == 0xC1) {
+        // Failure response
+        result = null;
+      }
+    }, onError: (_) {}, onDone: () {
+      if (!completer.isCompleted) completer.complete(result);
+    });
+
+    final t = Timer(timeout, () async {
+      await sub.cancel();
+      if (!completer.isCompleted) completer.complete(result);
+    });
+
+    try {
+      await sendGetTimeCommand();
+    } catch (e) {
+      t.cancel();
+      await sub.cancel();
+      rethrow;
+    }
+
+    final res = await completer.future;
+    t.cancel();
+    await sub.cancel();
+    return res;
+  }
+
+  /// Send 0x01 (Set Time) with the current phone time, then read back with 0x41
+  /// to verify. Returns a [SyncTimeResult] with both the sent and verified times.
+  Future<SyncTimeResult> syncTimeAndVerify(
+      {Duration timeout = const Duration(seconds: 3)}) async {
+    final phoneSentAt = DateTime.now();
+
+    // Send 0x01 to set time
+    await sendSetCurrentTimeCommand();
+
+    // Small delay for ring to process
+    await Future.delayed(const Duration(milliseconds: 500));
+
+    // Read back with 0x41
+    final readback = await fetchTime(timeout: timeout);
+
+    return SyncTimeResult(
+      phoneSentAt: phoneSentAt,
+      ringReadback: readback?.ringTime,
+      maxMtu: readback?.maxMtu,
+    );
   }
 
   // =============================

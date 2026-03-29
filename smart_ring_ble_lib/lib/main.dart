@@ -38,7 +38,7 @@ class _MyHomePageState extends State<MyHomePage> {
   final TextEditingController _deviceNameController = TextEditingController();
   final TextEditingController _macAddressController = TextEditingController();
   String _selectedDeviceName = 'X6B 27279';
-  static const List<String> _deviceNameOptions = ['X6B 27279', 'X6B 45CC8'];
+  static const List<String> _deviceNameOptions = ['X6B 27279', 'X6B 05997', 'X6B 45CC8'];
 
   String _connectionStatus = 'Disconnected';
   bool _isScanning = false;
@@ -210,45 +210,121 @@ class _MyHomePageState extends State<MyHomePage> {
 
   Future<void> _sendGetUserInfoCommand() async {
     try {
-      await _bleService.sendGetUserInfoCommand();
-      _addMessage(
-          '✅ Get User Info (0x42) command sent. sendGetUserInfoCommand()');
+      setState(() {
+        _structuredDataTitle = 'User Info (0x42)';
+        _structuredDataOutput = 'Fetching user info...';
+      });
+      final result = await _bleService.fetchUserInfo(timeout: const Duration(seconds: 2));
+      if (!mounted) return;
+      if (result == null) {
+        setState(() { _structuredDataOutput = 'No response or error (0xC2).'; });
+        _addMessage('❌ User info fetch failed or timed out.');
+        return;
+      }
+      final buf = StringBuffer();
+      buf.writeln('👤 Gender: ${result['gender_name']} (${result['gender']})');
+      buf.writeln('🎂 Age: ${result['age']}');
+      buf.writeln('📏 Height: ${result['height_cm']} cm');
+      buf.writeln('⚖️ Weight: ${result['weight_kg']} kg');
+      buf.writeln('👣 Step Length: ${result['step_len_cm']} cm');
+      buf.writeln('💍 Ring ID: ${result['ring_id']}');
+      setState(() { _structuredDataOutput = buf.toString(); });
+      _addMessage('✅ User Info: ${result['gender_name']}, age ${result['age']}, ${result['height_cm']}cm/${result['weight_kg']}kg');
     } catch (e) {
-      _addMessage(
-          '❌ Failed to send Get User Info (0x42): $e. sendGetUserInfoCommand()');
+      if (!mounted) return;
+      setState(() {
+        _structuredDataTitle = 'User Info (0x42)';
+        _structuredDataOutput = 'Error: $e';
+      });
+      _addMessage('❌ Failed to fetch user info: $e');
     }
   }
 
   Future<void> _sendGetExerciseModeDataLatest() async {
     try {
-      await _bleService.sendGetExerciseModeDataLatest();
-      _addMessage(
-          '✅ Exercise Latest (0x5C) command sent. sendGetExerciseModeDataLatest()');
+      setState(() {
+        _structuredDataTitle = 'Exercise Latest (0x5C)';
+        _structuredDataOutput = 'Fetching latest exercise data...';
+      });
+      final records = await _bleService.fetchExerciseLatest(timeout: const Duration(seconds: 4));
+      if (!mounted) return;
+      if (records.isEmpty) {
+        setState(() { _structuredDataOutput = 'No exercise records received.'; });
+        _addMessage('❌ No exercise data received.');
+        return;
+      }
+      final buf = StringBuffer();
+      buf.writeln('🏃 ${records.length} exercise record(s):');
+      buf.writeln('');
+      for (final r in records) {
+        buf.writeln('${r['timestamp']}: ${r['type_name']} - HR:${r['heart_rate']}bpm, ${r['duration_seconds']}s, ${r['steps']} steps, ${(r['distance_km'] as double).toStringAsFixed(2)}km, ${(r['calories'] as double).toStringAsFixed(1)}kcal');
+      }
+      setState(() { _structuredDataOutput = buf.toString(); });
+      _addMessage('✅ Exercise Latest: ${records.length} records');
     } catch (e) {
-      _addMessage(
-          '❌ Failed to send Exercise Latest (0x5C): $e. sendGetExerciseModeDataLatest()');
+      if (!mounted) return;
+      setState(() {
+        _structuredDataTitle = 'Exercise Latest (0x5C)';
+        _structuredDataOutput = 'Error: $e';
+      });
+      _addMessage('❌ Failed to fetch exercise latest: $e');
     }
   }
 
   Future<void> _sendGetExerciseModeDataContinue() async {
     try {
-      await _bleService.sendGetExerciseModeDataContinue();
-      _addMessage(
-          '✅ Exercise Continue (0x5C) command sent. sendGetExerciseModeDataContinue()');
+      setState(() {
+        _structuredDataTitle = 'Exercise Continue (0x5C)';
+        _structuredDataOutput = 'Fetching continued exercise data...';
+      });
+      final records = await _bleService.fetchExerciseContinue(timeout: const Duration(seconds: 4));
+      if (!mounted) return;
+      if (records.isEmpty) {
+        setState(() { _structuredDataOutput = 'No more exercise records.'; });
+        _addMessage('❌ No more exercise data received.');
+        return;
+      }
+      final buf = StringBuffer();
+      buf.writeln('🏃 ${records.length} exercise record(s):');
+      buf.writeln('');
+      for (final r in records) {
+        buf.writeln('${r['timestamp']}: ${r['type_name']} - HR:${r['heart_rate']}bpm, ${r['duration_seconds']}s, ${r['steps']} steps, ${(r['distance_km'] as double).toStringAsFixed(2)}km, ${(r['calories'] as double).toStringAsFixed(1)}kcal');
+      }
+      setState(() { _structuredDataOutput = buf.toString(); });
+      _addMessage('✅ Exercise Continue: ${records.length} records');
     } catch (e) {
-      _addMessage(
-          '❌ Failed to send Exercise Continue (0x5C): $e. sendGetExerciseModeDataContinue()');
+      if (!mounted) return;
+      setState(() {
+        _structuredDataTitle = 'Exercise Continue (0x5C)';
+        _structuredDataOutput = 'Error: $e';
+      });
+      _addMessage('❌ Failed to fetch exercise continue: $e');
     }
   }
 
   Future<void> _sendDeleteExerciseModeDetails() async {
     try {
-      await _bleService.sendDeleteExerciseModeDetails();
-      _addMessage(
-          '✅ Exercise Delete (0x5C) command sent. sendDeleteExerciseModeDetails()');
+      setState(() {
+        _structuredDataTitle = 'Exercise Delete (0x5C)';
+        _structuredDataOutput = 'Deleting exercise history...';
+      });
+      final success = await _bleService.deleteExerciseHistory(timeout: const Duration(seconds: 2));
+      if (!mounted) return;
+      final buf = StringBuffer();
+      if (success) {
+        buf.writeln('✅ Exercise history deleted successfully.');
+      } else {
+        buf.writeln('❌ Delete failed or no confirmation received.');
+      }
+      setState(() { _structuredDataOutput = buf.toString(); });
+      _addMessage(success ? '✅ Exercise history deleted.' : '❌ Exercise delete failed.');
     } catch (e) {
-      _addMessage(
-          '❌ Failed to send Exercise Delete (0x5C): $e. sendDeleteExerciseModeDetails()');
+      if (!mounted) return;
+      setState(() {
+        _structuredDataTitle = 'Exercise Delete (0x5C)';
+        _structuredDataOutput = 'Error: $e';
+      });
+      _addMessage('❌ Failed to delete exercise history: $e');
     }
   }
 
@@ -600,34 +676,52 @@ class _MyHomePageState extends State<MyHomePage> {
                         style: TextStyle(
                             fontSize: 16, fontWeight: FontWeight.bold)),
                     const SizedBox(height: 8),
-                    Row(
+                    Column(
                       children: [
-                        Expanded(
-                          child: DropdownButtonFormField<String>(
-                            initialValue: _selectedDeviceName,
-                            decoration:
-                                const InputDecoration(labelText: 'Device Name'),
-                            items: _deviceNameOptions
-                                .map((n) =>
-                                    DropdownMenuItem(value: n, child: Text(n)))
-                                .toList(),
-                            onChanged: (value) {
-                              if (value != null) {
-                                setState(() => _selectedDeviceName = value);
-                                _deviceNameController.text = value;
-                              }
-                            },
-                          ),
-                        ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: TextField(
-                            controller: _macAddressController,
-                            decoration: const InputDecoration(
-                              labelText:
-                                  'MAC Address (optional, e.g. F8:19:23:14:5C:C8)',
+                        Row(
+                          children: [
+                            Expanded(
+                              child: DropdownButtonFormField<String>(
+                                initialValue: _selectedDeviceName,
+                                decoration: const InputDecoration(
+                                    labelText: 'Preset Device Names'),
+                                items: _deviceNameOptions
+                                    .map((n) =>
+                                        DropdownMenuItem(
+                                            value: n, child: Text(n)))
+                                    .toList(),
+                                onChanged: (value) {
+                                  if (value != null) {
+                                    setState(() => _selectedDeviceName = value);
+                                    _deviceNameController.text = value;
+                                  }
+                                },
+                              ),
                             ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: TextField(
+                                controller: _macAddressController,
+                                decoration: const InputDecoration(
+                                  labelText:
+                                      'MAC Address (optional, e.g. F8:19:23:14:5C:C8)',
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 12),
+                        TextField(
+                          controller: _deviceNameController,
+                          decoration: const InputDecoration(
+                            labelText: 'Custom Device Name',
+                            hintText: 'Or enter custom name here',
                           ),
+                          onChanged: (value) {
+                            setState(() => _selectedDeviceName = value.isEmpty
+                                ? _deviceNameOptions[0]
+                                : value);
+                          },
                         ),
                       ],
                     ),
@@ -1185,60 +1279,172 @@ class _MyHomePageState extends State<MyHomePage> {
 
   Future<void> _sendGetTimeCommand() async {
     try {
-      await _bleService.sendGetTimeCommand();
-      _addMessage('✅ Get Time command sent. sendGetTimeCommand()');
+      setState(() {
+        _structuredDataTitle = 'Ring Time (0x41)';
+        _structuredDataOutput = 'Fetching ring time...';
+      });
+      final result =
+          await _bleService.fetchTime(timeout: const Duration(seconds: 2));
+      if (!mounted) return;
+      if (result == null) {
+        setState(() {
+          _structuredDataOutput = 'No time response received (timeout or failure 0xC1).';
+        });
+        _addMessage('❌ Get Time failed or timed out.');
+        return;
+      }
+      final phoneNow = DateTime.now();
+      final drift = result.ringTime.difference(phoneNow).inSeconds;
+      final buf = StringBuffer();
+      buf.writeln('🕐 Ring Time:  ${result.ringTime}');
+      buf.writeln('📱 Phone Time: $phoneNow');
+      buf.writeln('⏱️  Drift:      ${drift}s (ring − phone)');
+      buf.writeln('');
+      buf.writeln('Weekday: ${result.weekday} (1=Mon..7=Sun, may be unreliable)');
+      buf.writeln('Max MTU: ${result.maxMtu}');
+      setState(() {
+        _structuredDataOutput = buf.toString();
+      });
+      _addMessage('✅ Ring Time fetched: ${result.ringTime} (drift: ${drift}s)');
     } catch (e) {
-      _addMessage(
-          '❌ Failed to send Get Time command: $e. sendGetTimeCommand()');
+      if (!mounted) return;
+      setState(() {
+        _structuredDataTitle = 'Ring Time (0x41)';
+        _structuredDataOutput = 'Error fetching time: $e';
+      });
+      _addMessage('❌ Failed to fetch Ring Time: $e');
     }
   }
 
   Future<void> _sendSetCurrentTimeCommand() async {
     try {
-      final now = DateTime.now();
-      await _bleService.sendSetCurrentTimeCommand();
+      setState(() {
+        _structuredDataTitle = 'Sync Time (0x01 → 0x41)';
+        _structuredDataOutput = 'Syncing phone time to ring...';
+      });
+      final result =
+          await _bleService.syncTimeAndVerify(timeout: const Duration(seconds: 3));
+      if (!mounted) return;
+      final buf = StringBuffer();
+      buf.writeln('📱 Phone Time Sent: ${result.phoneSentAt}');
+      if (result.ringReadback != null) {
+        buf.writeln('🕐 Ring Readback:   ${result.ringReadback}');
+        buf.writeln('⏱️  Drift:           ${result.driftSeconds}s (ring − phone)');
+        if (result.driftSeconds!.abs() <= 1) {
+          buf.writeln('');
+          buf.writeln('✅ Sync verified — ring clock matches phone.');
+        } else {
+          buf.writeln('');
+          buf.writeln('⚠️ Drift > 1s — sync may not have applied correctly.');
+        }
+      } else {
+        buf.writeln('🕐 Ring Readback:   N/A (no response from 0x41)');
+        buf.writeln('');
+        buf.writeln('⚠️ Could not verify — 0x01 was sent but readback timed out.');
+      }
+      if (result.maxMtu != null) {
+        buf.writeln('');
+        buf.writeln('Max MTU: ${result.maxMtu}');
+      }
+      setState(() {
+        _structuredDataOutput = buf.toString();
+      });
       _addMessage(
-        '✅ Set Time (0x01) command sent: '
-        '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')} '
-        '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}:${now.second.toString().padLeft(2, '0')}',
+        '✅ Sync Time: sent=${result.phoneSentAt} readback=${result.ringReadback ?? "N/A"} drift=${result.driftSeconds ?? "?"}s',
       );
-      await Future.delayed(const Duration(milliseconds: 500));
-      await _bleService.sendGetTimeCommand();
-      _addMessage('🔍 Sent Get Time (0x41) to verify ring clock after sync.');
     } catch (e) {
-      _addMessage(
-          '❌ Failed to send Set Time (0x01): $e. sendSetCurrentTimeCommand()');
+      if (!mounted) return;
+      setState(() {
+        _structuredDataTitle = 'Sync Time (0x01 → 0x41)';
+        _structuredDataOutput = 'Error syncing time: $e';
+      });
+      _addMessage('❌ Failed to sync time: $e');
     }
   }
 
   Future<void> _sendGetBatteryCommand() async {
     try {
-      await _bleService.sendGetBatteryCommand();
-      _addMessage('✅ Get Battery command sent. sendGetBatteryCommand()');
+      setState(() {
+        _structuredDataTitle = 'Battery (0x13)';
+        _structuredDataOutput = 'Fetching battery info...';
+      });
+      final result = await _bleService.fetchBattery(timeout: const Duration(seconds: 2));
+      if (!mounted) return;
+      if (result == null) {
+        setState(() { _structuredDataOutput = 'No response or error (0x93).'; });
+        _addMessage('❌ Battery fetch failed or timed out.');
+        return;
+      }
+      final buf = StringBuffer();
+      buf.writeln('🔋 Battery Level: ${result['battery_level']}%');
+      buf.writeln('⚡ Charging: ${result['charging'] ? 'Yes' : 'No'}');
+      buf.writeln('🔌 Voltage 1: ${(result['voltage_high'] as double).toStringAsFixed(1)}V');
+      buf.writeln('🔌 Voltage 2: ${(result['voltage_low'] as double).toStringAsFixed(1)}V');
+      buf.writeln('🔍 Raw: 0x${(result['raw_byte3'] as int).toRadixString(16).padLeft(2, '0')} 0x${(result['raw_byte4'] as int).toRadixString(16).padLeft(2, '0')}');
+      setState(() { _structuredDataOutput = buf.toString(); });
+      _addMessage('✅ Battery: ${result['battery_level']}% ${result['charging'] ? '(charging)' : ''}');
     } catch (e) {
-      _addMessage(
-          '❌ Failed to send Get Battery command: $e. sendGetBatteryCommand()');
+      if (!mounted) return;
+      setState(() {
+        _structuredDataTitle = 'Battery (0x13)';
+        _structuredDataOutput = 'Error: $e';
+      });
+      _addMessage('❌ Failed to fetch battery: $e');
     }
   }
 
   Future<void> _sendGetMacAddressCommand() async {
     try {
-      await _bleService.sendGetMacAddressCommand();
-      _addMessage('✅ Get MAC Address command sent. sendGetMacAddressCommand()');
+      setState(() {
+        _structuredDataTitle = 'MAC Address (0x22)';
+        _structuredDataOutput = 'Fetching MAC address...';
+      });
+      final result = await _bleService.fetchMacAddress(timeout: const Duration(seconds: 2));
+      if (!mounted) return;
+      if (result == null) {
+        setState(() { _structuredDataOutput = 'No response or error (0xA2).'; });
+        _addMessage('❌ MAC address fetch failed or timed out.');
+        return;
+      }
+      final buf = StringBuffer();
+      buf.writeln('📡 MAC Address: ${result['mac']}');
+      setState(() { _structuredDataOutput = buf.toString(); });
+      _addMessage('✅ MAC: ${result['mac']}');
     } catch (e) {
-      _addMessage(
-          '❌ Failed to send Get MAC Address command: $e. sendGetMacAddressCommand()');
+      if (!mounted) return;
+      setState(() {
+        _structuredDataTitle = 'MAC Address (0x22)';
+        _structuredDataOutput = 'Error: $e';
+      });
+      _addMessage('❌ Failed to fetch MAC address: $e');
     }
   }
 
   Future<void> _sendGetFirmwareVersionCommand() async {
     try {
-      await _bleService.sendGetFirmwareVersionCommand();
-      _addMessage(
-          '✅ Get Firmware Version command sent. sendGetFirmwareVersionCommand()');
+      setState(() {
+        _structuredDataTitle = 'Firmware (0x27)';
+        _structuredDataOutput = 'Fetching firmware version...';
+      });
+      final result = await _bleService.fetchFirmwareVersion(timeout: const Duration(seconds: 2));
+      if (!mounted) return;
+      if (result == null) {
+        setState(() { _structuredDataOutput = 'No response or error (0xA7).'; });
+        _addMessage('❌ Firmware fetch failed or timed out.');
+        return;
+      }
+      final buf = StringBuffer();
+      buf.writeln('📦 Version: ${result['version']}');
+      buf.writeln('📅 Build Date: ${result['build_date']}');
+      setState(() { _structuredDataOutput = buf.toString(); });
+      _addMessage('✅ Firmware: ${result['version']} (${result['build_date']})');
     } catch (e) {
-      _addMessage(
-          '❌ Failed to send Get Firmware Version command: $e. sendGetFirmwareVersionCommand()');
+      if (!mounted) return;
+      setState(() {
+        _structuredDataTitle = 'Firmware (0x27)';
+        _structuredDataOutput = 'Error: $e';
+      });
+      _addMessage('❌ Failed to fetch firmware: $e');
     }
   }
 
@@ -1268,14 +1474,41 @@ class _MyHomePageState extends State<MyHomePage> {
                     child: const Text('Cancel')),
                 ElevatedButton(
                   onPressed: () async {
+                    Navigator.of(ctx).pop();
                     try {
-                      await _bleService
-                          .sendGetMeasurementIntervalCommand(selType);
-                      if (mounted) Navigator.of(ctx).pop();
-                      _addMessage(
-                          '✅ Get Measurement Interval (0x2B) sent for type=$selType');
+                      setState(() {
+                        _structuredDataTitle = 'Intervals (0x2B)';
+                        _structuredDataOutput = 'Fetching interval for type=$selType...';
+                      });
+                      final result = await _bleService.fetchMeasurementInterval(selType, timeout: const Duration(seconds: 2));
+                      if (!mounted) return;
+                      if (result == null) {
+                        setState(() { _structuredDataOutput = 'No response or error (0xAB).'; });
+                        _addMessage('❌ Interval fetch failed.');
+                        return;
+                      }
+                      const typeNames = {1: 'Heart Rate', 2: 'Blood Oxygen', 4: 'HRV'};
+                      final bits = result['weekday_bits'] as int;
+                      String weekdayStr = '';
+                      const days = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+                      for (int i = 0; i < 7; i++) {
+                        if ((bits >> i) & 1 == 1) weekdayStr += '${days[i]} ';
+                      }
+                      final buf = StringBuffer();
+                      buf.writeln('📋 Type: ${typeNames[result['measurement_type']] ?? result['measurement_type']}');
+                      buf.writeln('⚙️ Mode: ${result['working_mode_name']} (${result['working_mode']})');
+                      buf.writeln('🕐 Window: ${result['start_hour'].toString().padLeft(2, '0')}:${result['start_minute'].toString().padLeft(2, '0')} - ${result['end_hour'].toString().padLeft(2, '0')}:${result['end_minute'].toString().padLeft(2, '0')}');
+                      buf.writeln('📅 Days: ${weekdayStr.trim()}');
+                      buf.writeln('⏱️ Interval: ${result['interval_minutes']} min');
+                      setState(() { _structuredDataOutput = buf.toString(); });
+                      _addMessage('✅ Interval: ${typeNames[result['measurement_type']] ?? selType} every ${result['interval_minutes']}min');
                     } catch (e) {
-                      _addMessage('❌ Failed to send 0x2B: $e');
+                      if (!mounted) return;
+                      setState(() {
+                        _structuredDataTitle = 'Intervals (0x2B)';
+                        _structuredDataOutput = 'Error: $e';
+                      });
+                      _addMessage('❌ Failed to fetch interval: $e');
                     }
                   },
                   child: const Text('Send'),
@@ -1473,12 +1706,32 @@ class _MyHomePageState extends State<MyHomePage> {
 
   Future<void> _sendGetExerciseDataCommand() async {
     try {
-      await _bleService.sendGetExerciseDataCommand();
-      _addMessage(
-          '✅ Get Exercise Status command sent. sendGetExerciseDataCommand()');
+      setState(() {
+        _structuredDataTitle = 'Exercise Status (0x19)';
+        _structuredDataOutput = 'Fetching exercise status...';
+      });
+      final result = await _bleService.fetchExerciseStatus(timeout: const Duration(seconds: 2));
+      if (!mounted) return;
+      if (result == null) {
+        setState(() { _structuredDataOutput = 'No response or error (0x99).'; });
+        _addMessage('❌ Exercise status fetch failed or timed out.');
+        return;
+      }
+      final buf = StringBuffer();
+      buf.writeln('🏃 Active: ${result['is_active'] ? 'Yes' : 'No'}');
+      buf.writeln('🕐 Has Timestamp: ${result['has_timestamp'] ? 'Yes' : 'No'}');
+      if (result['timestamp'] != null) {
+        buf.writeln('📅 Timestamp: ${result['timestamp']}');
+      }
+      setState(() { _structuredDataOutput = buf.toString(); });
+      _addMessage('✅ Exercise: ${result['is_active'] ? 'ACTIVE' : 'Inactive'}');
     } catch (e) {
-      _addMessage(
-          '❌ Failed to send Get Exercise Status command: $e. sendGetExerciseDataCommand()');
+      if (!mounted) return;
+      setState(() {
+        _structuredDataTitle = 'Exercise Status (0x19)';
+        _structuredDataOutput = 'Error: $e';
+      });
+      _addMessage('❌ Failed to fetch exercise status: $e');
     }
   }
 
@@ -1536,88 +1789,251 @@ class _MyHomePageState extends State<MyHomePage> {
 
   Future<void> _sendGetTotalStepCountCommand() async {
     try {
-      await _bleService.sendGetTotalStepCountCommand();
-      _addMessage(
-          '✅ Get Total Step Count command sent. sendGetTotalStepCountCommand()');
+      setState(() {
+        _structuredDataTitle = 'Steps (0x51)';
+        _structuredDataOutput = 'Fetching step data...';
+      });
+      final records = await _bleService.fetchTotalSteps(timeout: const Duration(seconds: 4));
+      if (!mounted) return;
+      if (records.isEmpty) {
+        setState(() { _structuredDataOutput = 'No step records received.'; });
+        _addMessage('❌ No step data received.');
+        return;
+      }
+      final buf = StringBuffer();
+      buf.writeln('📊 ${records.length} day(s) of step data:');
+      buf.writeln('');
+      for (final r in records) {
+        buf.writeln('${r['date']}: ${r['steps']} steps, ${r['exercise_time']}s exercise, ${(r['calories'] as double).toStringAsFixed(1)} kcal, ${(r['distance'] as double).toStringAsFixed(2)} km');
+      }
+      setState(() { _structuredDataOutput = buf.toString(); });
+      _addMessage('✅ Steps fetched: ${records.length} records');
     } catch (e) {
-      _addMessage(
-          '❌ Failed to send Get Total Step Count command: $e. sendGetTotalStepCountCommand()');
+      if (!mounted) return;
+      setState(() {
+        _structuredDataTitle = 'Steps (0x51)';
+        _structuredDataOutput = 'Error: $e';
+      });
+      _addMessage('❌ Failed to fetch steps: $e');
     }
   }
 
   Future<void> _sendGetDetailedStepCountCommand() async {
     try {
-      await _bleService.sendGetDetailedStepCountCommand();
-      _addMessage(
-          '✅ Get Detailed Step Count command sent. sendGetDetailedStepCountCommand()');
+      setState(() {
+        _structuredDataTitle = 'Step Details (0x52)';
+        _structuredDataOutput = 'Fetching detailed step data...';
+      });
+      final records = await _bleService.fetchDetailedSteps(timeout: const Duration(seconds: 4));
+      if (!mounted) return;
+      if (records.isEmpty) {
+        setState(() { _structuredDataOutput = 'No detailed step records received.'; });
+        _addMessage('❌ No detailed step data received.');
+        return;
+      }
+      final buf = StringBuffer();
+      buf.writeln('📊 ${records.length} segment(s) of detailed steps:');
+      buf.writeln('');
+      for (final r in records) {
+        buf.writeln('${r['timestamp']}: ${r['total_steps']} steps, ${(r['calories'] as double).toStringAsFixed(1)} kcal, ${(r['distance'] as double).toStringAsFixed(2)} km, ${(r['per_minute'] as List).length} min entries');
+      }
+      setState(() { _structuredDataOutput = buf.toString(); });
+      _addMessage('✅ Step Details: ${records.length} segments');
     } catch (e) {
-      _addMessage(
-          '❌ Failed to send Get Detailed Step Count command: $e. sendGetDetailedStepCountCommand()');
+      if (!mounted) return;
+      setState(() {
+        _structuredDataTitle = 'Step Details (0x52)';
+        _structuredDataOutput = 'Error: $e';
+      });
+      _addMessage('❌ Failed to fetch detailed steps: $e');
     }
   }
 
   Future<void> _sendGetSleepDataCommand() async {
     try {
-      await _bleService.sendGetSleepDataCommand();
-      _addMessage('✅ Get Sleep Data command sent. sendGetSleepDataCommand()');
+      setState(() {
+        _structuredDataTitle = 'Sleep (0x53)';
+        _structuredDataOutput = 'Fetching sleep data...';
+      });
+      final records = await _bleService.fetchSleepData(timeout: const Duration(seconds: 4));
+      if (!mounted) return;
+      if (records.isEmpty) {
+        setState(() { _structuredDataOutput = 'No sleep records received.'; });
+        _addMessage('❌ No sleep data received.');
+        return;
+      }
+      final buf = StringBuffer();
+      buf.writeln('😴 ${records.length} sleep session(s):');
+      buf.writeln('');
+      for (final r in records) {
+        buf.writeln('- ${r.toString()}');
+      }
+      setState(() { _structuredDataOutput = buf.toString(); });
+      _addMessage('✅ Sleep fetched: ${records.length} records');
     } catch (e) {
-      _addMessage(
-          '❌ Failed to send Get Sleep Data command: $e. sendGetSleepDataCommand()');
+      if (!mounted) return;
+      setState(() {
+        _structuredDataTitle = 'Sleep (0x53)';
+        _structuredDataOutput = 'Error: $e';
+      });
+      _addMessage('❌ Failed to fetch sleep data: $e');
     }
   }
 
   Future<void> _sendGetDetailedHeartRateCommand() async {
     try {
-      await _bleService.sendGetDetailedHeartRateCommand();
-      _addMessage(
-          '✅ Get Detailed Heart Rate command sent. sendGetDetailedHeartRateCommand()');
+      setState(() {
+        _structuredDataTitle = 'HR Detail (0x54)';
+        _structuredDataOutput = 'Fetching detailed heart rate data...';
+      });
+      final records = await _bleService.fetchDetailedHeartRate(timeout: const Duration(seconds: 4));
+      if (!mounted) return;
+      if (records.isEmpty) {
+        setState(() { _structuredDataOutput = 'No detailed heart rate records received.'; });
+        _addMessage('❌ No detailed HR data received.');
+        return;
+      }
+      final buf = StringBuffer();
+      buf.writeln('❤️ ${records.length} HR measurement(s):');
+      buf.writeln('');
+      for (final r in records) {
+        final rates = (r['heart_rates'] as List).join(', ');
+        buf.writeln('${r['timestamp']}: [${rates}] BPM');
+      }
+      setState(() { _structuredDataOutput = buf.toString(); });
+      _addMessage('✅ HR Detail: ${records.length} records');
     } catch (e) {
-      _addMessage(
-          '❌ Failed to send Get Detailed Heart Rate command: $e. sendGetDetailedHeartRateCommand()');
+      if (!mounted) return;
+      setState(() {
+        _structuredDataTitle = 'HR Detail (0x54)';
+        _structuredDataOutput = 'Error: $e';
+      });
+      _addMessage('❌ Failed to fetch detailed heart rate: $e');
     }
   }
 
   Future<void> _sendGetHeartRateHistoryCommand() async {
     try {
-      await _bleService.sendGetHeartRateHistoryCommand();
-      _addMessage(
-          '✅ Get Heart Rate History command sent. sendGetHeartRateHistoryCommand()');
+      setState(() {
+        _structuredDataTitle = 'HR History (0x55)';
+        _structuredDataOutput = 'Fetching heart rate history...';
+      });
+      final records = await _bleService.fetchHeartRateHistory(timeout: const Duration(seconds: 4));
+      if (!mounted) return;
+      if (records.isEmpty) {
+        setState(() { _structuredDataOutput = 'No heart rate history received.'; });
+        _addMessage('❌ No HR history received.');
+        return;
+      }
+      final buf = StringBuffer();
+      buf.writeln('💓 ${records.length} HR reading(s):');
+      buf.writeln('');
+      for (final r in records) {
+        buf.writeln('${r['timestamp']}: ${r['heart_rate']} BPM');
+      }
+      setState(() { _structuredDataOutput = buf.toString(); });
+      _addMessage('✅ HR History: ${records.length} records');
     } catch (e) {
-      _addMessage(
-          '❌ Failed to send Get Heart Rate History command: $e. sendGetHeartRateHistoryCommand()');
+      if (!mounted) return;
+      setState(() {
+        _structuredDataTitle = 'HR History (0x55)';
+        _structuredDataOutput = 'Error: $e';
+      });
+      _addMessage('❌ Failed to fetch HR history: $e');
     }
   }
 
   Future<void> _sendGetTemperatureDataCommand() async {
     try {
-      await _bleService.sendGetTemperatureDataCommand();
-      _addMessage(
-          '✅ Get Temperature Data command sent. sendGetTemperatureDataCommand()');
+      setState(() {
+        _structuredDataTitle = 'Temperature (0x62)';
+        _structuredDataOutput = 'Fetching temperature data...';
+      });
+      final records = await _bleService.fetchTemperatureData(timeout: const Duration(seconds: 4));
+      if (!mounted) return;
+      if (records.isEmpty) {
+        setState(() { _structuredDataOutput = 'No temperature records received.'; });
+        _addMessage('❌ No temperature data received.');
+        return;
+      }
+      final buf = StringBuffer();
+      buf.writeln('🌡️ ${records.length} temperature reading(s):');
+      buf.writeln('');
+      for (final r in records) {
+        final temps = (r['temperatures'] as List).map((t) => '${t}°C').join(', ');
+        buf.writeln('${r['timestamp']}: [$temps]');
+      }
+      setState(() { _structuredDataOutput = buf.toString(); });
+      _addMessage('✅ Temperature: ${records.length} records');
     } catch (e) {
-      _addMessage(
-          '❌ Failed to send Get Temperature Data command: $e. sendGetTemperatureDataCommand()');
+      if (!mounted) return;
+      setState(() {
+        _structuredDataTitle = 'Temperature (0x62)';
+        _structuredDataOutput = 'Error: $e';
+      });
+      _addMessage('❌ Failed to fetch temperature data: $e');
     }
   }
 
   Future<void> _sendGetRingTemperatureCommand() async {
     try {
-      await _bleService.sendGetRingTemperatureCommand();
-      _addMessage(
-          '✅ Get Ring Temperature (0x14) command sent. sendGetRingTemperatureCommand()');
+      setState(() {
+        _structuredDataTitle = 'Ring Temp (0x14)';
+        _structuredDataOutput = 'Fetching ring temperature...';
+      });
+      final result = await _bleService.fetchRingTemperature(timeout: const Duration(seconds: 2));
+      if (!mounted) return;
+      if (result == null) {
+        setState(() { _structuredDataOutput = 'No response or error (0x94).'; });
+        _addMessage('❌ Ring temperature fetch failed or timed out.');
+        return;
+      }
+      final buf = StringBuffer();
+      buf.writeln('🌡️ Highest: ${result['highest']}°C');
+      buf.writeln('🌡️ Decimal Temp: ${result['decimal_temp']}°C');
+      buf.writeln('NTC1: ${result['ntc1']}°C');
+      buf.writeln('NTC2: ${result['ntc2']}°C');
+      buf.writeln('NTC3: ${result['ntc3']}°C');
+      setState(() { _structuredDataOutput = buf.toString(); });
+      _addMessage('✅ Ring Temp: ${result['highest']}°C');
     } catch (e) {
-      _addMessage(
-          '❌ Failed to send Ring Temperature (0x14): $e. sendGetRingTemperatureCommand()');
+      if (!mounted) return;
+      setState(() {
+        _structuredDataTitle = 'Ring Temp (0x14)';
+        _structuredDataOutput = 'Error: $e';
+      });
+      _addMessage('❌ Failed to fetch ring temperature: $e');
     }
   }
 
   Future<void> _sendGetBloodOxygenDataCommand() async {
     try {
-      await _bleService.sendGetBloodOxygenDataCommand();
-      _addMessage(
-          '✅ Get Blood Oxygen Data command sent. sendGetBloodOxygenDataCommand()');
+      setState(() {
+        _structuredDataTitle = 'Blood O2 (0x66)';
+        _structuredDataOutput = 'Fetching blood oxygen data...';
+      });
+      final records = await _bleService.fetchBloodOxygenData(timeout: const Duration(seconds: 4));
+      if (!mounted) return;
+      if (records.isEmpty) {
+        setState(() { _structuredDataOutput = 'No blood oxygen records received.'; });
+        _addMessage('❌ No blood oxygen data received.');
+        return;
+      }
+      final buf = StringBuffer();
+      buf.writeln('🩸 ${records.length} SpO2 reading(s):');
+      buf.writeln('');
+      for (final r in records) {
+        buf.writeln('${r['timestamp']}: ${r['spo2']}%');
+      }
+      setState(() { _structuredDataOutput = buf.toString(); });
+      _addMessage('✅ Blood O2: ${records.length} records');
     } catch (e) {
-      _addMessage(
-          '❌ Failed to send Get Blood Oxygen Data command: $e. sendGetBloodOxygenDataCommand()');
+      if (!mounted) return;
+      setState(() {
+        _structuredDataTitle = 'Blood O2 (0x66)';
+        _structuredDataOutput = 'Error: $e';
+      });
+      _addMessage('❌ Failed to fetch blood oxygen data: $e');
     }
   }
 
