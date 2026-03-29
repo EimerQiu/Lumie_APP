@@ -73,13 +73,16 @@ class SleepRecord {
 List<SleepRecord> _mergeSleepByNight(List<SleepRecord> records) {
   if (records.isEmpty) return records;
   // Sort by start time to ensure deterministic order
-  final sorted = List<SleepRecord>.from(records)..sort((a, b) => a.startTimestamp.compareTo(b.startTimestamp));
+  final sorted = List<SleepRecord>.from(records)
+    ..sort((a, b) => a.startTimestamp.compareTo(b.startTimestamp));
 
   DateTime nightBucket(DateTime ts) {
     // If ts.hour >= 18, bucket is that day's 18:00; else bucket is previous day 18:00
     final dateOnly = DateTime(ts.year, ts.month, ts.day);
     if (ts.hour >= 18) return dateOnly.add(const Duration(hours: 18));
-    return dateOnly.subtract(const Duration(days: 1)).add(const Duration(hours: 18));
+    return dateOnly
+        .subtract(const Duration(days: 1))
+        .add(const Duration(hours: 18));
   }
 
   final merged = <SleepRecord>[];
@@ -105,7 +108,9 @@ List<SleepRecord> _mergeSleepByNight(List<SleepRecord> records) {
 
     if (sameBucket && smallGap) {
       // Merge r into cur
-      final mergedStages = <int>[]..addAll(cur!.stages)..addAll(r.stages);
+      final mergedStages = <int>[]
+        ..addAll(cur!.stages)
+        ..addAll(r.stages);
       final mergedRec = SleepRecord(
         index: cur!.index,
         page: cur!.page,
@@ -135,28 +140,34 @@ List<SleepRecord> _mergeSleepByNight(List<SleepRecord> records) {
 class BleService {
   // Smart Ring specific constants
   static const String serviceUuid = '0000fff0-0000-1000-8000-00805f9b34fb';
-  static const String writeCharacteristicUuid = '0000fff6-0000-1000-8000-00805f9b34fb';
-  static const String notifyCharacteristicUuid = '0000fff7-0000-1000-8000-00805f9b34fb';
+  static const String writeCharacteristicUuid =
+      '0000fff6-0000-1000-8000-00805f9b34fb';
+  static const String notifyCharacteristicUuid =
+      '0000fff7-0000-1000-8000-00805f9b34fb';
 
   // Configurable targets (from UI)
   String? _targetDeviceName; // optional exact match
   String? _targetMacAddress; // optional exact match (uppercase form preferred)
   String? get targetDeviceName => _targetDeviceName;
   String? get targetMacAddress => _targetMacAddress;
-  List<String> _fuzzyNameHints = []; // optional: contains() hints when no exact target
+  List<String> _fuzzyNameHints =
+      []; // optional: contains() hints when no exact target
   List<String> get fuzzyNameHints => List.unmodifiable(_fuzzyNameHints);
-  
+
   BluetoothDevice? _connectedDevice;
   BluetoothCharacteristic? _writeCharacteristic;
   BluetoothCharacteristic? _notifyCharacteristic;
   bool _isConnecting = false;
-  
-  final StreamController<String> _connectionStatusController = StreamController<String>.broadcast();
-  final StreamController<String> _messageController = StreamController<String>.broadcast();
-  
-  Stream<String> get connectionStatusStream => _connectionStatusController.stream;
+
+  final StreamController<String> _connectionStatusController =
+      StreamController<String>.broadcast();
+  final StreamController<String> _messageController =
+      StreamController<String>.broadcast();
+
+  Stream<String> get connectionStatusStream =>
+      _connectionStatusController.stream;
   Stream<String> get messageStream => _messageController.stream;
-  
+
   Timer? _reconnectTimer;
   bool _isDisposed = false;
 
@@ -170,10 +181,11 @@ class BleService {
   /// Bulk download: Send all 8 data commands sequentially (2s delay between each),
   /// collect mixed responses, classify by command type, and return structured package.
   /// [onProgress] callback receives progress updates during the download process.
-  Future<Map<String, dynamic>> bulkDownloadAllData({Function(String)? onProgress}) async {
+  Future<Map<String, dynamic>> bulkDownloadAllData(
+      {Function(String)? onProgress}) async {
     print('🚀 Starting bulk download of all data...');
     onProgress?.call('🚀 Starting bulk download of all data...');
-    
+
     // Data structure to collect all messages by command type
     final Map<int, List<List<int>>> collectedData = {
       0x51: [], // Total step count
@@ -189,7 +201,7 @@ class BleService {
     late final StreamSubscription<String> sub;
     Timer? inactivityTimer;
     final completer = Completer<Map<String, dynamic>>();
-    
+
     void resetInactivityTimer() {
       inactivityTimer?.cancel();
       inactivityTimer = Timer(const Duration(seconds: 5), () async {
@@ -205,80 +217,84 @@ class BleService {
     }
 
     // Listen to all incoming messages
-    sub = messageStream.listen((msg) {
-      final bytes = _extractHexBytes(msg);
-      if (bytes.isEmpty) return;
-      
-      // Classify by first byte (command type)
-      final cmd = bytes[0];
-      if (collectedData.containsKey(cmd)) {
-        collectedData[cmd]!.add(bytes);
-        final progressMsg = '📥 Received ${cmd.toRadixString(16).toUpperCase()} message (${collectedData[cmd]!.length} total)';
-        print(progressMsg);
-        onProgress?.call(progressMsg);
-      }
-      
-      // Reset inactivity timer on each message
-      resetInactivityTimer();
-    }, onError: (_) {}, onDone: () {
-      if (!completer.isCompleted) {
-        onProgress?.call('📊 Processing collected data...');
-        completer.complete(_processBulkData(collectedData));
-      }
-    });
+    sub = messageStream.listen(
+        (msg) {
+          final bytes = _extractHexBytes(msg);
+          if (bytes.isEmpty) return;
+
+          // Classify by first byte (command type)
+          final cmd = bytes[0];
+          if (collectedData.containsKey(cmd)) {
+            collectedData[cmd]!.add(bytes);
+            final progressMsg =
+                '📥 Received ${cmd.toRadixString(16).toUpperCase()} message (${collectedData[cmd]!.length} total)';
+            print(progressMsg);
+            onProgress?.call(progressMsg);
+          }
+
+          // Reset inactivity timer on each message
+          resetInactivityTimer();
+        },
+        onError: (_) {},
+        onDone: () {
+          if (!completer.isCompleted) {
+            onProgress?.call('📊 Processing collected data...');
+            completer.complete(_processBulkData(collectedData));
+          }
+        });
 
     try {
       // Start inactivity timer
       resetInactivityTimer();
-      
+
       // Send commands sequentially with 2-second delays
       String msg = '📤 Sending 0x51 (Total Steps)...';
       print(msg);
       onProgress?.call(msg);
       await sendGetTotalStepCountCommand();
       await Future.delayed(const Duration(seconds: 2));
-      
+
       msg = '📤 Sending 0x52 (Detailed Steps)...';
       print(msg);
       onProgress?.call(msg);
       await sendGetDetailedStepCountCommand();
       await Future.delayed(const Duration(seconds: 2));
-      
+
       msg = '📤 Sending 0x53 (Sleep Data)...';
       print(msg);
       onProgress?.call(msg);
       await sendGetSleepDataCommand();
       await Future.delayed(const Duration(seconds: 2));
-      
+
       msg = '📤 Sending 0x54 (Heart Rate Details)...';
       print(msg);
       onProgress?.call(msg);
       await sendGetDetailedHeartRateCommand();
       await Future.delayed(const Duration(seconds: 2));
-      
+
       msg = '📤 Sending 0x55 (Heart Rate History)...';
       print(msg);
       onProgress?.call(msg);
       await sendGetHeartRateHistoryCommand();
       await Future.delayed(const Duration(seconds: 2));
-      
+
       msg = '📤 Sending 0x56 (HRV Data)...';
       print(msg);
       onProgress?.call(msg);
       await sendHrvCommand();
       await Future.delayed(const Duration(seconds: 2));
-      
+
       msg = '📤 Sending 0x62 (Temperature)...';
       print(msg);
       onProgress?.call(msg);
       await sendGetTemperatureDataCommand();
       await Future.delayed(const Duration(seconds: 2));
-      
+
       msg = '📤 Sending 0x66 (Blood Oxygen)...';
       print(msg);
       onProgress?.call(msg);
       await sendGetBloodOxygenDataCommand();
-      
+
       msg = '✅ All commands sent, waiting for responses...';
       print(msg);
       onProgress?.call(msg);
@@ -292,13 +308,14 @@ class BleService {
     final result = await completer.future;
     inactivityTimer?.cancel();
     await sub.cancel();
-    
+
     print('🎉 Bulk download completed!');
     return result;
   }
 
   /// Process collected bulk data and generate structured output
-  Map<String, dynamic> _processBulkData(Map<int, List<List<int>>> collectedData) {
+  Map<String, dynamic> _processBulkData(
+      Map<int, List<List<int>>> collectedData) {
     final result = <String, dynamic>{
       'timestamp': DateTime.now().toIso8601String(),
       'commands': <String, dynamic>{},
@@ -314,12 +331,23 @@ class BleService {
           final year = 2000 + _bcdToDecimal(bytes[2]);
           final month = _bcdToDecimal(bytes[3]);
           final day = _bcdToDecimal(bytes[4]);
-          final steps = (bytes[8] << 24) | (bytes[7] << 16) | (bytes[6] << 8) | bytes[5];
-          final exerciseTime = (bytes[12] << 24) | (bytes[11] << 16) | (bytes[10] << 8) | bytes[9];
-          final distance = (bytes[16] << 24) | (bytes[15] << 16) | (bytes[14] << 8) | bytes[13];
-          final calories = (bytes[20] << 24) | (bytes[19] << 16) | (bytes[18] << 8) | bytes[17];
+          final steps =
+              (bytes[8] << 24) | (bytes[7] << 16) | (bytes[6] << 8) | bytes[5];
+          final exerciseTime = (bytes[12] << 24) |
+              (bytes[11] << 16) |
+              (bytes[10] << 8) |
+              bytes[9];
+          final distance = (bytes[16] << 24) |
+              (bytes[15] << 16) |
+              (bytes[14] << 8) |
+              bytes[13];
+          final calories = (bytes[20] << 24) |
+              (bytes[19] << 16) |
+              (bytes[18] << 8) |
+              bytes[17];
           records.add({
-            'date': '$year-${month.toString().padLeft(2, '0')}-${day.toString().padLeft(2, '0')}',
+            'date':
+                '$year-${month.toString().padLeft(2, '0')}-${day.toString().padLeft(2, '0')}',
             'steps': steps,
             'exercise_time': exerciseTime,
             'calories': calories / 100.0,
@@ -327,7 +355,8 @@ class BleService {
           });
         }
       }
-      result['commands']['total_steps'] = {'count': records.length, 'records': records};
+      result['commands']
+          ['total_steps'] = {'count': records.length, 'records': records};
       totalRecords += records.length;
     }
 
@@ -348,7 +377,8 @@ class BleService {
             final calories = (bytes[i + 12] << 8) | bytes[i + 11];
             final distance = (bytes[i + 14] << 8) | bytes[i + 13];
             records.add({
-              'timestamp': '$year-${month.toString().padLeft(2, '0')}-${day.toString().padLeft(2, '0')} ${hour.toString().padLeft(2, '0')}:${minute.toString().padLeft(2, '0')}:${second.toString().padLeft(2, '0')}',
+              'timestamp':
+                  '$year-${month.toString().padLeft(2, '0')}-${day.toString().padLeft(2, '0')} ${hour.toString().padLeft(2, '0')}:${minute.toString().padLeft(2, '0')}:${second.toString().padLeft(2, '0')}',
               'steps': totalSteps,
               'calories': calories / 100.0,
               'distance': distance / 100.0,
@@ -359,7 +389,8 @@ class BleService {
           }
         }
       }
-      result['commands']['detailed_steps'] = {'count': records.length, 'records': records};
+      result['commands']
+          ['detailed_steps'] = {'count': records.length, 'records': records};
       totalRecords += records.length;
     }
 
@@ -369,17 +400,20 @@ class BleService {
       for (final bytes in collectedData[0x53]!) {
         allBytes.addAll(bytes);
       }
-      final sleepRecords = _parseSleepRecordsFromBytes(allBytes, mergeByNight: false);
+      final sleepRecords =
+          _parseSleepRecordsFromBytes(allBytes, mergeByNight: false);
       result['commands']['sleep'] = {
         'count': sleepRecords.length,
-        'records': sleepRecords.map((r) => {
-          'timestamp': r.startTimestamp.toIso8601String(),
-          'duration_minutes': r.durationMinutes,
-          'deep': r.deepMinutes,
-          'light': r.lightMinutes,
-          'rem': r.remMinutes,
-          'awake': r.awakeMinutes,
-        }).toList(),
+        'records': sleepRecords
+            .map((r) => {
+                  'timestamp': r.startTimestamp.toIso8601String(),
+                  'duration_minutes': r.durationMinutes,
+                  'deep': r.deepMinutes,
+                  'light': r.lightMinutes,
+                  'rem': r.remMinutes,
+                  'awake': r.awakeMinutes,
+                })
+            .toList(),
       };
       totalRecords += sleepRecords.length;
     }
@@ -402,7 +436,8 @@ class BleService {
               heartRates.add(bytes[i + j]);
             }
             records.add({
-              'timestamp': '$year-${month.toString().padLeft(2, '0')}-${day.toString().padLeft(2, '0')} ${hour.toString().padLeft(2, '0')}:${minute.toString().padLeft(2, '0')}:${second.toString().padLeft(2, '0')}',
+              'timestamp':
+                  '$year-${month.toString().padLeft(2, '0')}-${day.toString().padLeft(2, '0')} ${hour.toString().padLeft(2, '0')}:${minute.toString().padLeft(2, '0')}:${second.toString().padLeft(2, '0')}',
               'heart_rates': heartRates,
             });
             i += 21;
@@ -411,7 +446,10 @@ class BleService {
           }
         }
       }
-      result['commands']['heart_rate_details'] = {'count': records.length, 'records': records};
+      result['commands']['heart_rate_details'] = {
+        'count': records.length,
+        'records': records
+      };
       totalRecords += records.length;
     }
 
@@ -430,7 +468,8 @@ class BleService {
             final second = _bcdToDecimal(bytes[i + 8]);
             final heartRate = bytes[i + 9];
             records.add({
-              'timestamp': '$year-${month.toString().padLeft(2, '0')}-${day.toString().padLeft(2, '0')} ${hour.toString().padLeft(2, '0')}:${minute.toString().padLeft(2, '0')}:${second.toString().padLeft(2, '0')}',
+              'timestamp':
+                  '$year-${month.toString().padLeft(2, '0')}-${day.toString().padLeft(2, '0')} ${hour.toString().padLeft(2, '0')}:${minute.toString().padLeft(2, '0')}:${second.toString().padLeft(2, '0')}',
               'heart_rate': heartRate,
             });
             i += 10;
@@ -439,7 +478,10 @@ class BleService {
           }
         }
       }
-      result['commands']['heart_rate_history'] = {'count': records.length, 'records': records};
+      result['commands']['heart_rate_history'] = {
+        'count': records.length,
+        'records': records
+      };
       totalRecords += records.length;
     }
 
@@ -452,13 +494,15 @@ class BleService {
       final hrvRecords = _parseHrvRecordsFromBytes(allBytes);
       result['commands']['hrv'] = {
         'count': hrvRecords.length,
-        'records': hrvRecords.map((r) => {
-          'timestamp': r.timestamp.toIso8601String(),
-          'hrv_ms': r.hrvMs,
-          'heart_rate': r.heartRateBpm,
-          'fatigue': r.fatigue,
-          'bp': '${r.systolic}/${r.diastolic}',
-        }).toList(),
+        'records': hrvRecords
+            .map((r) => {
+                  'timestamp': r.timestamp.toIso8601String(),
+                  'hrv_ms': r.hrvMs,
+                  'heart_rate': r.heartRateBpm,
+                  'fatigue': r.fatigue,
+                  'bp': '${r.systolic}/${r.diastolic}',
+                })
+            .toList(),
       };
       totalRecords += hrvRecords.length;
     }
@@ -484,7 +528,8 @@ class BleService {
               }
             }
             records.add({
-              'timestamp': '$year-${month.toString().padLeft(2, '0')}-${day.toString().padLeft(2, '0')} ${hour.toString().padLeft(2, '0')}:${minute.toString().padLeft(2, '0')}:${second.toString().padLeft(2, '0')}',
+              'timestamp':
+                  '$year-${month.toString().padLeft(2, '0')}-${day.toString().padLeft(2, '0')} ${hour.toString().padLeft(2, '0')}:${minute.toString().padLeft(2, '0')}:${second.toString().padLeft(2, '0')}',
               'temperatures': temperatures,
             });
             i += 15;
@@ -493,7 +538,8 @@ class BleService {
           }
         }
       }
-      result['commands']['temperature'] = {'count': records.length, 'records': records};
+      result['commands']
+          ['temperature'] = {'count': records.length, 'records': records};
       totalRecords += records.length;
     }
 
@@ -512,7 +558,8 @@ class BleService {
             final second = _bcdToDecimal(bytes[i + 8]);
             final bloodOxygen = bytes[i + 9];
             records.add({
-              'timestamp': '$year-${month.toString().padLeft(2, '0')}-${day.toString().padLeft(2, '0')} ${hour.toString().padLeft(2, '0')}:${minute.toString().padLeft(2, '0')}:${second.toString().padLeft(2, '0')}',
+              'timestamp':
+                  '$year-${month.toString().padLeft(2, '0')}-${day.toString().padLeft(2, '0')} ${hour.toString().padLeft(2, '0')}:${minute.toString().padLeft(2, '0')}:${second.toString().padLeft(2, '0')}',
               'spo2': bloodOxygen,
             });
             i += 10;
@@ -521,13 +568,14 @@ class BleService {
           }
         }
       }
-      result['commands']['blood_oxygen'] = {'count': records.length, 'records': records};
+      result['commands']
+          ['blood_oxygen'] = {'count': records.length, 'records': records};
       totalRecords += records.length;
     }
 
     result['total_records'] = totalRecords;
     result['summary'] = _generateBulkSummary(result);
-    
+
     return result;
   }
 
@@ -539,40 +587,48 @@ class BleService {
     buf.writeln('⏰ Downloaded at: ${data['timestamp']}');
     buf.writeln('📈 Total Records: ${data['total_records']}');
     buf.writeln('');
-    
+
     final commands = data['commands'] as Map<String, dynamic>;
-    
+
     if (commands.containsKey('total_steps')) {
-      buf.writeln('👣 Total Steps: ${commands['total_steps']['count']} daily records');
+      buf.writeln(
+          '👣 Total Steps: ${commands['total_steps']['count']} daily records');
     }
     if (commands.containsKey('detailed_steps')) {
-      buf.writeln('📊 Detailed Steps: ${commands['detailed_steps']['count']} 10-min segments');
+      buf.writeln(
+          '📊 Detailed Steps: ${commands['detailed_steps']['count']} 10-min segments');
     }
     if (commands.containsKey('sleep')) {
-      buf.writeln('😴 Sleep Data: ${commands['sleep']['count']} sleep sessions');
+      buf.writeln(
+          '😴 Sleep Data: ${commands['sleep']['count']} sleep sessions');
     }
     if (commands.containsKey('heart_rate_details')) {
-      buf.writeln('❤️ HR Details: ${commands['heart_rate_details']['count']} detailed measurements');
+      buf.writeln(
+          '❤️ HR Details: ${commands['heart_rate_details']['count']} detailed measurements');
     }
     if (commands.containsKey('heart_rate_history')) {
-      buf.writeln('💓 HR History: ${commands['heart_rate_history']['count']} single measurements');
+      buf.writeln(
+          '💓 HR History: ${commands['heart_rate_history']['count']} single measurements');
     }
     if (commands.containsKey('hrv')) {
       buf.writeln('📈 HRV Data: ${commands['hrv']['count']} HRV records');
     }
     if (commands.containsKey('temperature')) {
-      buf.writeln('🌡️ Temperature: ${commands['temperature']['count']} temperature readings');
+      buf.writeln(
+          '🌡️ Temperature: ${commands['temperature']['count']} temperature readings');
     }
     if (commands.containsKey('blood_oxygen')) {
-      buf.writeln('🩸 Blood O₂: ${commands['blood_oxygen']['count']} SpO2 readings');
+      buf.writeln(
+          '🩸 Blood O₂: ${commands['blood_oxygen']['count']} SpO2 readings');
     }
-    
+
     buf.writeln('=' * 50);
     return buf.toString();
   }
 
   /// Send 0x53 and collect parsed Sleep records for [timeout].
-  Future<List<SleepRecord>> fetchSleepData({Duration timeout = const Duration(seconds: 2)}) async {
+  Future<List<SleepRecord>> fetchSleepData(
+      {Duration timeout = const Duration(seconds: 2)}) async {
     final Map<String, SleepRecord> dedup = {};
 
     SleepRecord _selectPreferred(SleepRecord incoming, SleepRecord existing) {
@@ -603,7 +659,8 @@ class BleService {
       if (bytes.isEmpty) return;
       final records = _parseSleepRecordsFromBytes(bytes, mergeByNight: false);
       for (final record in records) {
-        final key = '${record.index}-${record.page}-${record.startTimestamp.toIso8601String()}';
+        final key =
+            '${record.index}-${record.page}-${record.startTimestamp.toIso8601String()}';
         final existing = dedup[key];
         if (existing == null) {
           dedup[key] = record;
@@ -635,11 +692,15 @@ class BleService {
   /// Parse concatenated 0x53 sleep records.
   /// Heuristic framing: [0]=0x53, [1]=ID1, [2]=ID2, [3..8]=YY MM DD HH mm SS (BCD), [9]=validLength minutes (N), [10..10+N-1]=stages.
   /// Many firmwares send a fixed 130-byte frame (N up to 120). If exact size isn't present, parse a single record if possible.
-  List<SleepRecord> _parseSleepRecordsFromBytes(List<int> bytes, {bool mergeByNight = true}) {
+  List<SleepRecord> _parseSleepRecordsFromBytes(List<int> bytes,
+      {bool mergeByNight = true}) {
     final List<SleepRecord> out = [];
     int i = 0;
     while (i + 10 <= bytes.length) {
-      if (bytes[i] != 0x53) { i++; continue; }
+      if (bytes[i] != 0x53) {
+        i++;
+        continue;
+      }
       // Try fixed-frame first (130 bytes)
       bool parsed = false;
       if (i + 130 <= bytes.length) {
@@ -692,11 +753,18 @@ class BleService {
       if (n <= 0 || n > 120) return null;
       final end = math.min(10 + n, bytes.length);
       final stageBytes = bytes.sublist(10, end);
-      int deep=0, light=0, rem=0, awake=0;
+      int deep = 0, light = 0, rem = 0, awake = 0;
       final stages = <int>[];
       for (final s in stageBytes) {
         stages.add(s);
-        if (s == 1) deep++; else if (s == 2) light++; else if (s == 3) rem++; else awake++;
+        if (s == 1)
+          deep++;
+        else if (s == 2)
+          light++;
+        else if (s == 3)
+          rem++;
+        else
+          awake++;
       }
       final ts = DateTime(year, month, day, hour, minute, second);
       return SleepRecord(
@@ -724,8 +792,10 @@ class BleService {
 
   void setFuzzyNameHints(List<String> hints) {
     // Normalize: trim and drop empties
-    _fuzzyNameHints = hints.map((h) => h.trim()).where((h) => h.isNotEmpty).toList();
-    _connectionStatusController.add('Fuzzy hints updated: ${_fuzzyNameHints.join(', ')}');
+    _fuzzyNameHints =
+        hints.map((h) => h.trim()).where((h) => h.isNotEmpty).toList();
+    _connectionStatusController
+        .add('Fuzzy hints updated: ${_fuzzyNameHints.join(', ')}');
   }
 
   // =============================
@@ -734,7 +804,8 @@ class BleService {
 
   /// Send 0x56 and collect parsed HRV records for [timeout].
   /// Returns zero or more structured [HrvRecord].
-  Future<List<HrvRecord>> fetchHrvData({Duration timeout = const Duration(seconds: 2)}) async {
+  Future<List<HrvRecord>> fetchHrvData(
+      {Duration timeout = const Duration(seconds: 2)}) async {
     final List<HrvRecord> out = [];
 
     // Temporary listener on messageStream to capture incoming hex and parse 0x56 records
@@ -851,18 +922,36 @@ class BleService {
   // 🧪 Multi-parameter comprehensive measurement (0x28)
   // Modes: 0x01 = HRV/BP, 0x02 = Heart Rate
   // BB: 0x01 start, 0x00 stop; CC DD: duration seconds (LE), min 30s enforced by device
-  Future<void> sendStartMultiParamMeasurement({required int mode, int durationSeconds = 30}) async {
+  Future<void> sendStartMultiParamMeasurement(
+      {required int mode, int durationSeconds = 30}) async {
     // Format: 28 AA BB 00 00 CC DD 00 00 00 00 00 00 00 00 CRC
     int dur = durationSeconds < 30 ? 30 : durationSeconds;
     int cc = dur & 0xFF;
     int dd = (dur >> 8) & 0xFF;
     List<int> bytes = [
-      0x28, mode & 0xFF, 0x01, 0x00, 0x00, cc, dd,
-      0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+      0x28,
+      mode & 0xFF,
+      0x01,
+      0x00,
+      0x00,
+      cc,
+      dd,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00
     ];
     int checksum = bytes.sublist(0, 15).fold(0, (sum, b) => sum + b) & 0xFF;
     bytes[15] = checksum;
-    String command = bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join('-').toUpperCase();
+    String command = bytes
+        .map((b) => b.toRadixString(16).padLeft(2, '0'))
+        .join('-')
+        .toUpperCase();
     await sendMessage(command);
   }
 
@@ -883,40 +972,85 @@ class BleService {
     // We only have AA, BB, CC then zeros per spec. Many firmwares accept AA=0x00 and the following
     // 14 bytes zero to mean "from beginning". We'll follow the example and send zeros.
     List<int> bytes = [
-      0x5C, 0x00, 0x00, 0x00,
-      0x00, 0x00, 0x00, 0x00,
-      0x00, 0x00, 0x00, 0x00,
-      0x00, 0x00, 0x00, 0x00,
+      0x5C,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
     ];
     int checksum = bytes.sublist(0, 15).fold(0, (sum, b) => sum + b) & 0xFF;
     bytes[15] = checksum;
-    String command = bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join('-').toUpperCase();
+    String command = bytes
+        .map((b) => b.toRadixString(16).padLeft(2, '0'))
+        .join('-')
+        .toUpperCase();
     await sendMessage(command);
   }
 
   Future<void> sendGetExerciseModeDataContinue() async {
     List<int> bytes = [
-      0x5C, 0x02, 0x00, 0x00,
-      0x00, 0x00, 0x00, 0x00,
-      0x00, 0x00, 0x00, 0x00,
-      0x00, 0x00, 0x00, 0x00,
+      0x5C,
+      0x02,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
     ];
     int checksum = bytes.sublist(0, 15).fold(0, (sum, b) => sum + b) & 0xFF;
     bytes[15] = checksum;
-    String command = bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join('-').toUpperCase();
+    String command = bytes
+        .map((b) => b.toRadixString(16).padLeft(2, '0'))
+        .join('-')
+        .toUpperCase();
     await sendMessage(command);
   }
 
   Future<void> sendDeleteExerciseModeDetails() async {
     List<int> bytes = [
-      0x5C, 0x99, 0x00, 0x00,
-      0x00, 0x00, 0x00, 0x00,
-      0x00, 0x00, 0x00, 0x00,
-      0x00, 0x00, 0x00, 0x00,
+      0x5C,
+      0x99,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
     ];
     int checksum = bytes.sublist(0, 15).fold(0, (sum, b) => sum + b) & 0xFF;
     bytes[15] = checksum;
-    String command = bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join('-').toUpperCase();
+    String command = bytes
+        .map((b) => b.toRadixString(16).padLeft(2, '0'))
+        .join('-')
+        .toUpperCase();
     await sendMessage(command);
   }
 
@@ -925,40 +1059,86 @@ class BleService {
   Future<void> sendGetRingTemperatureCommand() async {
     List<int> bytes = [
       0x14,
-      0x00, 0x00, 0x00, 0x00,
-      0x00, 0x00, 0x00, 0x00, 0x00,
-      0x00, 0x00, 0x00, 0x00, 0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
       0x00,
     ];
     int checksum = bytes.sublist(0, 15).fold(0, (sum, b) => sum + b) & 0xFF;
     bytes[15] = checksum;
-    String command = bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join('-').toUpperCase();
+    String command = bytes
+        .map((b) => b.toRadixString(16).padLeft(2, '0'))
+        .join('-')
+        .toUpperCase();
     await sendMessage(command);
   }
 
   Future<void> sendStopMultiParamMeasurement({required int mode}) async {
     // Format: 28 AA 00 00 00 00 00 00 00 00 00 00 00 00 00 CRC
     List<int> bytes = [
-      0x28, mode & 0xFF, 0x00, 0x00, 0x00,
-      0x00, 0x00, 0x00, 0x00, 0x00,
-      0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+      0x28,
+      mode & 0xFF,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00
     ];
     int checksum = bytes.sublist(0, 15).fold(0, (sum, b) => sum + b) & 0xFF;
     bytes[15] = checksum;
-    String command = bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join('-').toUpperCase();
+    String command = bytes
+        .map((b) => b.toRadixString(16).padLeft(2, '0'))
+        .join('-')
+        .toUpperCase();
     await sendMessage(command);
   }
 
   Future<void> sendQueryMultiParamStatus() async {
     // Format: 28 80 00 00 00 00 00 00 00 00 00 00 00 00 00 CRC
     List<int> bytes = [
-      0x28, 0x80, 0x00, 0x00, 0x00,
-      0x00, 0x00, 0x00, 0x00, 0x00,
-      0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+      0x28,
+      0x80,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00
     ];
     int checksum = bytes.sublist(0, 15).fold(0, (sum, b) => sum + b) & 0xFF;
     bytes[15] = checksum;
-    String command = bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join('-').toUpperCase();
+    String command = bytes
+        .map((b) => b.toRadixString(16).padLeft(2, '0'))
+        .join('-')
+        .toUpperCase();
     await sendMessage(command);
   }
 
@@ -979,7 +1159,8 @@ class BleService {
 
       _connectionStatusController.add('Bluetooth ready');
     } catch (e) {
-      _connectionStatusController.add('Bluetooth initialization failed: $e (Emulator)');
+      _connectionStatusController
+          .add('Bluetooth initialization failed: $e (Emulator)');
     }
   }
 
@@ -989,33 +1170,36 @@ class BleService {
       print('Already connecting or connected, skipping...');
       return;
     }
-    
+
     _isConnecting = true;
-    
+
     try {
       _connectionStatusController.add('Searching for Smart Ring...');
-      
+
       // First try to connect to a previously connected device
       List<BluetoothDevice> connectedDevices = FlutterBluePlus.connectedDevices;
       print('Found ${connectedDevices.length} connected devices');
       for (BluetoothDevice device in connectedDevices) {
-        print('Checking connected device: ${device.platformName} (${device.remoteId.str})');
+        print(
+            'Checking connected device: ${device.platformName} (${device.remoteId.str})');
         final devMacUp = device.remoteId.str.toUpperCase();
         final name = device.platformName;
-        final macMatch = (_targetMacAddress != null && _targetMacAddress!.isNotEmpty && devMacUp == _targetMacAddress);
-        final nameMatch = (_targetDeviceName != null && _targetDeviceName!.isNotEmpty &&
-                           name.toUpperCase().contains(_targetDeviceName!.toUpperCase()));
+        final macMatch = (_targetMacAddress != null &&
+            _targetMacAddress!.isNotEmpty &&
+            devMacUp == _targetMacAddress);
+        final nameMatch = (_targetDeviceName != null &&
+            _targetDeviceName!.isNotEmpty &&
+            name.toUpperCase().contains(_targetDeviceName!.toUpperCase()));
         if (macMatch || nameMatch) {
           print('Found target device in connected devices!');
           await _connectToDevice(device);
           return;
         }
       }
-      
+
       // If not found in connected devices, start scanning
       print('Starting scan for Smart Ring...');
       await scanAndConnect();
-      
     } catch (e) {
       print('Connection error: $e');
       _connectionStatusController.add('Connection failed: $e');
@@ -1028,44 +1212,50 @@ class BleService {
   Future<void> scanAndConnect() async {
     try {
       _connectionStatusController.add('Scanning...');
-      
+
       // Start scanning
       await FlutterBluePlus.startScan(timeout: const Duration(seconds: 10));
-      
+
       // Listen to scan results
       StreamSubscription<List<ScanResult>>? scanSubscription;
       Completer<void> scanCompleter = Completer<void>();
-      
+
       scanSubscription = FlutterBluePlus.scanResults.listen((results) async {
         for (ScanResult result in results) {
           String deviceName = result.device.platformName;
           String deviceMac = result.device.remoteId.str;
-          
+
           print('Found device: $deviceName ($deviceMac)');
-          
+
           // Check if this is our target device
-          bool macMatch = _targetMacAddress != null && _targetMacAddress!.isNotEmpty && deviceMac.toUpperCase() == _targetMacAddress;
-          bool nameMatch = _targetDeviceName != null && _targetDeviceName!.isNotEmpty &&
-                           deviceName.toUpperCase().contains(_targetDeviceName!.toUpperCase());
+          bool macMatch = _targetMacAddress != null &&
+              _targetMacAddress!.isNotEmpty &&
+              deviceMac.toUpperCase() == _targetMacAddress;
+          bool nameMatch = _targetDeviceName != null &&
+              _targetDeviceName!.isNotEmpty &&
+              deviceName
+                  .toUpperCase()
+                  .contains(_targetDeviceName!.toUpperCase());
           bool fuzzyMatch = false;
           // Optional fallback fuzzy match when no explicit target provided, using UI-provided hints
-          if (!macMatch && !nameMatch &&
+          if (!macMatch &&
+              !nameMatch &&
               (_targetMacAddress == null || _targetMacAddress!.isEmpty) &&
               (_targetDeviceName == null || _targetDeviceName!.isEmpty) &&
               _fuzzyNameHints.isNotEmpty) {
-            fuzzyMatch = _fuzzyNameHints.any((hint) => deviceName.contains(hint));
+            fuzzyMatch =
+                _fuzzyNameHints.any((hint) => deviceName.contains(hint));
           }
           if (macMatch || nameMatch || fuzzyMatch) {
-            
             print('Target device found: $deviceName ($deviceMac)');
-            
+
             // Stop scanning
             await FlutterBluePlus.stopScan();
             scanSubscription?.cancel();
-            
+
             // Connect to the device
             await _connectToDevice(result.device);
-            
+
             if (!scanCompleter.isCompleted) {
               scanCompleter.complete();
             }
@@ -1073,7 +1263,7 @@ class BleService {
           }
         }
       });
-      
+
       // Wait for scan to complete or timeout
       Timer(const Duration(seconds: 12), () {
         if (!scanCompleter.isCompleted) {
@@ -1084,11 +1274,10 @@ class BleService {
           }
         }
       });
-      
+
       await scanCompleter.future;
       scanSubscription?.cancel();
       await FlutterBluePlus.stopScan();
-      
     } catch (e) {
       _connectionStatusController.add('Scan failed: $e');
       await FlutterBluePlus.stopScan();
@@ -1097,13 +1286,16 @@ class BleService {
 
   Future<void> _connectToDevice(BluetoothDevice device) async {
     try {
-      _connectionStatusController.add('Connecting to ${device.platformName}...');
-      print('Attempting to connect to ${device.platformName} (${device.remoteId.str})');
-      
+      _connectionStatusController
+          .add('Connecting to ${device.platformName}...');
+      print(
+          'Attempting to connect to ${device.platformName} (${device.remoteId.str})');
+
       // Check if already connected
-      BluetoothConnectionState currentState = await device.connectionState.first;
+      BluetoothConnectionState currentState =
+          await device.connectionState.first;
       print('Current connection state: $currentState');
-      
+
       if (currentState != BluetoothConnectionState.connected) {
         // Connect to device
         print('Connecting to device...');
@@ -1111,32 +1303,32 @@ class BleService {
       } else {
         print('Device already connected!');
       }
-      
+
       _connectedDevice = device;
-      
+
       // Discover services
       _connectionStatusController.add('Discovering services...');
       print('Discovering services...');
       List<BluetoothService> services = await device.discoverServices();
       print('Found ${services.length} services');
-      
+
       // Find our target service and characteristics
       BluetoothService? targetService;
       print('Looking for service UUID: $serviceUuid');
       for (BluetoothService service in services) {
         String serviceUuidStr = service.uuid.toString().toLowerCase();
         print('Found service: $serviceUuidStr');
-        
+
         // Check both short form (fff0) and long form (0000fff0-0000-1000-8000-00805f9b34fb)
-        if (serviceUuidStr == serviceUuid.toLowerCase() || 
-            serviceUuidStr == 'fff0' || 
+        if (serviceUuidStr == serviceUuid.toLowerCase() ||
+            serviceUuidStr == 'fff0' ||
             serviceUuidStr.contains('fff0')) {
           targetService = service;
           print('Target service found! (UUID: $serviceUuidStr)');
           break;
         }
       }
-      
+
       if (targetService == null) {
         print('Target service not found! Available services:');
         for (BluetoothService service in services) {
@@ -1144,48 +1336,52 @@ class BleService {
         }
         throw Exception('Target service not found');
       }
-      
+
       // Find characteristics
       print('Looking for characteristics in service ${targetService.uuid}');
-      for (BluetoothCharacteristic characteristic in targetService.characteristics) {
+      for (BluetoothCharacteristic characteristic
+          in targetService.characteristics) {
         String charUuid = characteristic.uuid.toString().toLowerCase();
         print('Found characteristic: $charUuid');
-        
+
         // Check for write characteristic (fff6)
-        if (charUuid == writeCharacteristicUuid.toLowerCase() || 
-            charUuid == 'fff6' || 
+        if (charUuid == writeCharacteristicUuid.toLowerCase() ||
+            charUuid == 'fff6' ||
             charUuid.contains('fff6')) {
           _writeCharacteristic = characteristic;
           print('Write characteristic found: $charUuid');
-        } 
+        }
         // Check for notify characteristic (fff7)
-        else if (charUuid == notifyCharacteristicUuid.toLowerCase() || 
-                 charUuid == 'fff7' || 
-                 charUuid.contains('fff7')) {
+        else if (charUuid == notifyCharacteristicUuid.toLowerCase() ||
+            charUuid == 'fff7' ||
+            charUuid.contains('fff7')) {
           _notifyCharacteristic = characteristic;
           print('Notify characteristic found: $charUuid');
-          
+
           // Enable notifications
           await characteristic.setNotifyValue(true);
-          
+
           // Listen to notifications
           characteristic.lastValueStream.listen((value) {
             if (value.isNotEmpty) {
-              String hexString = value.map((byte) => byte.toRadixString(16).padLeft(2, '0')).join('-').toUpperCase();
+              String hexString = value
+                  .map((byte) => byte.toRadixString(16).padLeft(2, '0'))
+                  .join('-')
+                  .toUpperCase();
               String parsedResponse = _parseMultiRecordResponse(value);
               _messageController.add('$hexString\n$parsedResponse');
             }
           });
         }
       }
-      
+
       if (_writeCharacteristic == null || _notifyCharacteristic == null) {
         throw Exception('Required characteristics not found');
       }
-      
+
       _connectionStatusController.add('Connected');
       print('Successfully connected to Smart Ring!');
-      
+
       // Listen for disconnection
       device.connectionState.listen((state) {
         print('Connection state changed: $state');
@@ -1198,7 +1394,6 @@ class BleService {
           _startReconnectTimer();
         }
       });
-      
     } catch (e) {
       print('Connection to device failed: $e');
       _connectionStatusController.add('Connection failed: $e');
@@ -1212,7 +1407,7 @@ class BleService {
 
   void _startReconnectTimer() {
     if (_isDisposed) return;
-    
+
     _reconnectTimer?.cancel();
     _reconnectTimer = Timer(const Duration(seconds: 5), () {
       if (!_isDisposed && _connectedDevice == null) {
@@ -1226,25 +1421,25 @@ class BleService {
     if (_writeCharacteristic == null) {
       // Simulate sending in demo mode
       print('Demo mode: Simulating send of $hexMessage');
-      
+
       // Simulate a response after a short delay
       Timer(const Duration(milliseconds: 500), () {
         if (hexMessage.startsWith('56')) {
           // Simulate HRV data response
-          String response = '56-01-00-25-06-30-${DateTime.now().hour.toRadixString(16).padLeft(2, '0')}-${DateTime.now().minute.toRadixString(16).padLeft(2, '0')}-${DateTime.now().second.toRadixString(16).padLeft(2, '0')}-2F-00-52-28-75-40-A1';
+          String response =
+              '56-01-00-25-06-30-${DateTime.now().hour.toRadixString(16).padLeft(2, '0')}-${DateTime.now().minute.toRadixString(16).padLeft(2, '0')}-${DateTime.now().second.toRadixString(16).padLeft(2, '0')}-2F-00-52-28-75-40-A1';
           _messageController.add(response);
         }
       });
       return;
     }
-    
+
     try {
       // Parse hex string to bytes
       List<int> bytes = _parseHexString(hexMessage);
-      
+
       // Send the message
       await _writeCharacteristic!.write(bytes, withoutResponse: false);
-      
     } catch (e) {
       throw Exception('Failed to send message: $e');
     }
@@ -1260,11 +1455,32 @@ class BleService {
   Future<void> sendGetUserInfoCommand() async {
     // Send get user personal information command (0x42)
     // Format: 42-00-00-00-00-00-00-00-00-00-00-00-00-00-00-CRC
-    List<int> bytes = [0x42, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
+    List<int> bytes = [
+      0x42,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00
+    ];
     // Calculate checksum for first 15 bytes
-    int checksum = bytes.sublist(0, 15).fold(0, (sum, byte) => sum + byte) & 0xFF;
+    int checksum =
+        bytes.sublist(0, 15).fold(0, (sum, byte) => sum + byte) & 0xFF;
     bytes[15] = checksum;
-    String command = bytes.map((byte) => byte.toRadixString(16).padLeft(2, '0')).join('-').toUpperCase();
+    String command = bytes
+        .map((byte) => byte.toRadixString(16).padLeft(2, '0'))
+        .join('-')
+        .toUpperCase();
     await sendMessage(command);
   }
 
@@ -1299,61 +1515,215 @@ class BleService {
     List<int> ridBytes = rid.codeUnits;
 
     List<int> bytes = [
-      0x02, g, a, h, w, s,
-      ridBytes[0], ridBytes[1], ridBytes[2], ridBytes[3], ridBytes[4], ridBytes[5],
-      0x00, 0x00, 0x00, 0x00,
+      0x02,
+      g,
+      a,
+      h,
+      w,
+      s,
+      ridBytes[0],
+      ridBytes[1],
+      ridBytes[2],
+      ridBytes[3],
+      ridBytes[4],
+      ridBytes[5],
+      0x00,
+      0x00,
+      0x00,
+      0x00,
     ];
     int checksum = bytes.sublist(0, 15).fold(0, (sum, b) => sum + b) & 0xFF;
     bytes[15] = checksum;
-    String command = bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join('-').toUpperCase();
+    String command = bytes
+        .map((b) => b.toRadixString(16).padLeft(2, '0'))
+        .join('-')
+        .toUpperCase();
     await sendMessage(command);
   }
 
-  
+  int _decimalToBcd(int value) => ((value ~/ 10) << 4) | (value % 10);
+
+  // 🕐 Set Time Command (0x01)
+  Future<void> sendSetCurrentTimeCommand() async {
+    final now = DateTime.now();
+    final year = now.year - 2000;
+    // Observed on device: BCD-encoded values actually apply, while plain decimal may ACK without updating RTC.
+    List<int> bytes = [
+      0x01,
+      _decimalToBcd(year),
+      _decimalToBcd(now.month),
+      _decimalToBcd(now.day),
+      _decimalToBcd(now.hour),
+      _decimalToBcd(now.minute),
+      _decimalToBcd(now.second),
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+    ];
+    int checksum =
+        bytes.sublist(0, 15).fold(0, (sum, byte) => sum + byte) & 0xFF;
+    bytes[15] = checksum;
+    String command = bytes
+        .map((byte) => byte.toRadixString(16).padLeft(2, '0'))
+        .join('-')
+        .toUpperCase();
+    await sendMessage(command);
+  }
 
   // 🕐 Get Time Command (0x41)
   Future<void> sendGetTimeCommand() async {
-    List<int> bytes = [0x41, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
-    int checksum = bytes.sublist(0, 15).fold(0, (sum, byte) => sum + byte) & 0xFF;
+    List<int> bytes = [
+      0x41,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00
+    ];
+    int checksum =
+        bytes.sublist(0, 15).fold(0, (sum, byte) => sum + byte) & 0xFF;
     bytes[15] = checksum;
-    String command = bytes.map((byte) => byte.toRadixString(16).padLeft(2, '0')).join('-').toUpperCase();
+    String command = bytes
+        .map((byte) => byte.toRadixString(16).padLeft(2, '0'))
+        .join('-')
+        .toUpperCase();
     await sendMessage(command);
   }
 
   // 🔋 Get Battery Level Command (0x13)
   Future<void> sendGetBatteryCommand() async {
-    List<int> bytes = [0x13, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
-    int checksum = bytes.sublist(0, 15).fold(0, (sum, byte) => sum + byte) & 0xFF;
+    List<int> bytes = [
+      0x13,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00
+    ];
+    int checksum =
+        bytes.sublist(0, 15).fold(0, (sum, byte) => sum + byte) & 0xFF;
     bytes[15] = checksum;
-    String command = bytes.map((byte) => byte.toRadixString(16).padLeft(2, '0')).join('-').toUpperCase();
+    String command = bytes
+        .map((byte) => byte.toRadixString(16).padLeft(2, '0'))
+        .join('-')
+        .toUpperCase();
     await sendMessage(command);
   }
 
   // 📍 Get MAC Address Command (0x22)
   Future<void> sendGetMacAddressCommand() async {
-    List<int> bytes = [0x22, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
-    int checksum = bytes.sublist(0, 15).fold(0, (sum, byte) => sum + byte) & 0xFF;
+    List<int> bytes = [
+      0x22,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00
+    ];
+    int checksum =
+        bytes.sublist(0, 15).fold(0, (sum, byte) => sum + byte) & 0xFF;
     bytes[15] = checksum;
-    String command = bytes.map((byte) => byte.toRadixString(16).padLeft(2, '0')).join('-').toUpperCase();
+    String command = bytes
+        .map((byte) => byte.toRadixString(16).padLeft(2, '0'))
+        .join('-')
+        .toUpperCase();
     await sendMessage(command);
   }
 
   // 🔧 Get Firmware Version Command (0x27)
   Future<void> sendGetFirmwareVersionCommand() async {
-    List<int> bytes = [0x27, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
-    int checksum = bytes.sublist(0, 15).fold(0, (sum, byte) => sum + byte) & 0xFF;
+    List<int> bytes = [
+      0x27,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00
+    ];
+    int checksum =
+        bytes.sublist(0, 15).fold(0, (sum, byte) => sum + byte) & 0xFF;
     bytes[15] = checksum;
-    String command = bytes.map((byte) => byte.toRadixString(16).padLeft(2, '0')).join('-').toUpperCase();
+    String command = bytes
+        .map((byte) => byte.toRadixString(16).padLeft(2, '0'))
+        .join('-')
+        .toUpperCase();
     await sendMessage(command);
   }
 
   // ⏱️ Get Measurement Interval Command (0x2B)
   Future<void> sendGetMeasurementIntervalCommand(int measurementType) async {
     // measurementType: 1=Heart Rate, 2=Blood Oxygen, 4=HRV
-    List<int> bytes = [0x2B, measurementType, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
-    int checksum = bytes.sublist(0, 15).fold(0, (sum, byte) => sum + byte) & 0xFF;
+    List<int> bytes = [
+      0x2B,
+      measurementType,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00
+    ];
+    int checksum =
+        bytes.sublist(0, 15).fold(0, (sum, byte) => sum + byte) & 0xFF;
     bytes[15] = checksum;
-    String command = bytes.map((byte) => byte.toRadixString(16).padLeft(2, '0')).join('-').toUpperCase();
+    String command = bytes
+        .map((byte) => byte.toRadixString(16).padLeft(2, '0'))
+        .join('-')
+        .toUpperCase();
     await sendMessage(command);
   }
 
@@ -1383,7 +1753,10 @@ class BleService {
     int b6 = bcd(endMinute & 0xFF);
     // Variant: full-day window uses FF-marker layout seen in getter responses
     // If 00:00 - 23:59, send [3]=startHour, [4]=endHour, [5]=endMinute, [6]=0xFF
-    bool useFfVariant = (startHour == 0) && (startMinute == 0) && (endHour == 23) && (endMinute == 59);
+    bool useFfVariant = (startHour == 0) &&
+        (startMinute == 0) &&
+        (endHour == 23) &&
+        (endMinute == 59);
     if (useFfVariant) {
       b3 = bcd(0);
       b4 = bcd(23);
@@ -1405,121 +1778,377 @@ class BleService {
       0x00, 0x00, 0x00, 0x00, 0x00,
       0x00,
     ];
-    int checksum = bytes.sublist(0, 15).fold(0, (sum, byte) => sum + byte) & 0xFF;
+    int checksum =
+        bytes.sublist(0, 15).fold(0, (sum, byte) => sum + byte) & 0xFF;
     bytes[15] = checksum;
-    String command = bytes.map((byte) => byte.toRadixString(16).padLeft(2, '0')).join('-').toUpperCase();
+    String command = bytes
+        .map((byte) => byte.toRadixString(16).padLeft(2, '0'))
+        .join('-')
+        .toUpperCase();
     await sendMessage(command);
   }
 
   // 📡 Real-time Step/HR/SpO2/Temperature Transmission Mode (0x09)
   Future<void> sendStartRealtimeMode({bool enableTemperature = true}) async {
     // 0x09 AA BB ... where AA=1 start, BB=1 enable temp, 0 disable
-    List<int> bytes = [0x09, 0x01, enableTemperature ? 0x01 : 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
-    int checksum = bytes.sublist(0, 15).fold(0, (sum, byte) => sum + byte) & 0xFF;
+    List<int> bytes = [
+      0x09,
+      0x01,
+      enableTemperature ? 0x01 : 0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00
+    ];
+    int checksum =
+        bytes.sublist(0, 15).fold(0, (sum, byte) => sum + byte) & 0xFF;
     bytes[15] = checksum;
-    String command = bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join('-').toUpperCase();
+    String command = bytes
+        .map((b) => b.toRadixString(16).padLeft(2, '0'))
+        .join('-')
+        .toUpperCase();
     await sendMessage(command);
   }
 
   Future<void> sendStopRealtimeMode() async {
     // 0x09 AA BB ... where AA=0 stop, BB can be 0
-    List<int> bytes = [0x09, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
-    int checksum = bytes.sublist(0, 15).fold(0, (sum, byte) => sum + byte) & 0xFF;
+    List<int> bytes = [
+      0x09,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00
+    ];
+    int checksum =
+        bytes.sublist(0, 15).fold(0, (sum, byte) => sum + byte) & 0xFF;
     bytes[15] = checksum;
-    String command = bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join('-').toUpperCase();
+    String command = bytes
+        .map((b) => b.toRadixString(16).padLeft(2, '0'))
+        .join('-')
+        .toUpperCase();
     await sendMessage(command);
   }
 
   // 🏃 Query Exercise Status Command (0x19)
   Future<void> sendGetExerciseDataCommand() async {
     // 0x19 AA BB CC DD ... where AA=5 (Query status), BB=0 (default), CC=0, DD=0
-    List<int> bytes = [0x19, 0x05, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
-    int checksum = bytes.sublist(0, 15).fold(0, (sum, byte) => sum + byte) & 0xFF;
+    List<int> bytes = [
+      0x19,
+      0x05,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00
+    ];
+    int checksum =
+        bytes.sublist(0, 15).fold(0, (sum, byte) => sum + byte) & 0xFF;
     bytes[15] = checksum;
-    String command = bytes.map((byte) => byte.toRadixString(16).padLeft(2, '0')).join('-').toUpperCase();
+    String command = bytes
+        .map((byte) => byte.toRadixString(16).padLeft(2, '0'))
+        .join('-')
+        .toUpperCase();
     await sendMessage(command);
   }
 
   // 🏃 Start Exercise Command (0x19)
   Future<void> sendStartExerciseCommand() async {
     // 0x19 AA BB CC DD ... where AA=1 (Start), BB=0 (Running), CC=0, DD=0
-    List<int> bytes = [0x19, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
-    int checksum = bytes.sublist(0, 15).fold(0, (sum, byte) => sum + byte) & 0xFF;
+    List<int> bytes = [
+      0x19,
+      0x01,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00
+    ];
+    int checksum =
+        bytes.sublist(0, 15).fold(0, (sum, byte) => sum + byte) & 0xFF;
     bytes[15] = checksum;
-    String command = bytes.map((byte) => byte.toRadixString(16).padLeft(2, '0')).join('-').toUpperCase();
+    String command = bytes
+        .map((byte) => byte.toRadixString(16).padLeft(2, '0'))
+        .join('-')
+        .toUpperCase();
     await sendMessage(command);
   }
 
   // 🛑 End Exercise Command (0x19)
   Future<void> sendEndExerciseCommand() async {
     // 0x19 AA BB CC DD ... where AA=4 (End), BB=0 (default), CC=0, DD=0
-    List<int> bytes = [0x19, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
-    int checksum = bytes.sublist(0, 15).fold(0, (sum, byte) => sum + byte) & 0xFF;
+    List<int> bytes = [
+      0x19,
+      0x04,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00
+    ];
+    int checksum =
+        bytes.sublist(0, 15).fold(0, (sum, byte) => sum + byte) & 0xFF;
     bytes[15] = checksum;
-    String command = bytes.map((byte) => byte.toRadixString(16).padLeft(2, '0')).join('-').toUpperCase();
+    String command = bytes
+        .map((byte) => byte.toRadixString(16).padLeft(2, '0'))
+        .join('-')
+        .toUpperCase();
     await sendMessage(command);
   }
 
   // 👣 Get Total Step Count Command (0x51)
   Future<void> sendGetTotalStepCountCommand() async {
-    List<int> bytes = [0x51, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
-    int checksum = bytes.sublist(0, 15).fold(0, (sum, byte) => sum + byte) & 0xFF;
+    List<int> bytes = [
+      0x51,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00
+    ];
+    int checksum =
+        bytes.sublist(0, 15).fold(0, (sum, byte) => sum + byte) & 0xFF;
     bytes[15] = checksum;
-    String command = bytes.map((byte) => byte.toRadixString(16).padLeft(2, '0')).join('-').toUpperCase();
+    String command = bytes
+        .map((byte) => byte.toRadixString(16).padLeft(2, '0'))
+        .join('-')
+        .toUpperCase();
     await sendMessage(command);
   }
 
   // 📊 Get Detailed Step Count Command (0x52)
   Future<void> sendGetDetailedStepCountCommand() async {
-    List<int> bytes = [0x52, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
-    int checksum = bytes.sublist(0, 15).fold(0, (sum, byte) => sum + byte) & 0xFF;
+    List<int> bytes = [
+      0x52,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00
+    ];
+    int checksum =
+        bytes.sublist(0, 15).fold(0, (sum, byte) => sum + byte) & 0xFF;
     bytes[15] = checksum;
-    String command = bytes.map((byte) => byte.toRadixString(16).padLeft(2, '0')).join('-').toUpperCase();
+    String command = bytes
+        .map((byte) => byte.toRadixString(16).padLeft(2, '0'))
+        .join('-')
+        .toUpperCase();
     await sendMessage(command);
   }
 
   // 😴 Get Sleep Data Command (0x53)
   Future<void> sendGetSleepDataCommand() async {
-    List<int> bytes = [0x53, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
-    int checksum = bytes.sublist(0, 15).fold(0, (sum, byte) => sum + byte) & 0xFF;
+    List<int> bytes = [
+      0x53,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00
+    ];
+    int checksum =
+        bytes.sublist(0, 15).fold(0, (sum, byte) => sum + byte) & 0xFF;
     bytes[15] = checksum;
-    String command = bytes.map((byte) => byte.toRadixString(16).padLeft(2, '0')).join('-').toUpperCase();
+    String command = bytes
+        .map((byte) => byte.toRadixString(16).padLeft(2, '0'))
+        .join('-')
+        .toUpperCase();
     await sendMessage(command);
   }
 
   // ❤️ Get Detailed Heart Rate Command (0x54)
   Future<void> sendGetDetailedHeartRateCommand() async {
-    List<int> bytes = [0x54, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
-    int checksum = bytes.sublist(0, 15).fold(0, (sum, byte) => sum + byte) & 0xFF;
+    List<int> bytes = [
+      0x54,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00
+    ];
+    int checksum =
+        bytes.sublist(0, 15).fold(0, (sum, byte) => sum + byte) & 0xFF;
     bytes[15] = checksum;
-    String command = bytes.map((byte) => byte.toRadixString(16).padLeft(2, '0')).join('-').toUpperCase();
+    String command = bytes
+        .map((byte) => byte.toRadixString(16).padLeft(2, '0'))
+        .join('-')
+        .toUpperCase();
     await sendMessage(command);
   }
 
   // 💓 Get Heart Rate History Command (0x55)
   Future<void> sendGetHeartRateHistoryCommand() async {
-    List<int> bytes = [0x55, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
-    int checksum = bytes.sublist(0, 15).fold(0, (sum, byte) => sum + byte) & 0xFF;
+    List<int> bytes = [
+      0x55,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00
+    ];
+    int checksum =
+        bytes.sublist(0, 15).fold(0, (sum, byte) => sum + byte) & 0xFF;
     bytes[15] = checksum;
-    String command = bytes.map((byte) => byte.toRadixString(16).padLeft(2, '0')).join('-').toUpperCase();
+    String command = bytes
+        .map((byte) => byte.toRadixString(16).padLeft(2, '0'))
+        .join('-')
+        .toUpperCase();
     await sendMessage(command);
   }
 
   // 🌡️ Get Temperature Data Command (0x62)
   Future<void> sendGetTemperatureDataCommand() async {
-    List<int> bytes = [0x62, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
-    int checksum = bytes.sublist(0, 15).fold(0, (sum, byte) => sum + byte) & 0xFF;
+    List<int> bytes = [
+      0x62,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00
+    ];
+    int checksum =
+        bytes.sublist(0, 15).fold(0, (sum, byte) => sum + byte) & 0xFF;
     bytes[15] = checksum;
-    String command = bytes.map((byte) => byte.toRadixString(16).padLeft(2, '0')).join('-').toUpperCase();
+    String command = bytes
+        .map((byte) => byte.toRadixString(16).padLeft(2, '0'))
+        .join('-')
+        .toUpperCase();
     await sendMessage(command);
   }
 
   // 🩸 Get Blood Oxygen Data Command (0x66)
   Future<void> sendGetBloodOxygenDataCommand() async {
-    List<int> bytes = [0x66, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
-    int checksum = bytes.sublist(0, 15).fold(0, (sum, byte) => sum + byte) & 0xFF;
+    List<int> bytes = [
+      0x66,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00
+    ];
+    int checksum =
+        bytes.sublist(0, 15).fold(0, (sum, byte) => sum + byte) & 0xFF;
     bytes[15] = checksum;
-    String command = bytes.map((byte) => byte.toRadixString(16).padLeft(2, '0')).join('-').toUpperCase();
+    String command = bytes
+        .map((byte) => byte.toRadixString(16).padLeft(2, '0'))
+        .join('-')
+        .toUpperCase();
     await sendMessage(command);
   }
 
@@ -1529,7 +2158,8 @@ class BleService {
 
   // Helper: convert 4 bytes (LE) to IEEE754 float32
   double _toFloat32Le(int b0, int b1, int b2, int b3) {
-    final bytes = Uint8List.fromList([b0 & 0xFF, b1 & 0xFF, b2 & 0xFF, b3 & 0xFF]);
+    final bytes =
+        Uint8List.fromList([b0 & 0xFF, b1 & 0xFF, b2 & 0xFF, b3 & 0xFF]);
     return ByteData.sublistView(bytes).getFloat32(0, Endian.little);
   }
 
@@ -1581,15 +2211,15 @@ class BleService {
 
   String _parseMultiRecordResponse(List<int> bytes) {
     if (bytes.isEmpty) return 'Empty response';
-    
+
     // Check if this is a multi-record response (multiple commands concatenated)
     List<String> parsedRecords = [];
     int offset = 0;
-    
+
     // First, try to detect the pattern by looking for repeated command bytes
     int firstCommand = bytes[0];
     List<int> commandPositions = [0];
-    
+
     // Preferred: split strictly by 16-byte frames validated by checksum
     List<String> checksumFramed = [];
     if (bytes.length >= 32) {
@@ -1613,7 +2243,11 @@ class BleService {
 
     if (checksumFramed.isNotEmpty) {
       return '📊 Multi-Record Response (${checksumFramed.length} records):\n\n' +
-          checksumFramed.asMap().entries.map((entry) => '📋 Record ${entry.key + 1}:\n${entry.value}').join('\n\n');
+          checksumFramed
+              .asMap()
+              .entries
+              .map((entry) => '📋 Record ${entry.key + 1}:\n${entry.value}')
+              .join('\n\n');
     }
 
     // Special framing for 0x5C: records are 27 bytes (1 cmd + 25 payload + 1 CRC) with per-record checksum
@@ -1645,7 +2279,11 @@ class BleService {
       }
       if (parts.isNotEmpty) {
         return '📊 Multi-Record Response (${parts.length} records):\n\n' +
-            parts.asMap().entries.map((e) => '📋 Record ${e.key + 1}:\n${e.value}').join('\n\n');
+            parts
+                .asMap()
+                .entries
+                .map((e) => '📋 Record ${e.key + 1}:\n${e.value}')
+                .join('\n\n');
       }
       // If 27-byte framing failed (e.g., single record or CRC-tolerant case), parse as a single response
       return _parseResponse(bytes);
@@ -1679,23 +2317,25 @@ class BleService {
       }
       if (parsedRecords.length > 15) break;
     }
-    
+
     if (parsedRecords.isNotEmpty) {
-      return '📊 Multi-Record Response (${parsedRecords.length} records):\n\n' + 
-             parsedRecords.asMap().entries.map((entry) => 
-               '📋 Record ${entry.key + 1}:\n${entry.value}'
-             ).join('\n\n');
+      return '📊 Multi-Record Response (${parsedRecords.length} records):\n\n' +
+          parsedRecords
+              .asMap()
+              .entries
+              .map((entry) => '📋 Record ${entry.key + 1}:\n${entry.value}')
+              .join('\n\n');
     }
-    
+
     // Fall back to single record parsing
     return _parseResponse(bytes);
   }
 
   String _parseResponse(List<int> bytes) {
     if (bytes.isEmpty) return 'Empty response';
-    
+
     int command = bytes[0];
-    
+
     switch (command) {
       case 0x5C: // Exercise mode history/detail (variable-length)
         // Very short EOF/No-Data indicator observed as 5C-FF
@@ -1720,15 +2360,17 @@ class BleService {
               subStr = 'Continue (0x02)';
               break;
             default:
-              subStr = 'Subcmd 0x${sub.toRadixString(16).padLeft(2, '0').toUpperCase()}';
+              subStr =
+                  'Subcmd 0x${sub.toRadixString(16).padLeft(2, '0').toUpperCase()}';
           }
           return '🏃 Exercise Control ACK (0x5C) • $subStr\n'
-                 '🔢 Status: 0x${status.toRadixString(16).padLeft(2, '0').toUpperCase()} • '
-                 '${crcOk ? '✅ CRC OK' : '⚠️ CRC Mismatch'}';
+              '🔢 Status: 0x${status.toRadixString(16).padLeft(2, '0').toUpperCase()} • '
+              '${crcOk ? '✅ CRC OK' : '⚠️ CRC Mismatch'}';
         }
 
         // Try to parse one or more 27-byte records (1 cmd + 25 payload + 1 tail)
-        if (bytes.length < 27) return '🏃 Exercise Mode Data (0x5C): insufficient length (${bytes.length})';
+        if (bytes.length < 27)
+          return '🏃 Exercise Mode Data (0x5C): insufficient length (${bytes.length})';
         final records = <String>[];
         int offset = 0;
         int safety = 0;
@@ -1761,18 +2403,22 @@ class BleService {
           int paceMin = _bcdToDecimal(chunk[15]);
           int paceSec = _bcdToDecimal(chunk[16]);
           // Calories float32 LE at [17..20]
-          double kcal = _toFloat32Le(chunk[17], chunk[18], chunk[19], chunk[20]);
+          double kcal =
+              _toFloat32Le(chunk[17], chunk[18], chunk[19], chunk[20]);
           // Distance float32 LE (km) at [21..24]
-          double distKm = _toFloat32Le(chunk[21], chunk[22], chunk[23], chunk[24]);
+          double distKm =
+              _toFloat32Le(chunk[21], chunk[22], chunk[23], chunk[24]);
           // Tail bytes [21..26] observed; checksum variant unknown → do not flag mismatch
 
           String typeStr = _exerciseTypeString(type);
-          String ts = '${year.toString().padLeft(4, '0')}-${month.toString().padLeft(2, '0')}-${day.toString().padLeft(2, '0')} '
-                      '${hour.toString().padLeft(2, '0')}:${minute.toString().padLeft(2, '0')}:${second.toString().padLeft(2, '0')}';
-          String rec = '📄 ID: ${id1.toString().padLeft(2, '0')}${id2.toRadixString(16).padLeft(2, '0').toUpperCase()} • '
-                       '🕒 $ts • 🏷️ $typeStr • ❤️ $hr bpm\n'
-                       '⏱️ ${_formatDuration(dur)} • 🦶 $steps steps • 🏃 Pace ${paceMin}:${paceSec.toString().padLeft(2, '0')}/km\n'
-                       '🔥 ${kcal.toStringAsFixed(1)} kcal • 📏 ${distKm.toStringAsFixed(2)} km';
+          String ts =
+              '${year.toString().padLeft(4, '0')}-${month.toString().padLeft(2, '0')}-${day.toString().padLeft(2, '0')} '
+              '${hour.toString().padLeft(2, '0')}:${minute.toString().padLeft(2, '0')}:${second.toString().padLeft(2, '0')}';
+          String rec =
+              '📄 ID: ${id1.toString().padLeft(2, '0')}${id2.toRadixString(16).padLeft(2, '0').toUpperCase()} • '
+              '🕒 $ts • 🏷️ $typeStr • ❤️ $hr bpm\n'
+              '⏱️ ${_formatDuration(dur)} • 🦶 $steps steps • 🏃 Pace ${paceMin}:${paceSec.toString().padLeft(2, '0')}/km\n'
+              '🔥 ${kcal.toStringAsFixed(1)} kcal • 📏 ${distKm.toStringAsFixed(2)} km';
           records.add(rec);
           offset += 27;
         }
@@ -1782,7 +2428,8 @@ class BleService {
         if (records.length == 1) {
           return '🏃 Exercise Mode Data (0x5C)\n${records.first}';
         }
-        final buf = StringBuffer('📊 Exercise Mode Data (0x5C) • ${records.length} records\n');
+        final buf = StringBuffer(
+            '📊 Exercise Mode Data (0x5C) • ${records.length} records\n');
         for (int i = 0; i < records.length; i++) {
           buf.writeln('--- Record ${i + 1} ---');
           buf.writeln(records[i]);
@@ -1816,19 +2463,20 @@ class BleService {
           double ntc3 = ntc3Raw / 10.0;
 
           return '🌡️ Ring Temperature (0x14):\n'
-                 '🔥 Highest: ${highestC.toStringAsFixed(1)} °C\n'
-                 '🔢 Decimal fmt: ${decimalC.toStringAsFixed(1)} °C\n'
-                 '🧪 NTC1: ${ntc1.toStringAsFixed(1)} °C, '
-                 'NTC2: ${ntc2.toStringAsFixed(1)} °C, '
-                 'NTC3: ${ntc3.toStringAsFixed(1)} °C';
+              '🔥 Highest: ${highestC.toStringAsFixed(1)} °C\n'
+              '🔢 Decimal fmt: ${decimalC.toStringAsFixed(1)} °C\n'
+              '🧪 NTC1: ${ntc1.toStringAsFixed(1)} °C, '
+              'NTC2: ${ntc2.toStringAsFixed(1)} °C, '
+              'NTC3: ${ntc3.toStringAsFixed(1)} °C';
         }
         break;
-      
+
       case 0x2A: // Set measurement interval ACK/response
         if (bytes.length >= 16) {
           int calc = bytes.sublist(0, 15).fold(0, (s, b) => s + b) & 0xFF;
           bool crcOk = (bytes[15] == calc);
-          return '✅ Set Measurement Interval (0x2A) ACK\n' + (crcOk ? 'CRC OK' : '⚠️ CRC mismatch');
+          return '✅ Set Measurement Interval (0x2A) ACK\n' +
+              (crcOk ? 'CRC OK' : '⚠️ CRC mismatch');
         }
         break;
       case 0x19: // Exercise status response
@@ -1850,25 +2498,30 @@ class BleService {
 
           if (status == 0x01) {
             return '🏃 Exercise Status:\n'
-                   '✅ Exercise mode is ACTIVE\n'
-                   '🕰️ Started: $year-${month.toString().padLeft(2, '0')}-${day.toString().padLeft(2, '0')} '
-                   '${hour.toString().padLeft(2, '0')}:${minute.toString().padLeft(2, '0')}:${second.toString().padLeft(2, '0')}'
-                   '${crcOk ? '' : '\n⚠️ CRC mismatch'}';
+                '✅ Exercise mode is ACTIVE\n'
+                '🕰️ Started: $year-${month.toString().padLeft(2, '0')}-${day.toString().padLeft(2, '0')} '
+                '${hour.toString().padLeft(2, '0')}:${minute.toString().padLeft(2, '0')}:${second.toString().padLeft(2, '0')}'
+                '${crcOk ? '' : '\n⚠️ CRC mismatch'}';
           } else {
             // If not active, still show last timestamp if any
-            bool hasTs = (yy != 0 || bytes[4] != 0 || bytes[5] != 0 || bytes[6] != 0 || bytes[7] != 0 || bytes[8] != 0);
+            bool hasTs = (yy != 0 ||
+                bytes[4] != 0 ||
+                bytes[5] != 0 ||
+                bytes[6] != 0 ||
+                bytes[7] != 0 ||
+                bytes[8] != 0);
             if (hasTs) {
               return '🏃 Exercise Status:\n'
-                     '⏹️ Exercise mode ENDED\n'
-                     '🕰️ Last session ended: $year-${month.toString().padLeft(2, '0')}-${day.toString().padLeft(2, '0')} '
-                     '${hour.toString().padLeft(2, '0')}:${minute.toString().padLeft(2, '0')}:${second.toString().padLeft(2, '0')}'
-                     '${crcOk ? '' : '\n⚠️ CRC mismatch'}';
+                  '⏹️ Exercise mode ENDED\n'
+                  '🕰️ Last session ended: $year-${month.toString().padLeft(2, '0')}-${day.toString().padLeft(2, '0')} '
+                  '${hour.toString().padLeft(2, '0')}:${minute.toString().padLeft(2, '0')}:${second.toString().padLeft(2, '0')}'
+                  '${crcOk ? '' : '\n⚠️ CRC mismatch'}';
             }
             return '🏃 Exercise Status:\n❌ No active exercise mode';
           }
         }
         break;
-        
+
       case 0x09: // Real-time Step/HR/SpO2/Temperature response
         // Two possible layouts have been observed.
         // A) 16-byte frame (with checksum): 09 S1 S2 S3 S4 C1 C2 C3 C4 D1 D2 D3 D4 HR T1 T2 [CRC]
@@ -1878,32 +2531,47 @@ class BleService {
           // Verify checksum if present (we're called with exactly 16 bytes from checksum framing)
           int calc = bytes.sublist(0, 15).fold(0, (s, b) => s + b) & 0xFF;
           if (bytes[15] == calc) {
-            int steps = bytes[1] | (bytes[2] << 8) | (bytes[3] << 16) | (bytes[4] << 24);
-            int calRaw = bytes[5] | (bytes[6] << 8) | (bytes[7] << 16) | (bytes[8] << 24);
+            int steps = bytes[1] |
+                (bytes[2] << 8) |
+                (bytes[3] << 16) |
+                (bytes[4] << 24);
+            int calRaw = bytes[5] |
+                (bytes[6] << 8) |
+                (bytes[7] << 16) |
+                (bytes[8] << 24);
             double calories = calRaw / 100.0;
-            int distRaw = bytes[9] | (bytes[10] << 8) | (bytes[11] << 16) | (bytes[12] << 24);
+            int distRaw = bytes[9] |
+                (bytes[10] << 8) |
+                (bytes[11] << 16) |
+                (bytes[12] << 24);
             double distanceKm = distRaw / 100.0;
             int heartRate = bytes[13];
             int t1 = bytes[14];
-            int t2 = 0; // No room for full temp or SpO2 in 16 payload if CRC occupies last; some firmwares pack temp in 1 byte.
+            int t2 =
+                0; // No room for full temp or SpO2 in 16 payload if CRC occupies last; some firmwares pack temp in 1 byte.
             double temp = t1 / 10.0;
             return '📡 Real-time Mode:\n'
-                   '🟢 Stream ACTIVE\n'
-                   '👣 Steps: $steps\n'
-                   '🔥 Calories: ${calories.toStringAsFixed(2)} kcal\n'
-                   '📏 Distance: ${distanceKm.toStringAsFixed(2)} km\n'
-                   '❤️ HR: $heartRate BPM\n'
-                   '🌡️ Temperature: ${temp.toStringAsFixed(1)} °C';
+                '🟢 Stream ACTIVE\n'
+                '👣 Steps: $steps\n'
+                '🔥 Calories: ${calories.toStringAsFixed(2)} kcal\n'
+                '📏 Distance: ${distanceKm.toStringAsFixed(2)} km\n'
+                '❤️ HR: $heartRate BPM\n'
+                '🌡️ Temperature: ${temp.toStringAsFixed(1)} °C';
           }
         } else if (bytes.length >= 26) {
           // Some notifications aggregate extra padding/frames; only use first 26 bytes per doc
           if (bytes.length > 26) {
             bytes = bytes.sublist(0, 26);
           }
-          int steps = bytes[1] | (bytes[2] << 8) | (bytes[3] << 16) | (bytes[4] << 24);
-          int calRaw = bytes[5] | (bytes[6] << 8) | (bytes[7] << 16) | (bytes[8] << 24);
+          int steps =
+              bytes[1] | (bytes[2] << 8) | (bytes[3] << 16) | (bytes[4] << 24);
+          int calRaw =
+              bytes[5] | (bytes[6] << 8) | (bytes[7] << 16) | (bytes[8] << 24);
           double calories = calRaw / 100.0;
-          int distRaw = bytes[9] | (bytes[10] << 8) | (bytes[11] << 16) | (bytes[12] << 24);
+          int distRaw = bytes[9] |
+              (bytes[10] << 8) |
+              (bytes[11] << 16) |
+              (bytes[12] << 24);
           double distanceKm = distRaw / 100.0;
           int heartRate = bytes[21];
           int t1 = bytes[22];
@@ -1911,13 +2579,13 @@ class BleService {
           double tempDelta = (t1 | (t2 << 8)) / 10.0;
           int spo2 = bytes[24];
           return '📡 Real-time Mode:\n'
-                 '🟢 Stream ACTIVE\n'
-                 '👣 Steps: $steps\n'
-                 '🔥 Calories: ${calories.toStringAsFixed(2)} kcal\n'
-                 '📏 Distance: ${distanceKm.toStringAsFixed(2)} km\n'
-                 '❤️ HR: $heartRate BPM\n'
-                 '🌡️ Temperature: ${tempDelta.toStringAsFixed(1)} °C\n'
-                 '🩸 SpO2: $spo2%';
+              '🟢 Stream ACTIVE\n'
+              '👣 Steps: $steps\n'
+              '🔥 Calories: ${calories.toStringAsFixed(2)} kcal\n'
+              '📏 Distance: ${distanceKm.toStringAsFixed(2)} km\n'
+              '❤️ HR: $heartRate BPM\n'
+              '🌡️ Temperature: ${tempDelta.toStringAsFixed(1)} °C\n'
+              '🩸 SpO2: $spo2%';
         }
         break;
 
@@ -1925,12 +2593,18 @@ class BleService {
         if (bytes.length >= 16) {
           int heartRate = bytes[1];
           // S1 S2 S3 S4: Step count (little-endian)
-          int steps = bytes[2] | (bytes[3] << 8) | (bytes[4] << 16) | (bytes[5] << 24);
+          int steps =
+              bytes[2] | (bytes[3] << 8) | (bytes[4] << 16) | (bytes[5] << 24);
           // K1 K2 K3 K4: Calories (IEEE 754 32-bit float, little-endian)
-          var caloriesBytes = Uint8List.fromList([bytes[6], bytes[7], bytes[8], bytes[9]]);
-          double calories = ByteData.sublistView(caloriesBytes).getFloat32(0, Endian.little);
+          var caloriesBytes =
+              Uint8List.fromList([bytes[6], bytes[7], bytes[8], bytes[9]]);
+          double calories =
+              ByteData.sublistView(caloriesBytes).getFloat32(0, Endian.little);
           // T1 T2 T3 T4: Exercise duration (little-endian)
-          int duration = bytes[10] | (bytes[11] << 8) | (bytes[12] << 16) | (bytes[13] << 24);
+          int duration = bytes[10] |
+              (bytes[11] << 8) |
+              (bytes[12] << 16) |
+              (bytes[13] << 24);
           // D1 D2 D3 D4: Distance (IEEE 754 32-bit float, little-endian). Protocol doc lists as D1..D4.
           // Empirically, interpreting as float resolves unrealistic large integers.
           var distanceBytes = Uint8List.fromList([
@@ -1940,26 +2614,27 @@ class BleService {
             bytes.length > 17 ? bytes[17] : 0,
           ]);
           // Treat the float as kilometers and convert to meters (matches observed ranges)
-          double distanceKm = ByteData.sublistView(distanceBytes).getFloat32(0, Endian.little);
+          double distanceKm =
+              ByteData.sublistView(distanceBytes).getFloat32(0, Endian.little);
           double distance = distanceKm * 1000.0;
-          
+
           String status = '';
           if (heartRate == 0xFF) {
             status = '🛑 Exercise mode ended';
           } else {
             status = '🏃 Exercise in progress';
           }
-          
+
           return '🏃 Live Exercise Data:\n'
-                 '$status\n'
-                 '❤️ Heart Rate: ${heartRate == 0xFF ? 'N/A' : '$heartRate BPM'}\n'
-                 '👣 Steps: $steps\n'
-                 '🔥 Calories: ${calories.toStringAsFixed(1)} kcal\n'
-                 '⏱️ Duration: ${(duration / 60).toStringAsFixed(1)} min\n'
-                 '📏 Distance: ${distance.toStringAsFixed(1)} m';
+              '$status\n'
+              '❤️ Heart Rate: ${heartRate == 0xFF ? 'N/A' : '$heartRate BPM'}\n'
+              '👣 Steps: $steps\n'
+              '🔥 Calories: ${calories.toStringAsFixed(1)} kcal\n'
+              '⏱️ Duration: ${(duration / 60).toStringAsFixed(1)} min\n'
+              '📏 Distance: ${distance.toStringAsFixed(1)} m';
         }
         break;
-        
+
       case 0x56: // HRV data response
         if (bytes.length >= 15) {
           int id1 = bytes[1];
@@ -1972,24 +2647,23 @@ class BleService {
           int minute = _bcdToDecimal(bytes[7]);
           int second = _bcdToDecimal(bytes[8]);
 
-
-          int hrv = bytes[9];        // D1: HRV value
+          int hrv = bytes[9]; // D1: HRV value
           // bytes[10] is always 00 according to protocol
           int heartRate = bytes[11]; // D3: Heart rate value
-          int fatigue = bytes[12];   // D4: Fatigue level
-          int systolic = bytes[13];  // P1: Systolic blood pressure
+          int fatigue = bytes[12]; // D4: Fatigue level
+          int systolic = bytes[13]; // P1: Systolic blood pressure
           int diastolic = bytes[14]; // P2: Diastolic blood pressure
-          
+
           return '📊 Health Data:\n'
-                 '🕒 Time: $year-${month.toString().padLeft(2, '0')}-${day.toString().padLeft(2, '0')} ${hour.toString().padLeft(2, '0')}:${minute.toString().padLeft(2, '0')}:${second.toString().padLeft(2, '0')}\n'
-                 '💓 HRV: ${hrv}ms\n'
-                 '❤️ Heart Rate: ${heartRate} BPM\n'
-                 '😰 Stress: $fatigue\n'
-                 '🩸 Blood Pressure: $systolic/$diastolic mmHg\n'
-                 '📄 Page: $id2, Index: $id1';
+              '🕒 Time: $year-${month.toString().padLeft(2, '0')}-${day.toString().padLeft(2, '0')} ${hour.toString().padLeft(2, '0')}:${minute.toString().padLeft(2, '0')}:${second.toString().padLeft(2, '0')}\n'
+              '💓 HRV: ${hrv}ms\n'
+              '❤️ Heart Rate: ${heartRate} BPM\n'
+              '😰 Stress: $fatigue\n'
+              '🩸 Blood Pressure: $systolic/$diastolic mmHg\n'
+              '📄 Page: $id2, Index: $id1';
         }
         break;
-        
+
       case 0x42: // Get user info response
         if (bytes.length >= 12) {
           int gender = bytes[1];
@@ -2001,20 +2675,22 @@ class BleService {
           if (bytes.length >= 12) {
             final idSlice = bytes.sublist(6, math.min(12, bytes.length));
             // Convert to ASCII, keep printable chars 0x20..0x7E, else replace with '?'
-            final chars = idSlice.map((b) => (b >= 0x20 && b <= 0x7E) ? b : 0x3F).toList();
+            final chars = idSlice
+                .map((b) => (b >= 0x20 && b <= 0x7E) ? b : 0x3F)
+                .toList();
             ringIdAscii = String.fromCharCodes(chars).trim();
           }
-          
+
           return '👤 User Information:\n'
-                 '⚧️ Gender: ${gender == 0 ? 'Female' : 'Male'}\n'
-                 '🎂 Age: $age years\n'
-                 '📏 Height: ${height}cm\n'
-                 '⚖️ Weight: ${weight}kg\n'
-                 '👣 Step Length: ${stepLength}cm\n'
-                 '🆔 Ring ID: $ringIdAscii';
+              '⚧️ Gender: ${gender == 0 ? 'Female' : 'Male'}\n'
+              '🎂 Age: $age years\n'
+              '📏 Height: ${height}cm\n'
+              '⚖️ Weight: ${weight}kg\n'
+              '👣 Step Length: ${stepLength}cm\n'
+              '🆔 Ring ID: $ringIdAscii';
         }
         break;
-        
+
       case 0x2B: // Get measurement interval response
         if (bytes.length >= 10) {
           int measurementType = bytes[1];
@@ -2034,41 +2710,66 @@ class BleService {
             intervalMinutes = bytes[8];
           } else {
             // Standard: interval is 16-bit little-endian at [8..9]
-            intervalMinutes = bytes.length >= 10 ? (bytes[8] | (bytes[9] << 8)) : 0;
+            intervalMinutes =
+                bytes.length >= 10 ? (bytes[8] | (bytes[9] << 8)) : 0;
           }
-          
-          String measurementName = measurementType == 1 ? 'Heart Rate' : 
-                                   measurementType == 2 ? 'Blood Oxygen' : 
-                                   measurementType == 4 ? 'HRV' : 'Unknown';
-          
-          String workingModeStr = workingMode == 0 ? 'Off' : 
-                                  workingMode == 2 ? 'Interval Mode' : 'Unknown';
-          
+
+          String measurementName = measurementType == 1
+              ? 'Heart Rate'
+              : measurementType == 2
+                  ? 'Blood Oxygen'
+                  : measurementType == 4
+                      ? 'HRV'
+                      : 'Unknown';
+
+          String workingModeStr = workingMode == 0
+              ? 'Off'
+              : workingMode == 2
+                  ? 'Interval Mode'
+                  : 'Unknown';
+
           List<String> enabledDays = [];
-          List<String> dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+          List<String> dayNames = [
+            'Sun',
+            'Mon',
+            'Tue',
+            'Wed',
+            'Thu',
+            'Fri',
+            'Sat'
+          ];
           for (int i = 0; i < 7; i++) {
             if ((weekdayBits & (1 << i)) != 0) {
               enabledDays.add(dayNames[i]);
             }
           }
-          
+
           return '⏰ Measurement Settings ($measurementName):\n'
-                 '🔧 Mode: $workingModeStr\n'
-                 '🕐 Time: ${startHour.toString().padLeft(2, '0')}:${startMinute.toString().padLeft(2, '0')} - ${endHour.toString().padLeft(2, '0')}:${endMinute.toString().padLeft(2, '0')}\n'
-                 '📅 Days: ${enabledDays.join(', ')}\n'
-                 '⏱️ Interval: ${intervalMinutes} minutes';
+              '🔧 Mode: $workingModeStr\n'
+              '🕐 Time: ${startHour.toString().padLeft(2, '0')}:${startMinute.toString().padLeft(2, '0')} - ${endHour.toString().padLeft(2, '0')}:${endMinute.toString().padLeft(2, '0')}\n'
+              '📅 Days: ${enabledDays.join(', ')}\n'
+              '⏱️ Interval: ${intervalMinutes} minutes';
         }
         break;
-        
+
+      case 0x01: // Set time response
+        final mtu = bytes.length > 1 ? bytes[1] : null;
+        return mtu != null
+            ? '✅ Ring time synced successfully\n📶 Reported MTU: $mtu bytes'
+            : '✅ Ring time synced successfully';
+
+      case 0x81: // Error response for set time
+        return '❌ Failed to sync ring time';
+
       case 0x02: // Set user info response
         return '✅ User information set successfully';
-        
+
       case 0x82: // Error response for set user info
         return '❌ Failed to set user information';
-        
+
       case 0xC2: // Error response for get user info
         return '❌ Failed to get user information';
-        
+
       case 0x41: // Get time response
         if (bytes.length >= 8) {
           // Parse according to protocol: YY MM DD HH mm SS WD
@@ -2081,43 +2782,48 @@ class BleService {
           int second = _bcdToDecimal(bytes[6]);
 
           // Note: Weekday byte (bytes[7]) is ignored as Smart Ring's weekday may be incorrect
-          
+
           return '🕐 Ring Time:\n'
-                 '📅 Date: $year-${month.toString().padLeft(2, '0')}-${day.toString().padLeft(2, '0')}\n'
-                 '⏰ Time: ${hour.toString().padLeft(2, '0')}:${minute.toString().padLeft(2, '0')}:${second.toString().padLeft(2, '0')}';
+              '📅 Date: $year-${month.toString().padLeft(2, '0')}-${day.toString().padLeft(2, '0')}\n'
+              '⏰ Time: ${hour.toString().padLeft(2, '0')}:${minute.toString().padLeft(2, '0')}:${second.toString().padLeft(2, '0')}';
         }
         break;
-        
+
       case 0x13: // Get battery response
         if (bytes.length >= 8) {
           // AA: Battery level (in hexadecimal), value from 0 to 100
-          // BB: Charging status, 1 means charging, 0 means not charging  
+          // BB: Charging status, 1 means charging, 0 means not charging
           // CC DD: Voltage value, in decimal format (BCD)
           int batteryLevel = bytes[1]; // Raw hex value 0-100
           int chargingStatus = bytes[2];
-          
+
           // Voltage values are in BCD format like other protocol values
-          double voltageCC = _bcdToDecimal(bytes[3]) / 10.0; // CC in BCD -> X.Y volts
-          double voltageDD = _bcdToDecimal(bytes[4]) / 10.0; // DD in BCD -> X.Y volts
-          
+          double voltageCC =
+              _bcdToDecimal(bytes[3]) / 10.0; // CC in BCD -> X.Y volts
+          double voltageDD =
+              _bcdToDecimal(bytes[4]) / 10.0; // DD in BCD -> X.Y volts
+
           return '🔋 Battery Status:\n'
-                 '⚡ Level: ${batteryLevel}%\n'
-                 '🔌 Charging: ${chargingStatus == 1 ? 'Yes' : 'No'}\n'
-                 '⚡ Voltage 1: ${voltageCC.toStringAsFixed(1)}V\n'
-                 '⚡ Voltage 2: ${voltageDD.toStringAsFixed(1)}V\n'
-                 '🔍 Raw: 0x${bytes[3].toRadixString(16).padLeft(2, '0')} 0x${bytes[4].toRadixString(16).padLeft(2, '0')}';
+              '⚡ Level: ${batteryLevel}%\n'
+              '🔌 Charging: ${chargingStatus == 1 ? 'Yes' : 'No'}\n'
+              '⚡ Voltage 1: ${voltageCC.toStringAsFixed(1)}V\n'
+              '⚡ Voltage 2: ${voltageDD.toStringAsFixed(1)}V\n'
+              '🔍 Raw: 0x${bytes[3].toRadixString(16).padLeft(2, '0')} 0x${bytes[4].toRadixString(16).padLeft(2, '0')}';
         }
         break;
-        
+
       case 0x22: // Get MAC address response
         if (bytes.length >= 8) {
-          String macAddress = bytes.sublist(1, 7).map((b) => b.toRadixString(16).padLeft(2, '0').toUpperCase()).join(':');
-          
+          String macAddress = bytes
+              .sublist(1, 7)
+              .map((b) => b.toRadixString(16).padLeft(2, '0').toUpperCase())
+              .join(':');
+
           return '📍 MAC Address:\n'
-                 '🔗 Address: $macAddress';
+              '🔗 Address: $macAddress';
         }
         break;
-        
+
       case 0x27: // Get firmware version response
         if (bytes.length >= 8) {
           // AA BB CC DD represent the software version number (in hexadecimal BCD format)
@@ -2131,8 +2837,8 @@ class BleService {
           int day = _bcdToDecimal(bytes[7]);
 
           return '🔧 Firmware Info:\n'
-                 '📱 Version: $versionA.$versionB.$versionC.$versionD\n'
-                 '📅 Build Date: $year-${month.toString().padLeft(2, '0')}-${day.toString().padLeft(2, '0')}';
+              '📱 Version: $versionA.$versionB.$versionC.$versionD\n'
+              '📅 Build Date: $year-${month.toString().padLeft(2, '0')}-${day.toString().padLeft(2, '0')}';
         }
         break;
 
@@ -2144,23 +2850,32 @@ class BleService {
           int month = _bcdToDecimal(bytes[3]);
           int day = _bcdToDecimal(bytes[4]);
 
-          
           // Little-endian format: S1 S2 S3 S4, T1 T2 T3 T4, D1 D2 D3 D4, K1 K2 K3 K4
-          int steps = (bytes[8] << 24) | (bytes[7] << 16) | (bytes[6] << 8) | bytes[5];
-          int exerciseTime = (bytes[12] << 24) | (bytes[11] << 16) | (bytes[10] << 8) | bytes[9];
-          int distance = (bytes[16] << 24) | (bytes[15] << 16) | (bytes[14] << 8) | bytes[13];
-          int calories = (bytes[20] << 24) | (bytes[19] << 16) | (bytes[18] << 8) | bytes[17];
-          
+          int steps =
+              (bytes[8] << 24) | (bytes[7] << 16) | (bytes[6] << 8) | bytes[5];
+          int exerciseTime = (bytes[12] << 24) |
+              (bytes[11] << 16) |
+              (bytes[10] << 8) |
+              bytes[9];
+          int distance = (bytes[16] << 24) |
+              (bytes[15] << 16) |
+              (bytes[14] << 8) |
+              bytes[13];
+          int calories = (bytes[20] << 24) |
+              (bytes[19] << 16) |
+              (bytes[18] << 8) |
+              bytes[17];
+
           return '👣 Total Step Count:\n'
-                 '📅 Date: $year-${month.toString().padLeft(2, '0')}-${day.toString().padLeft(2, '0')}\n'
-                 '🚶 Steps: ${steps.toString()}\n'
-                 '⏱️ Exercise Time: ${exerciseTime}s\n'
-                 '📏 Distance: ${(distance / 100.0).toStringAsFixed(2)} km\n'
-                 '🔥 Calories: ${(calories / 100.0).toStringAsFixed(2)} kcal\n'
-                 '🏷️ ID: $id';
+              '📅 Date: $year-${month.toString().padLeft(2, '0')}-${day.toString().padLeft(2, '0')}\n'
+              '🚶 Steps: ${steps.toString()}\n'
+              '⏱️ Exercise Time: ${exerciseTime}s\n'
+              '📏 Distance: ${(distance / 100.0).toStringAsFixed(2)} km\n'
+              '🔥 Calories: ${(calories / 100.0).toStringAsFixed(2)} kcal\n'
+              '🏷️ ID: $id';
         }
         break;
-        
+
       case 0x52: // Get detailed step count response (variable length)
         if (bytes.length >= 25) {
           int id1 = bytes[1];
@@ -2176,22 +2891,22 @@ class BleService {
           int totalSteps = (bytes[10] << 8) | bytes[9]; // Little-endian
           int calories = (bytes[12] << 8) | bytes[11];
           int distance = (bytes[14] << 8) | bytes[13];
-          
+
           // Step counts for each minute (up to 10 minutes)
           List<int> minuteSteps = [];
           for (int i = 15; i < bytes.length && i < 25; i++) {
             if (bytes[i] > 0) minuteSteps.add(bytes[i]);
           }
-          
+
           return '📊 Detailed Step Count:\n'
-                 '📅 Time: $year-${month.toString().padLeft(2, '0')}-${day.toString().padLeft(2, '0')} ${hour.toString().padLeft(2, '0')}:${minute.toString().padLeft(2, '0')}:${second.toString().padLeft(2, '0')}\n'
-                 '🚶 Total Steps: $totalSteps\n'
-                 '🔥 Calories: ${(calories / 100.0).toStringAsFixed(2)} kcal\n'
-                 '📏 Distance: ${(distance / 100.0).toStringAsFixed(2)} km\n'
-                 '📈 Per Minute: ${minuteSteps.join(', ')}';
+              '📅 Time: $year-${month.toString().padLeft(2, '0')}-${day.toString().padLeft(2, '0')} ${hour.toString().padLeft(2, '0')}:${minute.toString().padLeft(2, '0')}:${second.toString().padLeft(2, '0')}\n'
+              '🚶 Total Steps: $totalSteps\n'
+              '🔥 Calories: ${(calories / 100.0).toStringAsFixed(2)} kcal\n'
+              '📏 Distance: ${(distance / 100.0).toStringAsFixed(2)} km\n'
+              '📈 Per Minute: ${minuteSteps.join(', ')}';
         }
         break;
-        
+
       case 0x53: // Get sleep data response (variable length)
         if (bytes.length >= 130) {
           int id1 = bytes[1];
@@ -2205,11 +2920,11 @@ class BleService {
           int second = _bcdToDecimal(bytes[8]);
 
           int validLength = bytes[9];
-          
+
           // Sleep quality data (1=Deep, 2=Light, 3=REM, others=Awake)
           List<String> sleepStages = [];
           int deepSleep = 0, lightSleep = 0, remSleep = 0, awake = 0;
-          
+
           for (int i = 10; i < 10 + validLength && i < bytes.length; i++) {
             switch (bytes[i]) {
               case 1:
@@ -2230,17 +2945,17 @@ class BleService {
                 break;
             }
           }
-          
+
           return '😴 Sleep Data:\n'
-                 '📅 Start: $year-${month.toString().padLeft(2, '0')}-${day.toString().padLeft(2, '0')} ${hour.toString().padLeft(2, '0')}:${minute.toString().padLeft(2, '0')}:${second.toString().padLeft(2, '0')}\n'
-                 '⏱️ Duration: ${validLength} minutes\n'
-                 '💤 Deep: ${deepSleep}min, 😴 Light: ${lightSleep}min\n'
-                 '🌙 REM: ${remSleep}min, 😐 Awake: ${awake}min\n'
-                 '📊 Pattern: ${sleepStages.take(20).join('')}${sleepStages.length > 20 ? '...' : ''}\n'
-                 '🏷️ ID: $id1-$id2';
+              '📅 Start: $year-${month.toString().padLeft(2, '0')}-${day.toString().padLeft(2, '0')} ${hour.toString().padLeft(2, '0')}:${minute.toString().padLeft(2, '0')}:${second.toString().padLeft(2, '0')}\n'
+              '⏱️ Duration: ${validLength} minutes\n'
+              '💤 Deep: ${deepSleep}min, 😴 Light: ${lightSleep}min\n'
+              '🌙 REM: ${remSleep}min, 😐 Awake: ${awake}min\n'
+              '📊 Pattern: ${sleepStages.take(20).join('')}${sleepStages.length > 20 ? '...' : ''}\n'
+              '🏷️ ID: $id1-$id2';
         }
         break;
-        
+
       case 0x54: // Get detailed heart rate response (variable length)
         if (bytes.length >= 21) {
           int id1 = bytes[1];
@@ -2251,29 +2966,36 @@ class BleService {
           int hour = _bcdToDecimal(bytes[6]);
           int minute = _bcdToDecimal(bytes[7]);
           int second = _bcdToDecimal(bytes[8]);
-          
+
           // Heart rate values every 5 seconds (SD1-SD15, exactly 15 values = 75 seconds)
           List<int> heartRates = [];
           for (int i = 9; i < 24 && i < bytes.length; i++) {
-            heartRates.add(bytes[i]); // Include all values, even 0 (no filtering)
+            heartRates
+                .add(bytes[i]); // Include all values, even 0 (no filtering)
           }
-          
+
           // Calculate stats only from non-zero values
           List<int> validRates = heartRates.where((hr) => hr > 0).toList();
-          double avgHR = validRates.isNotEmpty ? validRates.reduce((a, b) => a + b) / validRates.length : 0;
-          int minHR = validRates.isNotEmpty ? validRates.reduce((a, b) => a < b ? a : b) : 0;
-          int maxHR = validRates.isNotEmpty ? validRates.reduce((a, b) => a > b ? a : b) : 0;
-          
+          double avgHR = validRates.isNotEmpty
+              ? validRates.reduce((a, b) => a + b) / validRates.length
+              : 0;
+          int minHR = validRates.isNotEmpty
+              ? validRates.reduce((a, b) => a < b ? a : b)
+              : 0;
+          int maxHR = validRates.isNotEmpty
+              ? validRates.reduce((a, b) => a > b ? a : b)
+              : 0;
+
           return '❤️ Detailed Heart Rate:\n'
-                 '📅 Time: $year-${month.toString().padLeft(2, '0')}-${day.toString().padLeft(2, '0')} ${hour.toString().padLeft(2, '0')}:${minute.toString().padLeft(2, '0')}:${second.toString().padLeft(2, '0')}\n'
-                 '⏱️ Duration: 75 seconds (15 readings @ 5s intervals)\n'
-                 '📊 Avg: ${avgHR.toStringAsFixed(1)} BPM (${validRates.length}/15 valid)\n'
-                 '📈 Range: $minHR - $maxHR BPM\n'
-                 '🔢 Values: ${heartRates.join(', ')}\n'
-                 '🏷️ ID: $id1-$id2';
+              '📅 Time: $year-${month.toString().padLeft(2, '0')}-${day.toString().padLeft(2, '0')} ${hour.toString().padLeft(2, '0')}:${minute.toString().padLeft(2, '0')}:${second.toString().padLeft(2, '0')}\n'
+              '⏱️ Duration: 75 seconds (15 readings @ 5s intervals)\n'
+              '📊 Avg: ${avgHR.toStringAsFixed(1)} BPM (${validRates.length}/15 valid)\n'
+              '📈 Range: $minHR - $maxHR BPM\n'
+              '🔢 Values: ${heartRates.join(', ')}\n'
+              '🏷️ ID: $id1-$id2';
         }
         break;
-        
+
       case 0x55: // Get heart rate history response (variable length)
         if (bytes.length >= 10) {
           int id1 = bytes[1];
@@ -2286,13 +3008,12 @@ class BleService {
           int minute = _bcdToDecimal(bytes[7]);
           int second = _bcdToDecimal(bytes[8]);
 
-          
           return '💓 Heart Rate History:\n'
-                 '📅 Time: $year-${month.toString().padLeft(2, '0')}-${day.toString().padLeft(2, '0')} ${hour.toString().padLeft(2, '0')}:${minute.toString().padLeft(2, '0')}:${second.toString().padLeft(2, '0')}\n'
-                 '❤️ Heart Rate: $heartRate BPM';
+              '📅 Time: $year-${month.toString().padLeft(2, '0')}-${day.toString().padLeft(2, '0')} ${hour.toString().padLeft(2, '0')}:${minute.toString().padLeft(2, '0')}:${second.toString().padLeft(2, '0')}\n'
+              '❤️ Heart Rate: $heartRate BPM';
         }
         break;
-        
+
       case 0x62: // Get temperature data response (variable length)
         if (bytes.length >= 15) {
           int id1 = bytes[1];
@@ -2303,7 +3024,7 @@ class BleService {
           int hour = _bcdToDecimal(bytes[6]);
           int minute = _bcdToDecimal(bytes[7]);
           int second = _bcdToDecimal(bytes[8]);
-          
+
           // Temperature values in little-endian format (divide by 10 for °C)
           List<double> temperatures = [];
           for (int i = 9; i < bytes.length - 1; i += 2) {
@@ -2312,16 +3033,18 @@ class BleService {
               temperatures.add(tempRaw / 10.0);
             }
           }
-          
-          double avgTemp = temperatures.isNotEmpty ? temperatures.reduce((a, b) => a + b) / temperatures.length : 0;
-          
+
+          double avgTemp = temperatures.isNotEmpty
+              ? temperatures.reduce((a, b) => a + b) / temperatures.length
+              : 0;
+
           return '🌡️ Temperature Data:\n'
-                 '📅 Time: $year-${month.toString().padLeft(2, '0')}-${day.toString().padLeft(2, '0')} ${hour.toString().padLeft(2, '0')}:${minute.toString().padLeft(2, '0')}:${second.toString().padLeft(2, '0')}\n'
-                 '🌡️ Average: ${avgTemp.toStringAsFixed(1)}°C\n'
-                 '📊 Readings: ${temperatures.map((t) => '${t.toStringAsFixed(1)}°C').take(5).join(', ')}${temperatures.length > 5 ? '...' : ''}';
+              '📅 Time: $year-${month.toString().padLeft(2, '0')}-${day.toString().padLeft(2, '0')} ${hour.toString().padLeft(2, '0')}:${minute.toString().padLeft(2, '0')}:${second.toString().padLeft(2, '0')}\n'
+              '🌡️ Average: ${avgTemp.toStringAsFixed(1)}°C\n'
+              '📊 Readings: ${temperatures.map((t) => '${t.toStringAsFixed(1)}°C').take(5).join(', ')}${temperatures.length > 5 ? '...' : ''}';
         }
         break;
-        
+
       case 0x66: // Get blood oxygen data response (variable length)
         if (bytes.length >= 10) {
           int id1 = bytes[1];
@@ -2334,17 +3057,20 @@ class BleService {
           int second = _bcdToDecimal(bytes[8]);
 
           int bloodOxygen = bytes[9];
-          
-          String oxygenStatus = bloodOxygen >= 95 ? '✅ Normal' : 
-                               bloodOxygen >= 90 ? '⚠️ Low' : '🚨 Critical';
-          
+
+          String oxygenStatus = bloodOxygen >= 95
+              ? '✅ Normal'
+              : bloodOxygen >= 90
+                  ? '⚠️ Low'
+                  : '🚨 Critical';
+
           return '🩸 Blood Oxygen Data:\n'
-                 '📅 Time: $year-${month.toString().padLeft(2, '0')}-${day.toString().padLeft(2, '0')} ${hour.toString().padLeft(2, '0')}:${minute.toString().padLeft(2, '0')}:${second.toString().padLeft(2, '0')}\n'
-                 '🫁 SpO2: $bloodOxygen%\n'
-                 '📊 Status: $oxygenStatus';
+              '📅 Time: $year-${month.toString().padLeft(2, '0')}-${day.toString().padLeft(2, '0')} ${hour.toString().padLeft(2, '0')}:${minute.toString().padLeft(2, '0')}:${second.toString().padLeft(2, '0')}\n'
+              '🫁 SpO2: $bloodOxygen%\n'
+              '📊 Status: $oxygenStatus';
         }
         break;
-        
+
       // Error responses
       case 0x93: // Battery command error
         return '❌ Failed to get battery level';
@@ -2352,29 +3078,29 @@ class BleService {
         return '❌ Failed to get MAC address';
       case 0xA7: // Firmware version command error
         return '❌ Failed to get firmware version';
-        
+
       default:
         return '📦 Raw response (Command: 0x${command.toRadixString(16).padLeft(2, '0').toUpperCase()})';
     }
-    
+
     return '📦 Unknown response format';
   }
 
   List<int> _parseHexString(String hexString) {
     // Remove spaces and dashes
     String cleanHex = hexString.replaceAll(RegExp(r'[\s\-]'), '');
-    
+
     // Ensure even length
     if (cleanHex.length % 2 != 0) {
       throw Exception('Invalid hex string length');
     }
-    
+
     List<int> bytes = [];
     for (int i = 0; i < cleanHex.length; i += 2) {
       String hexByte = cleanHex.substring(i, i + 2);
       bytes.add(int.parse(hexByte, radix: 16));
     }
-    
+
     return bytes;
   }
 

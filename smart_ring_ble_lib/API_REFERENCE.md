@@ -269,7 +269,7 @@ Disconnects and closes all stream controllers. Call in your widget's `dispose()`
 Sends command `0x01` to set the ring's clock.
 
 ```dart
-// Build and send manually (year is 2-digit offset from 2000)
+// Build and send manually (time fields use BCD; year is 2-digit offset from 2000)
 await ble.sendMessage('01 25 02 27 14 30 00 00 00 00 00 00 00 00 00 CRC');
 ```
 
@@ -277,12 +277,16 @@ await ble.sendMessage('01 25 02 27 14 30 00 00 00 00 00 00 00 00 00 CRC');
 ```
 0x01 YY MM DD hh mm ss 00 00 00 00 00 00 00 00 CRC
 ```
-- `YY`: Year minus 2000 (e.g., 0x25 = 2025)
-- `MM`: Month (1–12)
-- `DD`: Day (1–31)
-- `hh`: Hour (0–23)
-- `mm`: Minute (0–59)
-- `ss`: Second (0–59)
+- `YY`: Year minus 2000 in BCD (e.g., `0x25` = 2025)
+- `MM`: Month in BCD
+- `DD`: Day in BCD
+- `hh`: Hour in BCD
+- `mm`: Minute in BCD
+- `ss`: Second in BCD
+
+**Observed behavior:** The tested ring firmware ACKs `0x01` even when the outgoing time fields are plain decimal, but the RTC may not actually update. Using BCD-encoded time fields successfully updates the ring clock.
+
+**Verification:** After sending `0x01`, immediately send `0x41` and confirm the returned ring time matches the requested timestamp.
 
 **Response:** `0x01 F4 00 ... CRC` (F4 = max BT packet length = 244 bytes)
 

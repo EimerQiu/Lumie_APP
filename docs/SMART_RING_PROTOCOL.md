@@ -234,16 +234,14 @@ Stored at Byte[26]
 
 ```
 Byte[0]  = 0x01
-Byte[1]  = YY   (decimal, 0–99, year = 2000 + YY)
-Byte[2]  = MM   (decimal, 1–12)
-Byte[3]  = DD   (decimal, 1–31)
-Byte[4]  = HH   (decimal, 0–23)
-Byte[5]  = mm   (decimal, 0–59)
-Byte[6]  = SS   (decimal, 0–59)
+Byte[1]  = YY   (BCD, 0–99, year = 2000 + YY)
+Byte[2]  = MM   (BCD, 1–12)
+Byte[3]  = DD   (BCD, 1–31)
+Byte[4]  = HH   (BCD, 0–23)
+Byte[5]  = mm   (BCD, 0–59)
+Byte[6]  = SS   (BCD, 0–59)
 Byte[7..14] = 0x00
 Byte[15] = CRC
-
-Note: Time fields are plain decimal (NOT BCD) for this command only.
 ```
 
 **Example command:**
@@ -252,6 +250,8 @@ Note: Time fields are plain decimal (NOT BCD) for this command only.
    ↑  ↑  ↑  ↑  ↑
    25=2025, 02=Feb, 27=day, 14=hour, 30=min
 ```
+
+**Observed device behavior:** On the tested ring firmware, `0x01` must be sent with BCD-encoded time fields. Sending plain decimal values may still return a success ACK (`0x01 ...`) but does not reliably update the ring RTC. This was verified by writing time with `0x01` and immediately reading it back with `0x41`, which returned the updated time only when the outgoing `0x01` payload used BCD.
 
 **Success response (16 bytes):**
 ```
@@ -271,6 +271,7 @@ Byte[15] = CRC
 **Parse steps:**
 1. Check `Byte[0] == 0x01` → success. `Byte[0] == 0x81` → failure.
 2. `Byte[1]` = max MTU for reference.
+3. To verify the write actually took effect, send `0x41` immediately after `0x01` and confirm the returned ring time matches the requested timestamp.
 
 ---
 
