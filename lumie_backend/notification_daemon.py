@@ -45,6 +45,9 @@ APNS_USE_SANDBOX = os.getenv("APNS_USE_SANDBOX", "true").lower() == "true"
 
 POLL_INTERVAL = 60  # seconds
 
+API_BASE_URL = os.getenv("API_BASE_URL", "http://localhost:8000")
+INTERNAL_SECRET = os.getenv("INTERNAL_SECRET") or os.getenv("SECRET_KEY", "")
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
@@ -427,86 +430,90 @@ async def process_notification_queue(db, client: httpx.AsyncClient) -> None:
 # Proactive advisor check-in scheduling
 # ---------------------------------------------------------------------------
 
-async def process_advisor_checkins(db, client: httpx.AsyncClient) -> None:
-    """Send proactive check-in nudges that are due.
+async def process_advisor_proactive(db, client: httpx.AsyncClient) -> None:
+    """Run a proactive advisor check for ONE user per daemon cycle.
 
-    Check-in preferences are stored in the ``advisor_checkins`` collection::
+    Users are sorted by ``last_sent_at`` ascending so the one checked least
+    recently gets priority. Only the first user whose interval has elapsed is
+    processed. This naturally spreads load across cycles and avoids concurrent
+    Haiku calls.
 
-        {
-            "user_id": str,
-            "enabled": bool,
-            "frequency": "daily" | "weekdays",
-            "hour_utc": int (0-23),      # target hour in UTC
-            "minute_utc": int (0-59),
-            "last_sent_date": "YYYY-MM-DD" | None,
-            "messages": [...],            # rotating pool of nudge messages
-        }
-
-    The daemon sends at most **one** check-in per user per day.
+    Interval mapping:
+        "high"   → 30 minutes
+        "normal" → 60 minutes
+        "lazy"   → 360 minutes (6 hours)
     """
+    _interval_minutes = {"high": 30, "normal": 60, "lazy": 360}
+
     now = datetime.now(timezone.utc)
-    today_str = now.strftime("%Y-%m-%d")
-    current_hour = now.hour
-    current_minute = now.minute
-    current_weekday = now.weekday()  # 0=Monday … 6=Sunday
 
-    cursor = db.advisor_checkins.find({"enabled": True})
-    checkins = await cursor.to_list(length=500)
+    # Sort by last_sent_at ascending (nulls first) so longest-waiting user is first
+    checkins = await db.advisor_checkins.find(
+        {"enabled": True}
+    ).sort("last_sent_at", 1).to_list(length=500)
 
+    # Find the first user whose interval has elapsed
+    target = None
     for cfg in checkins:
-        user_id = cfg["user_id"]
-        freq = cfg.get("frequency", "daily")
-        target_hour = cfg.get("hour_utc", 9)
-        target_minute = cfg.get("minute_utc", 0)
-        last_sent = cfg.get("last_sent_date")
+        freq = cfg.get("frequency", "normal")
+        interval_minutes = _interval_minutes.get(freq, 60)
+        last_sent_raw = cfg.get("last_sent_at")
 
-        # Already sent today?
-        if last_sent == today_str:
-            continue
+        if last_sent_raw:
+            try:
+                last_sent_dt = datetime.fromisoformat(last_sent_raw)
+                if last_sent_dt.tzinfo is None:
+                    last_sent_dt = last_sent_dt.replace(tzinfo=timezone.utc)
+                elapsed_minutes = (now - last_sent_dt).total_seconds() / 60
+                if elapsed_minutes < interval_minutes:
+                    continue
+            except (ValueError, TypeError):
+                pass  # malformed timestamp — treat as eligible
 
-        # Weekdays only?
-        if freq == "weekdays" and current_weekday >= 5:
-            continue
+        target = cfg
+        break  # process only this one user this cycle
 
-        # Is it time yet? Allow a window of POLL_INTERVAL seconds after target.
-        target_minutes = target_hour * 60 + target_minute
-        current_minutes = current_hour * 60 + current_minute
-        if current_minutes < target_minutes or current_minutes > target_minutes + 2:
-            continue
+    if not target:
+        logger.info("Proactive: no user due for a check this cycle")
+        return
 
-        # Pick a message
-        messages = cfg.get("messages") or [
-            "Hey! How are you feeling today? 💛",
-            "Quick check-in — how's your energy today?",
-            "Just checking in! Anything on your mind? 🌟",
-            "How did you sleep last night? Let's chat about it.",
-            "Good day for a wellness check-in! How's everything going?",
-        ]
-        msg_index = hash(today_str + user_id) % len(messages)
-        message = messages[msg_index]
+    user_id = target["user_id"]
+    freq = target.get("frequency", "normal")
+    last_sent_raw = target.get("last_sent_at", "never")
+    logger.info("Proactive: selected user=%s freq=%s last_checked=%s", user_id, freq, last_sent_raw)
 
-        # Look up device token
-        user = await db.users.find_one(
-            {"user_id": user_id},
-            {"device_token": 1, "_id": 0},
-        )
-        device_token = (user or {}).get("device_token")
-        if not device_token:
-            continue
+    # Mark last_sent_at immediately to prevent double-processing if daemon restarts
+    await db.advisor_checkins.update_one(
+        {"user_id": user_id},
+        {"$set": {"last_sent_at": now.isoformat()}},
+    )
 
-        sent = await send_apns(
-            client, device_token,
-            "Lumie Advisor",
-            message,
-            task_id=f"checkin_{user_id}_{today_str}",
-        )
-
-        if sent:
-            await db.advisor_checkins.update_one(
-                {"user_id": user_id},
-                {"$set": {"last_sent_date": today_str}},
+    # Call the internal proactive endpoint (AI decides whether to nudge).
+    # Use a plain HTTP/1.1 client — the APNs client (http2=True) is not suitable
+    # for calling localhost uvicorn which does not support h2c.
+    url = f"{API_BASE_URL}/api/v1/internal/advisor/proactive/run/{user_id}"
+    try:
+        async with httpx.AsyncClient(timeout=60) as internal_client:
+            resp = await internal_client.post(
+                url,
+                headers={"x-internal-secret": INTERNAL_SECRET},
             )
-            logger.info(f"Sent advisor check-in to {user_id}")
+        if resp.status_code == 200:
+            result = resp.json()
+            logger.info(
+                "Proactive result for user=%s: nudged=%s reason=%s message=%s",
+                user_id,
+                result.get("nudged"),
+                result.get("reason"),
+                result.get("message"),
+            )
+        else:
+            logger.warning(
+                "Proactive endpoint returned %s for user=%s: %s",
+                resp.status_code, user_id, resp.text,
+            )
+    except Exception as e:
+        logger.error("Proactive check request failed for user=%s: %r", user_id, e, exc_info=True)
 
 
 # ---------------------------------------------------------------------------
@@ -515,13 +522,22 @@ async def process_advisor_checkins(db, client: httpx.AsyncClient) -> None:
 
 async def run_daemon() -> None:
     """Main daemon loop."""
-    logger.info("Starting notification daemon (poll every %ds)", POLL_INTERVAL)
+    logger.info(
+        "Starting notification daemon (poll every %ds, API=%s, internal_secret=%s)",
+        POLL_INTERVAL,
+        API_BASE_URL,
+        "set" if INTERNAL_SECRET else "NOT SET",
+    )
 
     mongo = AsyncIOMotorClient(MONGODB_URL)
     db = mongo[MONGODB_DB_NAME]
 
     async with httpx.AsyncClient(http2=True, timeout=30) as client:
+        cycle = 0
         while True:
+            cycle += 1
+            logger.info("── Daemon cycle #%d ──────────────────────────", cycle)
+
             try:
                 await poll_once(db, client)
             except Exception:
@@ -533,9 +549,9 @@ async def run_daemon() -> None:
                 logger.exception("Error in notification queue cycle")
 
             try:
-                await process_advisor_checkins(db, client)
+                await process_advisor_proactive(db, client)
             except Exception:
-                logger.exception("Error in advisor check-in cycle")
+                logger.exception("Error in advisor proactive cycle")
 
             await asyncio.sleep(POLL_INTERVAL)
 

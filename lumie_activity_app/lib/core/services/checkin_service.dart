@@ -9,23 +9,17 @@ import 'auth_service.dart';
 
 class CheckinPrefs {
   final bool enabled;
-  final String frequency; // "daily" | "weekdays"
-  final int hourUtc;
-  final int minuteUtc;
+  final String frequency; // "high" (30m) | "normal" (1h) | "lazy" (6h)
 
   const CheckinPrefs({
     this.enabled = false,
-    this.frequency = 'daily',
-    this.hourUtc = 9,
-    this.minuteUtc = 0,
+    this.frequency = 'normal',
   });
 
   factory CheckinPrefs.fromJson(Map<String, dynamic> json) {
     return CheckinPrefs(
       enabled: json['enabled'] as bool? ?? false,
-      frequency: json['frequency'] as String? ?? 'daily',
-      hourUtc: json['hour_utc'] as int? ?? 9,
-      minuteUtc: json['minute_utc'] as int? ?? 0,
+      frequency: json['frequency'] as String? ?? 'normal',
     );
   }
 }
@@ -59,14 +53,10 @@ class CheckinService {
   Future<CheckinPrefs> updatePreferences({
     bool? enabled,
     String? frequency,
-    int? hourUtc,
-    int? minuteUtc,
   }) async {
     final body = <String, dynamic>{};
     if (enabled != null) body['enabled'] = enabled;
     if (frequency != null) body['frequency'] = frequency;
-    if (hourUtc != null) body['hour_utc'] = hourUtc;
-    if (minuteUtc != null) body['minute_utc'] = minuteUtc;
 
     try {
       final response = await http.patch(

@@ -1,7 +1,7 @@
 """Advisor check-in preference routes.
 
 Lets users enable/disable proactive advisor check-in push notifications
-and configure their preferred time and frequency.
+and configure their preferred nudge frequency.
 """
 
 import logging
@@ -22,16 +22,12 @@ router = APIRouter(prefix="/advisor/checkin", tags=["advisor"])
 
 class CheckinPrefsResponse(BaseModel):
     enabled: bool = False
-    frequency: str = "daily"       # "daily" | "weekdays"
-    hour_utc: int = 9
-    minute_utc: int = 0
+    frequency: str = "normal"   # "high" (30m) | "normal" (1h) | "lazy" (6h)
 
 
 class CheckinPrefsUpdate(BaseModel):
     enabled: Optional[bool] = None
-    frequency: Optional[str] = Field(None, pattern=r"^(daily|weekdays)$")
-    hour_utc: Optional[int] = Field(None, ge=0, le=23)
-    minute_utc: Optional[int] = Field(None, ge=0, le=59)
+    frequency: Optional[str] = Field(None, pattern=r"^(high|normal|lazy)$")
 
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────
@@ -44,15 +40,13 @@ async def get_checkin_preferences(
     db = get_database()
     doc = await db.advisor_checkins.find_one(
         {"user_id": user_id},
-        {"_id": 0, "user_id": 0, "last_sent_date": 0, "messages": 0},
+        {"_id": 0, "user_id": 0, "last_sent_at": 0, "messages": 0},
     )
     if not doc:
         return CheckinPrefsResponse()
     return CheckinPrefsResponse(
         enabled=doc.get("enabled", False),
-        frequency=doc.get("frequency", "daily"),
-        hour_utc=doc.get("hour_utc", 9),
-        minute_utc=doc.get("minute_utc", 0),
+        frequency=doc.get("frequency", "normal"),
     )
 
 
@@ -69,12 +63,11 @@ async def update_checkin_preferences(
 
     update_fields = {k: v for k, v in body.model_dump().items() if v is not None}
     if not update_fields:
-        # Nothing to update — just return current
         return await get_checkin_preferences(user_id)
 
     await db.advisor_checkins.update_one(
         {"user_id": user_id},
-        {"$set": update_fields, "$setOnInsert": {"user_id": user_id, "last_sent_date": None}},
+        {"$set": update_fields, "$setOnInsert": {"user_id": user_id, "last_sent_at": None}},
         upsert=True,
     )
 

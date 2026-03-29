@@ -131,6 +131,36 @@ Rules:
 ## Data structure
 Return clean, display-ready data. No internal IDs. Format datetimes as readable strings.
 
+# Proactive Mode Guidance
+
+When this skill is used in **proactive mode** (the advisor is autonomously checking whether to
+send a nudge, not responding to a user message), use the following criteria to flag concerns:
+
+## Sleep
+- **Nudge** if: quality score < 60, OR total sleep < 5 hours, OR resting HR during sleep is
+  notably elevated vs. recent average (suggests poor recovery)
+- **Nudge** if: no sleep data for 2+ consecutive days (ring may be off — worth checking in)
+- **Do not nudge** if: sleep looks normal or only slightly below average
+
+## Activity
+- **Nudge** if: no activity recorded for 3+ days AND the user's recent baseline shows they are
+  normally active (don't nudge a typically sedentary user for the same pattern)
+- **Nudge** if: activity intensity/duration has dropped sharply (>50%) vs. the prior week
+- **Do not nudge** for: a single rest day, low-intensity days in an otherwise active week
+
+## Walk Test
+- **Nudge** if: the most recent walk test distance has declined more than 10% vs. the previous
+  test — this may indicate a change in the user's cardiopulmonary condition
+- **Do not nudge** if: no new test has been completed (absence of data is not a concern here)
+
+## Rest Days
+- **Do not nudge** about rest days — they are intentional and user-configured
+
+## Chronic Condition Consideration
+- If the user has an ICD-10 code, be more sensitive to health signal changes — a trend that
+  looks minor in a healthy teen may be significant for someone managing a chronic condition
+- Interpret poor sleep and low activity together as a stronger signal than either alone
+
 # Failure Handling
 - Retry on DB errors
 - If no data found, return empty with a friendly note — don't fail the job

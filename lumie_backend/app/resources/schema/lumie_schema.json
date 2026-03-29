@@ -154,14 +154,12 @@
     },
     {
       "name": "advisor_checkins",
-      "description": "Per-user advisor check-in schedule preferences",
+      "description": "Per-user Advisor Proactive Mode preferences. When enabled, the daemon periodically calls the proactive advisor service which fetches user data and asks Claude Haiku whether to send a nudge.",
       "fields": {
         "user_id": "string, unique",
-        "enabled": "boolean",
-        "frequency": "string, 'daily' or 'weekdays'",
-        "hour_utc": "number, scheduled hour in UTC (0–23)",
-        "minute_utc": "number, scheduled minute (0–59)",
-        "last_sent_date": "string, YYYY-MM-DD of last check-in sent (optional)"
+        "enabled": "boolean — whether proactive mode is on",
+        "frequency": "string, 'high' (every 30 min) | 'normal' (every 1 hour) | 'lazy' (every 6 hours)",
+        "last_sent_at": "string, ISO-8601 UTC timestamp of the last proactive check run (regardless of whether a nudge was sent)"
       }
     }
   ]

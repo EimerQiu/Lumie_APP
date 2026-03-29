@@ -123,6 +123,7 @@ class _ChatTabState extends State<_ChatTab> {
 
   static const _sessionIdKey = 'advisor_active_session_id';
   static const _lastActiveKey = 'advisor_last_active_at';
+  static const _lastProactiveSeenKey = 'advisor_last_proactive_seen_at';
   static const _sessionTimeoutMinutes = 2;
 
   @override
@@ -156,13 +157,46 @@ class _ChatTabState extends State<_ChatTab> {
           _isLoading = false;
         });
         _scrollToBottom();
-        return;
+      } else {
+        await _saveActiveSession();
+        if (mounted) setState(() => _isLoading = false);
       }
+    } else {
+      // No saved session — start fresh
+      await _saveActiveSession();
+      if (mounted) setState(() => _isLoading = false);
     }
 
-    // No saved session — start fresh
-    await _saveActiveSession();
-    if (mounted) setState(() => _isLoading = false);
+    // Append any new proactive messages the advisor sent since last open
+    await _loadNewProactiveMessages(prefs);
+  }
+
+  Future<void> _loadNewProactiveMessages(SharedPreferences prefs) async {
+    final lastSeenStr = prefs.getString(_lastProactiveSeenKey);
+    final proactiveMessages =
+        await _historyService.fetchSessionMessages('proactive');
+
+    final newMessages = proactiveMessages.where((m) {
+      if (lastSeenStr == null) return true;
+      return m.createdAt.compareTo(lastSeenStr) > 0;
+    }).toList();
+
+    if (newMessages.isEmpty) return;
+
+    if (mounted) {
+      setState(() {
+        for (final m in newMessages) {
+          _items.add(
+            _ChatItem.message(_Message(text: m.content, isUser: false)),
+          );
+        }
+      });
+      _scrollToBottom();
+    }
+
+    // Mark all proactive messages as seen
+    final latest = proactiveMessages.last.createdAt;
+    await prefs.setString(_lastProactiveSeenKey, latest);
   }
 
   Future<void> _saveActiveSession() async {

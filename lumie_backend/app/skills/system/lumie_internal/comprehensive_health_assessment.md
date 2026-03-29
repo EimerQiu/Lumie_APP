@@ -74,6 +74,46 @@ Use this skill when the user asks for an overall health view that spans multiple
 - Each section should include key metrics and any notable trends
 - Flag any concerning patterns (e.g., declining sleep quality, low task adherence)
 
+# Proactive Mode Guidance
+
+When this skill is used in **proactive mode** (the advisor is autonomously checking whether to
+send a nudge, not responding to a user message), evaluate the combined picture across all domains:
+
+## Sleep
+- **Nudge** if: quality score < 60, OR total sleep < 5 hours, OR resting HR is elevated
+- **Nudge** if: sleep quality has declined for 2+ consecutive nights (trend, not a one-off)
+- **Do not nudge** for a single average night
+
+## Activity
+- **Nudge** if: no activity for 3+ days AND user has a history of regular exercise
+- **Nudge** if: weekly activity total has dropped more than 50% vs. the prior week
+- **Do not nudge** for: occasional rest days or mildly reduced activity
+
+## Medication Adherence
+- **Nudge** if: adherence rate for medicine-type tasks is below 70% for the current week
+- **Nudge** if: any medicine task has been missed for 2+ consecutive windows
+- **Do not nudge** if adherence is above 80%
+
+## Walk Test
+- **Nudge** if: the most recent walk test distance has declined >10% vs. the prior test
+- **Do not nudge** for: absence of new tests, or stable/improving results
+
+## Combined Signals (escalate when multiple domains are poor)
+- Two or more domains showing concerning patterns simultaneously is a stronger signal —
+  nudge even if each domain alone would not quite meet the threshold
+- Example: sleep score 62 (borderline) + no activity 2 days → nudge
+
+## Chronic Condition Consideration
+- If the user has an ICD-10 code, lower your threshold slightly — health signal changes
+  carry more significance for someone managing a chronic condition
+- Declining walk test + poor sleep together may indicate a condition flare-up — worth a nudge
+
+## What NOT to Nudge About
+- Everything is within normal range
+- Data is missing for one domain but other domains look fine
+- Upcoming tasks that haven't been missed yet
+- Minor single-day fluctuations with no trend
+
 # Failure Handling
 - Retry if the DB script fails due to field mismatch or query error
 - Fail immediately on permission denied or invalid ping

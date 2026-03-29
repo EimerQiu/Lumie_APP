@@ -147,12 +147,19 @@ bash deploy.sh
 - Install dependencies (requirements.txt)
 - Check MongoDB status
 
-#### 2. Restart API Service
+#### 2. Restart All Services (API + all daemons)
 ```bash
-ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.177.85.124 "sudo systemctl restart lumie-api"
+ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.177.85.124 "sudo systemctl restart lumie-api lumie-notify"
 ```
 
-#### 3. Verify API Deployment
+**Always restart both.** The notification daemon (`lumie-notify`) runs the same Python code as the API — deploying without restarting it means the daemon keeps running the old version.
+
+#### 3. Verify All Services Running
+```bash
+ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.177.85.124 "sudo systemctl status lumie-api lumie-notify --no-pager | grep -E 'service|Active'"
+```
+
+#### 4. Verify API Deployment
 ```bash
 # Health check
 curl https://yumo.org/api/v1/health
@@ -518,17 +525,17 @@ ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.177.85.124 "sudo systemctl reload nginx"
 
 ### ✅ Post-Deployment Verification
 ```bash
-# 1. Website health check
-curl -I https://yumo.org
-
-# 2. API health check
+# 1. API health check
 curl https://yumo.org/api/v1/health
 
-# 3. Check service logs
-ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.177.85.124 "sudo journalctl -u lumie-api -n 20 --no-pager"
+# 2. Check all service statuses
+ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.177.85.124 "sudo systemctl status lumie-api lumie-notify mongod --no-pager | grep -E 'service|Active'"
 
-# 4. Monitor service status
-ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.177.85.124 "sudo systemctl status lumie-api nginx mongod"
+# 3. Check API logs (last 10 lines)
+ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.177.85.124 "sudo journalctl -u lumie-api -n 10 --no-pager"
+
+# 4. Check daemon logs (last 10 lines)
+ssh -i ~/.ssh/Lumie_Key.pem ubuntu@54.177.85.124 "sudo journalctl -u lumie-notify -n 10 --no-pager"
 ```
 
 ### 🔄 Rollback Plan

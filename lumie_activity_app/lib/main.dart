@@ -612,9 +612,7 @@ class SettingsScreen extends StatefulWidget {
 class _SettingsScreenState extends State<SettingsScreen> {
   final CheckinService _checkinService = CheckinService();
   bool _checkinEnabled = false;
-  String _checkinFreq = 'daily'; // "daily" | "weekdays"
-  int _checkinHourUtc = 9;
-  int _checkinMinuteUtc = 0;
+  String _checkinFreq = 'normal'; // "high" (30m) | "normal" (1h) | "lazy" (6h)
   bool _checkinLoading = true;
 
   @override
@@ -629,8 +627,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
       setState(() {
         _checkinEnabled = prefs.enabled;
         _checkinFreq = prefs.frequency;
-        _checkinHourUtc = prefs.hourUtc;
-        _checkinMinuteUtc = prefs.minuteUtc;
         _checkinLoading = false;
       });
     }
@@ -646,41 +642,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
     await _checkinService.updatePreferences(frequency: freq);
   }
 
-  Future<void> _pickCheckinTime() async {
-    // Convert UTC hour to local for the picker
-    final nowUtc = DateTime.now().toUtc();
-    final localOffset = DateTime.now().timeZoneOffset;
-    final localHour = (_checkinHourUtc + localOffset.inHours) % 24;
-
-    final picked = await showTimePicker(
-      context: context,
-      initialTime: TimeOfDay(hour: localHour, minute: _checkinMinuteUtc),
-    );
-    if (picked == null || !mounted) return;
-
-    // Convert local time back to UTC for the backend
-    final utcHour = (picked.hour - localOffset.inHours) % 24;
-    setState(() {
-      _checkinHourUtc = utcHour;
-      _checkinMinuteUtc = picked.minute;
-    });
-    await _checkinService.updatePreferences(
-      hourUtc: utcHour,
-      minuteUtc: picked.minute,
-    );
-  }
-
-  /// Format the check-in time for display (in user's local timezone).
-  String get _checkinTimeDisplay {
-    final localOffset = DateTime.now().timeZoneOffset;
-    final localHour = (_checkinHourUtc + localOffset.inHours) % 24;
-    final period = localHour >= 12 ? 'PM' : 'AM';
-    final displayHour = localHour == 0
-        ? 12
-        : (localHour > 12 ? localHour - 12 : localHour);
-    final displayMin = _checkinMinuteUtc.toString().padLeft(2, '0');
-    return '$displayHour:$displayMin $period';
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -849,7 +810,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       },
                     ),
 
-                    // Check-in push notification toggle
+                    // Advisor自主思考 toggle
                     Padding(
                       padding: const EdgeInsets.symmetric(
                         horizontal: 16,
@@ -866,7 +827,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                               borderRadius: BorderRadius.circular(10),
                             ),
                             child: const Icon(
-                              Icons.notifications_active_outlined,
+                              Icons.psychology_outlined,
                               size: 22,
                               color: AppColors.textOnYellow,
                             ),
@@ -874,7 +835,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           const SizedBox(width: 16),
                           const Expanded(
                             child: Text(
-                              'Daily Check-in Nudge',
+                              'Advisor Proactive Mode',
                               style: TextStyle(
                                 fontSize: 17,
                                 fontWeight: FontWeight.w500,
@@ -898,10 +859,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       ),
                     ),
 
-                    // Frequency + time (only visible when enabled)
-                    if (_checkinEnabled) ...[
+                    // Frequency (only visible when enabled)
+                    if (_checkinEnabled)
                       Padding(
-                        padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+                        padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
@@ -914,108 +875,65 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             ),
                             const SizedBox(height: 8),
                             Row(
-                              children:
-                                  [
-                                    {'label': 'Every day', 'value': 'daily'},
-                                    {'label': 'Weekdays', 'value': 'weekdays'},
-                                  ].map((item) {
-                                    final selected =
-                                        _checkinFreq == item['value'];
-                                    return Padding(
-                                      padding: const EdgeInsets.only(right: 8),
-                                      child: GestureDetector(
-                                        onTap: () => _setFreq(item['value']!),
-                                        child: AnimatedContainer(
-                                          duration: const Duration(
-                                            milliseconds: 180,
-                                          ),
-                                          padding: const EdgeInsets.symmetric(
-                                            horizontal: 16,
-                                            vertical: 8,
-                                          ),
-                                          decoration: BoxDecoration(
-                                            color: selected
-                                                ? AppColors.primaryLemonDark
-                                                : AppColors.backgroundPaper,
-                                            borderRadius: BorderRadius.circular(
-                                              20,
-                                            ),
-                                            border: Border.all(
-                                              color: selected
-                                                  ? AppColors.primaryLemonDark
-                                                  : AppColors.surfaceLight,
-                                            ),
-                                          ),
-                                          child: Text(
-                                            item['label']!,
-                                            style: TextStyle(
-                                              fontSize: 14,
-                                              fontWeight: FontWeight.w500,
-                                              color: selected
-                                                  ? Colors.white
-                                                  : AppColors.textSecondary,
-                                            ),
-                                          ),
+                          children: [
+                            {'label': 'High', 'sub': '30 min', 'value': 'high'},
+                            {'label': 'Normal', 'sub': '1 hour', 'value': 'normal'},
+                            {'label': 'Lazy', 'sub': '6 hours', 'value': 'lazy'},
+                          ].map((item) {
+                            final selected = _checkinFreq == item['value'];
+                            return Padding(
+                              padding: const EdgeInsets.only(right: 8),
+                              child: GestureDetector(
+                                onTap: () => _setFreq(item['value']!),
+                                child: AnimatedContainer(
+                                  duration: const Duration(milliseconds: 180),
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 14,
+                                    vertical: 6,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    color: selected
+                                        ? AppColors.primaryLemonDark
+                                        : AppColors.backgroundPaper,
+                                    borderRadius: BorderRadius.circular(20),
+                                    border: Border.all(
+                                      color: selected
+                                          ? AppColors.primaryLemonDark
+                                          : AppColors.surfaceLight,
+                                    ),
+                                  ),
+                                  child: Column(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Text(
+                                        item['label']!,
+                                        style: TextStyle(
+                                          fontSize: 13,
+                                          fontWeight: FontWeight.w600,
+                                          color: selected
+                                              ? Colors.white
+                                              : AppColors.textPrimary,
                                         ),
                                       ),
-                                    );
-                                  }).toList(),
+                                      Text(
+                                        item['sub']!,
+                                        style: TextStyle(
+                                          fontSize: 11,
+                                          color: selected
+                                              ? Colors.white.withValues(alpha: 0.85)
+                                              : AppColors.textSecondary,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            );
+                          }).toList(),
                             ),
                           ],
                         ),
                       ),
-                      // Time picker
-                      Padding(
-                        padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
-                        child: GestureDetector(
-                          onTap: _pickCheckinTime,
-                          child: Row(
-                            children: [
-                              const Text(
-                                'Remind me at',
-                                style: TextStyle(
-                                  fontSize: 13,
-                                  color: AppColors.textSecondary,
-                                ),
-                              ),
-                              const SizedBox(width: 8),
-                              Container(
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 12,
-                                  vertical: 6,
-                                ),
-                                decoration: BoxDecoration(
-                                  color: AppColors.backgroundPaper,
-                                  borderRadius: BorderRadius.circular(12),
-                                  border: Border.all(
-                                    color: AppColors.surfaceLight,
-                                  ),
-                                ),
-                                child: Row(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    Text(
-                                      _checkinTimeDisplay,
-                                      style: const TextStyle(
-                                        fontSize: 15,
-                                        fontWeight: FontWeight.w600,
-                                        color: AppColors.primaryLemonDark,
-                                      ),
-                                    ),
-                                    const SizedBox(width: 4),
-                                    const Icon(
-                                      Icons.access_time,
-                                      size: 16,
-                                      color: AppColors.primaryLemonDark,
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-                    ],
 
                     const Divider(height: 24),
 
