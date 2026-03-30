@@ -289,6 +289,11 @@ class RingProvider extends ChangeNotifier {
           ? _bleService.fetchSleepHistory()
           : Future.value((records: <RingRawSleepRecord>[], isComplete: false));
 
+  // ─── Step BLE delegation ──────────────────────────────────────────────────
+
+  Future<List<RingRawDailySteps>> fetchStepHistory() =>
+      isPaired ? _bleService.fetchStepHistory() : Future.value([]);
+
   // ─── Ring prompt tracking ─────────────────────────────────────────────────
 
   Future<bool> hasShownRingPrompt() => _ringService.hasShownRingPrompt();

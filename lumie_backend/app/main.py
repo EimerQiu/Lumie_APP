@@ -24,6 +24,7 @@ from .api.chat_history_routes import router as chat_history_router
 from .api.sleep_routes import router as sleep_router
 from .api.advisor_v2_routes import router as advisor_v2_router
 from .api.proactive_routes import router as proactive_router
+from .api.steps_routes import router as steps_router
 
 # Configure logging
 logging.basicConfig(
@@ -124,6 +125,7 @@ app.include_router(chat_history_router, prefix="/api/v1")
 app.include_router(sleep_router, prefix="/api/v1")
 app.include_router(advisor_v2_router, prefix="/api/v2")
 app.include_router(proactive_router, prefix="/api/v1")
+app.include_router(steps_router, prefix="/api/v1")
 
 
 @app.get("/")

@@ -75,6 +75,11 @@ class _MyHomePageState extends State<MyHomePage> {
       setState(() {
         _connectionStatus = status;
       });
+      if (status == 'Connected') {
+        Future.delayed(const Duration(milliseconds: 300), () {
+          _bleService.sendSetCurrentTimeCommand();
+        });
+      }
     });
 
     _bleService.messageStream.listen((message) {

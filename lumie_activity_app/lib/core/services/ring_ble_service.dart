@@ -566,10 +566,96 @@ class RingBleService {
     }
   }
 
+  // ─── Steps ───────────────────────────────────────────────────────────────
+
+  /// Command 0x51 — Fetch daily step totals from the ring (up to 15 days).
+  ///
+  /// Each response record is 27 bytes; multiple records may be concatenated
+  /// inside a single BLE notification (MTU = 244 bytes).  All incoming bytes
+  /// are buffered until the end-of-data marker `0x51 0xFF` arrives, then the
+  /// buffer is parsed into fixed 27-byte records.
+  ///
+  /// ID=0 is today (resets at midnight on the ring), ID=1 yesterday, etc.
+  Future<List<RingRawDailySteps>> fetchStepHistory() async {
+    if (_notifyChar == null) {
+      debugPrint('[Ring BLE] fetchStepHistory: not connected');
+      return [];
+    }
+    debugPrint('[Ring BLE] fetchStepHistory: sending 0x51');
+
+    final buffer = <int>[];
+    final endMarker = Completer<void>();
+    StreamSubscription<List<int>>? sub;
+
+    sub = _notifyChar!.lastValueStream.listen((data) {
+      if (data.isEmpty || data[0] != 0x51) return;
+
+      // Scan for end-of-data marker 0x51 0xFF within this notification
+      for (var i = 0; i < data.length - 1; i++) {
+        if (data[i] == 0x51 && data[i + 1] == 0xFF) {
+          buffer.addAll(data.sublist(0, i));
+          if (!endMarker.isCompleted) endMarker.complete();
+          return;
+        }
+      }
+      buffer.addAll(data);
+    });
+
+    try {
+      final payload = List<int>.filled(15, 0);
+      payload[0] = 0x51;
+      payload[1] = 0x00; // read all stored days
+      await _writeCommand(payload);
+
+      try {
+        await endMarker.future.timeout(const Duration(seconds: 8));
+      } on TimeoutException {
+        debugPrint('[Ring BLE] fetchStepHistory timeout, parsing buffered bytes');
+      }
+    } catch (e) {
+      debugPrint('[Ring BLE] fetchStepHistory error: $e');
+      return [];
+    } finally {
+      await sub.cancel();
+    }
+
+    // Parse complete 27-byte records from the accumulated buffer
+    final records = <RingRawDailySteps>[];
+    var offset = 0;
+    while (offset + 27 <= buffer.length) {
+      if (buffer[offset] != 0x51) {
+        offset++;
+        continue;
+      }
+      final date = _parseStepDate(buffer, offset + 2);
+      if (date != null) {
+        final steps        = _leInt32(buffer, offset + 5);
+        final exerciseSecs = _leInt32(buffer, offset + 9);
+        final distRaw      = _leInt32(buffer, offset + 13);
+        records.add(RingRawDailySteps(
+          date: date,
+          steps: steps,
+          exerciseTimeSeconds: exerciseSecs,
+          distanceKm: distRaw / 100.0,
+        ));
+        debugPrint(
+          '[Ring BLE] Step record: $date  steps=$steps  '
+          'exercise=${exerciseSecs}s  dist=${distRaw / 100.0}km',
+        );
+      }
+      offset += 27;
+    }
+    debugPrint('[Ring BLE] fetchStepHistory: ${records.length} day(s)');
+    return records;
+  }
+
   // ─── Commands ────────────────────────────────────────────────────────────
 
   /// Command 0x01 — Set Time
-  /// Fields are plain decimal (NOT BCD) per protocol spec.
+  /// Fields must be BCD-encoded per protocol spec. Sending plain decimal values
+  /// may return a success ACK but doesn't reliably update the ring RTC.
+  /// Byte[7] carries the weekday (1=Mon, 7=Sun) to keep the ring's day-of-week
+  /// counter in sync; the ring uses the same 1–7 convention as Dart's weekday.
   /// Returns true if the ring acknowledged success, false on failure or timeout.
   /// Never throws — errors are logged and the pairing flow continues.
   Future<bool> _setTime() async {
@@ -577,12 +663,13 @@ class RingBleService {
       final now = DateTime.now();
       final payload = List<int>.filled(15, 0);
       payload[0] = 0x01;
-      payload[1] = now.year - 2000;
-      payload[2] = now.month;
-      payload[3] = now.day;
-      payload[4] = now.hour;
-      payload[5] = now.minute;
-      payload[6] = now.second;
+      payload[1] = _decimalToBcd(now.year - 2000);
+      payload[2] = _decimalToBcd(now.month);
+      payload[3] = _decimalToBcd(now.day);
+      payload[4] = _decimalToBcd(now.hour);
+      payload[5] = _decimalToBcd(now.minute);
+      payload[6] = _decimalToBcd(now.second);
+      payload[7] = now.weekday; // 1=Mon … 7=Sun (matches ring convention)
 
       if (_notifyChar == null) {
         await _writeCommand(payload);
@@ -777,6 +864,32 @@ class RingBleService {
 
   int _bcdToDecimal(int bcd) {
     return ((bcd >> 4) * 10) + (bcd & 0x0F);
+  }
+
+  int _decimalToBcd(int decimal) {
+    return ((decimal ~/ 10) << 4) | (decimal % 10);
+  }
+
+  /// Decode a 3-byte BCD date (YY MM DD) from [data] at [offset].
+  /// Returns null if any field is out of range.
+  DateTime? _parseStepDate(List<int> data, int offset) {
+    try {
+      final yy = _bcdToDecimal(data[offset]);
+      final mm = _bcdToDecimal(data[offset + 1]);
+      final dd = _bcdToDecimal(data[offset + 2]);
+      if (mm < 1 || mm > 12 || dd < 1 || dd > 31) return null;
+      return DateTime(2000 + yy, mm, dd);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Decode a 4-byte little-endian unsigned integer from [data] at [offset].
+  int _leInt32(List<int> data, int offset) {
+    return data[offset] |
+        (data[offset + 1] << 8) |
+        (data[offset + 2] << 16) |
+        (data[offset + 3] << 24);
   }
 
   int _estimateStepLength(int heightCm) {
