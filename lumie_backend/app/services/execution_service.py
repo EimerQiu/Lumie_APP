@@ -24,7 +24,7 @@ from .skill_registry_service import SkillIndexItem
 logger = logging.getLogger(__name__)
 
 # LLM for code generation (Layer 2)
-_CODE_GEN_MODEL = "claude-sonnet-4-6"
+_CODE_GEN_MODEL = "claude-haiku-4-5-20251001"
 _client: Optional[anthropic.AsyncAnthropic] = None
 
 # Concurrency control

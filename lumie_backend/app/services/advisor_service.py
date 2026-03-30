@@ -25,7 +25,7 @@ from ..models.task import TaskCreate, TaskType
 logger = logging.getLogger(__name__)
 
 # Layer 1 model: Sonnet for accurate tool_use + fast response
-_MODEL = "claude-sonnet-4-20250514"
+_MODEL = "claude-haiku-4-5-20251001"
 
 # One shared async Anthropic client (initialised lazily)
 _client: Optional[anthropic.AsyncAnthropic] = None

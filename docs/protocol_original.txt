@@ -1,0 +1,770 @@
+
+Smart Ring Bluetooth Protocol					
+1	The app sends a 16-byte data packet to the smart ring, and then the smart ring sends back a 16-byte response packet. This communication method is used for all commands except a few specific ones.				
+2	The format of the 16-byte data packet sent by the app is as follows:
+	B1	B2   ---------------   B15			B16
+    B1: Command	
+    B2  - B15: Payload bytes, 14 bytes			
+    B16: CRC Checksum Byte
+
+	Command: Value range 0x00 to 0x7F; Bit 7 is always 0.	
+	The last byte is the CRC. The CRC calculation is simply the sum of all the previous 15 bytes, then taking the lowest 8 bits. For example, if the data packet is: A1 A2 A3 A4... A13 A14 A15 CRC, then CRC = (A1 + A2 + A3 + A4 + ... + A13 + A14 + A15) & 0xFF;				
+3	When the smart ring receives a command, it responds with a 16-byte reply data packet. The format is as follows:				
+	B1	B2   ---------------   B15			B16
+    B1: Command	
+    B2  - B15: Payload bytes, 14 bytes			
+    B16: CRC Checksum Byte
+	Command: Reply with the received command.				
+	If the 0x01 command is received and the CRC check is OK, return 0x01. If the CRC is incorrect, set Bit 7 to 1 and return 0x81.				
+	The last byte is the CRC. The CRC calculation is simply the sum of all the previous 15 bytes, then taking the lowest 8 bits. For example, if the data packet is: A1 A2 A3 A4... A13 A14 A15 CRC, then CRC = (A1 + A2 + A3 + A4 + ... + A13 + A14 + A15) & 0xFF;				
+
+1	设置时间 Set Time
+Command Format: 0x01 AA BB CC DD EE FF 00 00 00 00 00 00 00 00 CRC
+Function: Writes the current time from the APP to the ring, 16 bytes (time parameters are entered in decimal)
+Description:Received: 5C-00-00-25-08-30-15-03-01-00-63-BE-00-59-00-29-29-2A-0E-38-41-70-90-9B-3D-5C-FF
+🏃 Exercise Mode Data (0x5C)
+📄 ID: 0000 • 🕒 2025-08-48 21:03:01 • 🏷️ Running • ❤️ 99 bpm
+⏱️ 1620:14:54 • 🦶 10496 steps • 🏃 Pace 41:42/km
+🔥 2.391934914181951e+29 kcal • 📏 213479253503639552.00 km • ⚠️ CRC mismatch
+AA: Year (Year parameter range: 99 ≥ Year ≥ 0. For example, for 2012, AA = 12, default is 21st century, so AA = 12 means the year 2012).
+BB: Month (Month parameter range: 1 ≤ Month ≤ 12).
+CC: Day (Day parameter should be within the actual number of days in the corresponding month. For example, for January, valid values are from 1 to 31).
+DD: Hour (Hour parameter range: 0 ≤ Hour ≤ 23).
+EE: Minute (Minute parameter range: 0 ≤ Minute ≤ 59).
+FF: Second (Second parameter range: 0 ≤ Second ≤ 59).
+Response:
+Successful Response (valid checksum and success):
+0x01 F4 00 00 00 00 00 00 00 00 00 00 00 00 00 CRC
+Failure Response (checksum error or failure in execution):
+0x81 00 00 00 00 00 00 00 00 00 00 00 00 00 00 CRC
+Example:
+Command Sent: 0x01 24 08 08 08 08 08 00 00 00 00 00 00 00 00 CRC
+This means the year is 2012, the month is August, the day is 8th, hour is 8, minute is 8, and second is 8.
+Response Received: 0x01 F4 00 00 00 00 00 00 00 00 00 00 00 00 00 F5
+F4 indicates the maximum Bluetooth data packet length (the maximum data that Bluetooth can send in a single transmission).
+
+2	取得时间 Get time	
+Command Format: 0x41 00 00 00 00 00 00 00 00 00 00 00 00 00 00 CRC
+Function: The APP retrieves the current time from the ring, a total of 16 bytes (time parameters in the response are in decimal format).
+Response:
+Successful Response (valid checksum and success):
+0x41 YY MM DD hh mm ss ww WW 00 00 00 00 00 00 CRC
+Failure Response (checksum error or failure in execution):
+0xC1 00 00 00 00 00 00 00 00 00 00 00 00 00 00 CRC
+Response Description:
+YY: Year (e.g., 12 means 2012, default for the 21st century is 20AA year).
+MM: Month (1 to 12).
+DD: Day (1 to 31, depending on the month).
+hh: Hour (0 to 23).
+mm: Minute (0 to 59).
+ss: Second (0 to 59).
+ww: Weekday (1-7, where 01 is Monday and 07 is Sunday).
+WW: Bluetooth data packet maximum length (default is F4, indicating the Bluetooth channel allows sending 244 bytes of data per transmission).
+Example:
+Command Sent: 0x41 00 00 00 00 00 00 00 00 00 00 00 00 00 00 CRC
+The APP requests the current time from the ring.
+Response Received: 0x41 24 08 08 08 10 47 06 F4 00 00 00 00 00 00 CRC
+24: Year 2024
+08: Month 8 (August)
+08: Day 8
+08: Hour 8
+10: Minute 01
+47: Second 47
+06: Weekday (Saturday)
+F4: Bluetooth data packet maximum length (244 bytes)
+
+3	设置用户个人信息 Set user personal information
+Command Format: 0x02 AA BB CC DD EE 00 00 00 00 00 00 00 00 00 CRC
+Function: Write personal information to the ring (input parameters are in hexadecimal format).
+Description:
+AA: Gender (0 for female, 1 for male).
+BB: Age (in years, integer).
+CC: Height (in cm, precision of 1 cm).
+DD: Weight (in kg, precision of 1 kg).
+Response:
+Successful Response (valid checksum and success):
+0x02 00 00 00 00 00 00 00 00 00 00 00 00 00 00 CRC
+Failure Response (checksum error or failure in execution):
+0x82 00 00 00 00 00 00 00 00 00 00 00 00 00 00 CRC
+Example:
+Command Sent: 0x02 00 25 AA 32 3B 00 00 00 00 00 00 00 00 00 CRC
+AA = 00 (Female)
+BB = 25 (Age 25)
+CC = AA (Height 170 cm in hex)
+DD = 32 (Weight 50 kg in hex)
+Response Received: 0x02 00 00 00 00 00 00 00 00 00 00 00 00 00 00 CRC
+A successful response indicating the personal information was written to the ring.
+
+4	读取用户个人信息 Get user personal information	
+Command Format: 0x42 00 00 00 00 00 00 00 00 00 00 00 00 00 00 CRC
+Function: The app reads personal information from the ring.
+Response:
+Successful Response (valid checksum and success):
+0x42 AA BB CC DD EE FF GG HH II JJ KK 00 00 00 CRC
+Failure Response (checksum error or failure in execution):
+0xC2 00 00 00 00 00 00 00 00 00 00 00 00 00 00 CRC
+Response Description:
+AA: Gender (0 for female, 1 for male)
+BB: Age (in years, hexadecimal)
+CC: Height (in cm, with a precision of 1 cm, hexadecimal)
+DD: Weight (in kg, with a precision of 1 kg, hexadecimal)
+EE: Step length (in cm, hexadecimal)
+FF - KK: 6-byte ring ID code (big-endian)
+Example:
+Command Sent: 0x42 00 00 00 00 00 00 00 00 00 00 00 00 00 00 CRC
+Response Received: 0x42 00 25 AA 32 3B 30 30 30 30 30 30 00 00 00 CRC
+00: Female (Gender)
+25: 37 years old (Age)
+AA: 170 cm (Height)
+32: 50 kg (Weight)
+3B: 59 cm (Step length)
+30 30 30 30 30 30: Ring ID (Big-endian representation)
+
+5	设置戒指ID码 Set ring ID	
+Command Format: 0x05 ID5 ID4 ID3 ID2 ID1 ID0 00 00 00 00 00 00 00 00 CRC
+Function: The APP writes the ID code to the bracelet.
+Description: The 6-byte ID code is arranged with the high byte first.
+Command Response:
+If  CRC is correct and execution is OK:
+0x05 00 00 00 00 00 00 00 00 00 00 00 00 00 00 CRC
+If  CRC is incorrect or execution fails:
+0x85 00 00 00 00 00 00 00 00 00 00 00 00 00 00 CRC
+
+6	读取戒指电量 Read ring battery level	
+Command Format: 0x13 00 00 00 00 00 00 00 00 00 00 00 00 00 00 CRC
+Function: Read the battery level of  the ring.
+Description:
+Command Response:
+If  CRC is correct and execution is OK:
+0x13 AA BB CC DD EE FF GG 00 00 00 00 00 00 00 CRC
+AA: Battery level(in hexadecimal), value from 0 to 100, indicating the battery percentage.
+BB: Charging status, 1 means charging, 0 means not charging.
+CC DD: Voltage value, in decimal format.
+If  CRC is incorrect or execution fails:
+0x93 00 00 00 00 00 00 00 00 00 00 00 00 00 00 CRC
+
+7	读取MAC地址 Read MAC address	
+Command format: 0x22 00 00 00 00 00 00 00 00 00 00 00 00 00 00 CRC
+Function: Read the MAC address of the ring.
+Description:
+Command Response:
+If  the checksum is correct and execution is successful:
+0x22 MAC0 MAC1 MAC2 MAC3 MAC4 MAC5 00 00 00 00 00 00 00 00 CRC
+If  there is a checksum error or execution fails:
+0xA2 00 00 00 00 00 00 00 00 00 00 00 00 00 00 CRC
+
+8	读取固件版本号 Read firmware version	
+Command format: 0x27 00 00 00 00 00 00 00 00 00 00 00 00 00 00 CRC
+Function: Read the software version number.
+Command Response:
+If  the checksum is correct and execution is successful:
+0x27 AA BB CC DD EE FF GG 00 00 00 00 00 ID CRC
+If  there is a checksum error or execution fails:
+0xA7 00 00 00 00 00 00 00 00 00 00 00 00 00 00 CRC
+Response Description:
+AA BB CC DD represent the software version number (in hexadecimal BCD format).
+EE FF GG represent the corresponding time in year, month, and day.
+
+9	恢复出厂设置 Restore factory settings	
+Command format: 0x12 00 00 00 00 00 00 00 00 00 00 00 00 00 00 CRC
+Function: Restore to factory minimum current.
+Description: Puts the device into sleep mode. The sleep mode requires charging to activate before it can be used normally.
+Command Response:
+If  the checksum is correct and execution is successful:
+0x12 00 00 00 00 00 00 00 00 00 00 00 00 00 00 CRC
+If  there is a checksum error or execution fails:
+0x92 00 00 00 00 00 00 00 00 00 00 00 00 00 00 CRC
+
+10	MCU软复位 MCU soft reset	
+Command format: 0x2E 00 00 00 00 00 00 00 00 00 00 00 00 00 00 CRC
+Function: Reset the main control MCU.
+Description: Restart the main control unit (MCU) and reset the measurement mode.
+Command Response:
+If  the checksum is correct and execution is successful:
+0x2E 00 00 00 00 00 00 00 00 00 00 00 00 00 00 CRC
+If  there is a checksum error or execution fails:
+0xAE 00 00 00 00 00 00 00 00 00 00 00 00 00 00 CRC
+
+11	实时计步/心率/血氧/体温数据传输模式 Real-time Step/HR/Oxygen/Temperature Data Transmission Mode	
+Command Format:0x09 AA BB 00 00 00 00 00 00 00 00 00 00 00 00 CRC
+Function: Start or stop the real-time step counting mode.
+Parameters:
+AA:
+1: Start real-time step counting.
+0: Stop real-time step counting.
+BB:
+1: Enable real-time temperature.
+0: Disable real-time temperature.
+Response:
+Successful Response (valid checksum and success):
+0x09 AA BB CC DD EE FF GG HH II JJ KK LL 00 00 00 00 00 00 00 00 UU T1 T2 S1 00
+Failure Response (checksum error or failure in execution):
+0xA4 00 00 00 00 00 00 00 00 00 00 00 00 00 00 CRC
+Response Description:
+AA BB CC DD: Total step count.
+EE FF GG HH: Calories (display in KCAL, divide the value by 100 and retain two decimal places).
+II JJ KK LL: Walking distance (display in KM, divide the value by 100 and retain two decimal places).
+UU: Heart rate value (big-endian format).
+T1 T2: Temperature change value (precision of 0.1°C).
+S1: Blood oxygen level (requires 0x28 command for data).
+Example:
+Command Sent: 0x09 01 01 00 00 00 00 00 00 00 00 00 00 00 00 CRC
+Response Received: 0x09 66 00 00 00 19 01 00 00 05 00 00 00 25 00 00 00 00 00 00 00 00 5A 01 00 00 00 00 00 00 00 00
+66 00 00 00: 102 steps
+19 01 00 00: 2.81 KCAL
+05 00 00 00: 0.05 km
+5A: 90 (Heart rate)
+01 00: 1.0°C (Temperature change)
+00: Blood oxygen value (requires pairing with 0x28 command for valid data)
+
+12	设置自动检测心率/血氧/HRV等的时间间隔 Set the time interval for automatic detection of heart rate, blood oxygen, HRV, etc.	
+Command format:0x2A AA BB CC DD EE FF GG HH II 00 00 00 00 00 CRC
+Function: Set exercise time period.
+Description:
+AA: Working mode
+         0: Off
+         2: Interval working mode (automatic measurement interval is set for the entire day, in sleep mode, heart rate interval is automatically set to 5 minutes)
+BB: Hour part of the start time for measurements (24-hour format, BCD code format, e.g., 23:00 → AA = 0x23)
+CC: Minute part of the start time for measurements, BCD code format (e.g., 59 minutes → CC = 0x59)
+DD: Hour part of the end time for measurements (24-hour format, BCD code format, e.g., 23:00 → DD = 0x23)
+EE: Minute part of the end time for measurements, BCD code format (e.g., 59 minutes → EE = 0x59)
+FF: Weekday enable bits:
+Bit0 = 0 means Sunday disabled, Bit0 = 1 means Sunday enabled
+Bit1 = 0 means Monday disabled, Bit1 = 1 means Monday enabled
+Bit2 = 0 means Tuesday disabled, Bit2 = 1 means Tuesday enabled
+Bit3 = 0 means Wednesday disabled, Bit3 = 1 means Wednesday enabled
+Bit4 = 0 means Thursday disabled, Bit4 = 1 means Thursday enabled
+Bit5 = 0 means Friday disabled, Bit5 = 1 means Friday enabled
+Bit6 = 0 means Saturday disabled, Bit6 = 1 means Saturday enabled
+GG HH: When working in mode 2, how often to test (in minutes). Each test takes 1 minute.
+II: Measurement type
+1: Set heart rate
+2: Set blood oxygen
+4: HRV measurement
+Command Response:
+If checksum is correct and execution is OK, the response is:
+0x2A 00 00 00 00 00 00 00 00 00 00 00 00 00 00 CRC
+If checksum is incorrect or execution fails, the response is:
+0xAA 00 00 00 00 00 00 00 00 00 00 00 00 00 00 CRC
+Example:
+Send: 0x2A 02 00 00 23 59 7F 00 05 02 00 00 00 00 00 CRC
+Response: 0x2A 00 00 00 00 00 00 00 00 00 00 00 00 00 00 CRC
+
+13	读取自动检测心率/血氧/HRV等的时间间隔 Get the time interval for automatic detection of heart rate, blood oxygen, HRV, etc.	
+Command format:0x2B AA 00 00 00 00 00 00 00 00 00 00 00 00 CRC
+Function: The APP reads the time period settings from the ring.
+Description:
+AA:
+1: Read heart rate setting time
+2: Read blood oxygen setting time
+4: Read HRV measurement setting time
+Command Response:
+If checksum is correct and execution is OK, the response is:
+0x2B AA BB CC DD EE FF GG HH II 00 00 00 00 CRC
+Response description (data is returned in big-endian format):
+AA: Working mode
+0: Off
+2: Interval working mode (within the specified time period)
+BB: Hour part of the start time for measurements (24-hour format), BCD code format (e.g., 23:00 → AA = 0x23)
+CC: Minute part of the start time for measurements, BCD code format (e.g., 59 minutes → BB = 0x59)
+DD: Hour part of the end time for measurements (24-hour format), BCD code format (e.g., 23:00 → AA = 0x23)
+EE: Minute part of the end time for measurements, BCD code format (e.g., 59 minutes → BB = 0x59)
+FF: Weekday enable bits:
+Bit0 = 0 means Sunday disabled, Bit0 = 1 means Sunday enabled
+Bit1 = 0 means Monday disabled, Bit1 = 1 means Monday enabled
+Bit2 = 0 means Tuesday disabled, Bit2 = 1 means Tuesday enabled
+Bit3 = 0 means Wednesday disabled, Bit3 = 1 means Wednesday enabled
+Bit4 = 0 means Thursday disabled, Bit4 = 1 means Thursday enabled
+Bit5 = 0 means Friday disabled, Bit5 = 1 means Friday enabled
+Bit6 = 0 means Saturday disabled, Bit6 = 1 means Saturday enabled
+GG HH: When working in mode 2, how often to test (in minutes). Each test takes 1 minute.
+II: Measurement type
+1: Set heart rate
+2: Set blood oxygen
+4: HRV measurement
+Command Error or Fail Response:
+If checksum is incorrect or execution fails, the response is:
+0xAB 00 00 00 00 00 00 00 00 00 00 00 00 00 00 CRC
+Example:
+Send: 0x2B 02 00 00 00 00 00 00 00 00 00 00 00 00 CRC
+Response: 0x2B 02 00 00 23 59 7F 00 05 02 00 00 00 00 CRC
+Explanation:
+02: Interval working mode within the time period
+00 00: Start measurement time 00:00
+23 59: End measurement time 23:59
+7F: 0111 1111 (All days enabled)
+00 05: Automatic test every 5 minutes
+02: Blood oxygen measurement mode
+
+14	获得计步总数据 Get total step count data	
+Command format:0x51 AA 00 00 00 00 00 00 00 00 00 00 00 00 00 CRC
+AA:  00: Read total step count data
+Function:
+Retrieve all total data (the data returned is in little-endian format).
+Response Data Format:
+(Variable length instruction)
+0x51 ID YY MM DD S1 S2 S3 S4 T1 T2 T3 T4 D1 D2 D3 D4 K1 K2 K3 K4 00 00 00 00 00 00
+The length is variable, with the minimum being 27 bytes. There is no CRC check.
+If only one data entry is returned, the response is 29 bytes, ending with 0x51 FF.
+The maximum length for step count data is (data bytes in little-endian format).
+Response Description:
+ID: Identifier, representing the total data from the X-th previous day.
+0 means the current day (real-time data). The range is from 0 to 15, representing 15 days of data (the storage system keeps up to 15 days, and the 16th day will overwrite the 1st day, and so on).
+YY MM DD: Represents the date of the data: Year, Month, Day.
+S1 S2 S3 S4: Step count data.
+T1 T2 T3 T4: Exercise time (in seconds, accumulated exercise duration).
+D1 D2 D3 D4: Distance (in 0.01 km).
+K1 K2 K3 K4: Calories burned (in 0.01 kcal).
+Example:
+Send: 0x51 00 00 00 00 00 00 00 00 00 00 00 00 00 00 CRC
+Response: 0x51 00 24 08 27 2E 00 00 00 11 00 00 00 03 00 00 00 93 00 00 00 00 00 00 00 00 00 51 FF
+Explanation:
+00: ID is 00 (if there’s more data, it will be separated with 0x51 ID).
+24 08 27: Date is August 27, 2024.
+2E 00 00 00: 226 steps.
+11 00 00 00: 17 seconds of exercise time.
+03 00 00 00: 0.48 km.
+93 00 00 00: 1.47 kcal burned.
+
+15	获得步数详细数据（一条数据包含十分钟内每分钟的具体步数） Obtain detailed step count data (one entry contains the specific step count for each minute within a 10-minute period)	
+Command format:0x52 AA 00 00 YY MM DD HH mm SS 00 00 00 00 00 CRC
+AA:
+99: Delete detailed step count data
+00: Read the most recent detailed step count data (retrieve the last 50 data entries based on the timestamp)
+YY MM DD HH mm SS: Data timestamp. Sending "00" with a timestamp allows you to query only data after a specified timestamp (for the first sync, return all data, and the timestamp after "00" will be from the historical data).
+02: Continue reading from the last read position (retrieve the next 50 entries after the last batch of 50 entries).
+Function:
+Retrieve detailed step count data.
+Response Data Format:
+(Variable-length instruction)
+0x52 ID1 ID2 YY MM DD HH mm SS S1 S2 K1 K2 D1 D2 SD1 SD2 SD3 ... SD10 (No CRC check)
+The minimum length is 25 bytes. A single detailed step count Bluetooth data packet can contain up to 9 data entries. If the packet length is less than the total data being sent, it will be divided into separate packets, with each containing up to 9 entries.
+For example, if there are 19 entries, the first packet will contain entries 0-8, the second packet will contain entries 9-17, and the third packet will contain entry 18 followed by a 0x52 FF instruction to indicate the end of the data. The packet division scheme follows a similar rule.
+When step counting begins, data is stored every 10 minutes, and the step count for each minute is recorded. If no steps are taken in a minute, it is not counted. (The returned measurement data is in little-endian format.)
+Response Data Description:
+ID1 ID2: Data read identifier
+YY MM DD HH mm SS: Date and time of the data: Year, Month, Day, Hour, Minute, Second.
+S1 S2: Step count for the 10-minute period.
+K1 K2: Calories burned (in 0.01 kcal).
+D1 D2: Distance traveled (in 0.01 km).
+SD1 SD2 ... SD10: Step count for each minute in the 10-minute period.
+Example:
+Send: 0x52 00 00 00 00 00 00 00 00 00 00 00 00 00 00 CRC
+Response:
+0x52 00 00 24 08 08 23 58 19 1D 00 25 00 00 00 0A 13 00 00 00 00 00 00 00 00
+0x52 02 00 24 08 08 23 43 19 0D 00 19 00 01 00 0D 00 00 00 00 00 00 00 00 00
+···
+0x52 08 00 24 08 27 09 21 19 1C 00 6A 00 03 00 0D 0F 00 00 00 00 00 00 00 00
+0x52 09 00 24 08 27 09 10 19 12 00 28 00 00 00 0E 04 00 00 00 00 00 00 00 00
+0x52 FF
+Explanation:
+09 00: Data ID.
+24 08 27 09 10 19: Date and time is August 27, 2024, at 9:10:19.
+12 00: Step count is 33.
+28 00: 1.30 kcal burned.
+00 00: 0 km traveled.
+0E 04 ... 00: Step counts for each minute within the 10-minute period.
+Each data packet contains up to 9 data entries.
+
+16	获得睡眠历史数据 Obtain historical sleep data	
+Command Format:0x53 AA 00 00 YY MM DD HH mm SS 00 00 00 00 00 CRC
+AA:
+99: Delete detailed sleep data
+00: Read the most recent sleep detailed data (retrieve the last 50 data entries starting from the specified timestamp)
+YY MM DD HH mm SS: Data timestamp. Sending "00" with a timestamp allows you to query only data after a specified timestamp (for the first sync, return all data, and the timestamp after "00" will be from the historical data).
+02: Continue reading from the last read position (retrieve the next 50 entries after the last batch of 50 entries).
+Function:
+Retrieve detailed sleep data.
+Response Data Format:
+(Variable-length instruction)
+0x53 ID1 ID2 YY MM DD HH mm SS LEN SD1 SD2 SD3 ... SD120 (No CRC check)
+The minimum length is 130 bytes. Each data packet represents one entry, and a response ending with 0x54 FF signifies the end of the data.
+ID1 ID2: Data read identifier
+YY MM DD HH mm SS: Date and time of the data: Year, Month, Day, Hour, Minute, Second.
+LEN: Length that indicates the valid length of sleep data (only the first LEN bytes are valid data, in hexadecimal).
+SD1 SD2 SD3 ... SD120: Each number represents the sleep quality for one minute. Up to 2 hours (120 minutes) of sleep data can be recorded:
+01 = Deep sleep
+02 = Light sleep
+03 = REM 
+Other numbers (e.g., 00, 05) represent awake states.
+If data is interrupted, the app will compensate for the missing data.
+Example:
+Send: 0x53 00 00 00 00 00 00 00 00 00 00 00 00 00 00 CRC
+Response:
+0x53 00 00 24 08 23 13 36 00 36 05 05 05 05 02 02 02 02 02 02 02 02 02 02 02 02 02 02 02 02 02 02 02 02 02 02 02 02 02 02 02 02 02 02 02 02 02 02 02 02 02 02 02 02 02 02 02 02 02 02 02 02 02 02 02 02 02 05 02 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+0x53 FF
+Explanation:
+00 00: Data ID
+24 08 23 13 36 00: The start time of the data is August 23, 2024, at 13:36:00.
+36: The valid data length is 36 bytes.
+05 ... 02: Sleep quality for each minute (01 = Deep sleep, 02 = Light sleep, 03 = REM sleep, and other values represent awake).
+
+17	获得心率数据（读取详细的心率数据，长时间测量的心率详细数据）Obtain heart rate data (retrieve detailed heart rate data, including long-term measurement heart rate details)	
+Command Format:0x54  AA 00 00 YY MM DD HH mm SS 00 00 00 00 00 CRC
+AA:
+99: Delete detailed heart rate data
+00: Read the most recent heart rate detailed data (retrieve the last 50 data entries starting from the specified timestamp)
+YY MM DD HH mm SS: Data timestamp. Sending "00" with a timestamp allows you to query only data after a specified timestamp (for the first sync, return all data, and the timestamp after "00" will be from the historical data).
+02: Continue reading from the last read position (retrieve the next 50 entries after the last batch of 50 entries).
+Function:
+Retrieve detailed heart rate data.
+Response Data Format:
+(Variable-length instruction)
+0x54 ID1 ID2 YY MM DD HH mm SS SD1 SD2 SD3 ... SD15 (No CRC check)
+The minimum length is 21 bytes. Each data packet represents one entry, and a response ending with 0x54 FF signifies the end of the data.
+ID1 ID2: Data read identifier
+YY MM DD HH mm SS: Date and time of the data: Year, Month, Day, Hour, Minute, Second.
+SD1 SD2 SD3 ... SD15: Each value represents the heart rate recorded every 5 seconds. There are 15 heart rate values in total, which cover 75 seconds of heart rate data. The data is in hexadecimal.
+Example:
+Send: 0x54 00 00 00 00 00 00 00 00 00 00 00 00 00 00 54
+Response:
+0x54 00 00 24 08 08 22 59 27 4C 4E 00 00 00 00 00 00 00 00 00 00 00 00 00
+0x54 01 00 24 08 08 22 58 12 4C 49 4A 4D 50 51 50 4F 4E 4F 4C 4B 4B 4C 4C
+0x54 FF
+Explanation:
+00 00: Data ID
+24 08 08 22 59 27: The time of the data is August 8, 2024, at 22:59:27.
+4C...00: The heart rate data is stored in hexadecimal format. For example, 4C in hexadecimal equals 76 in decimal (heart rate value). Each byte represents a heart rate recorded every 5 seconds
+
+18	获得心率测量历史数据（测量的单个心率值） Obtain heart rate measurement history data (individual heart rate values measured)	
+Command Format:0x55 AA 00 00 YY MM DD HH mm SS 00 00 00 00 00 CRC
+AA:
+99: Delete heart rate data
+00: Read the most recent heart rate data (retrieve the last 50 data entries starting from the specified timestamp)
+YY MM DD HH mm SS: Data timestamp. Sending "00" with a timestamp allows you to query only data after a specified timestamp (for the first sync, return all data, and the timestamp after "00" will be from the historical data).
+02: Continue reading from the last read position (retrieve the next 50 entries after the last batch of 50 entries).
+Function:
+Retrieve heart rate data.
+Response Data Format:
+(Variable-length instruction)
+0x55 ID1 ID2 YY MM DD HH mm SS HH (No CRC check)
+The minimum length is 10 bytes. Each data packet represents one entry, and a response ending with 0x55 FF signifies the end of the data.
+ID1 ID2: Data read identifier
+YY MM DD HH mm SS: Date and time of the data: Year, Month, Day, Hour, Minute, Second.
+HH: Heart rate value in hexadecimal.
+Example:
+Send: 0x55 00 00 00 00 00 00 00 00 00 00 00 00 00 00 CRC
+Response:
+0x55 00 00 24 08 27 09 01 30 46
+0x55 FF
+Explanation:
+00 00: Data ID
+24 08 27 09 01 30: The time of the data is August 27, 2024, at 09:01:30.
+46: The heart rate value 70 (in hexadecimal 46).
+
+19	获得HRV测量历史数据 Obtain HRV measurement history data	
+Command Format:0x56 AA 00 00 YY MM DD HH mm SS 00 00 00 00 00 CRC
+AA:
+99: Delete HRV data
+00: Read the most recent HRV data (retrieve the last 50 data entries starting from the specified timestamp)
+YY MM DD HH mm SS: Data timestamp. Sending "00" with a timestamp allows you to query only data after a specified timestamp (for the first sync, return all data, and the timestamp after "00" will be from the historical data).
+02: Continue reading from the last read position (retrieve the next 50 entries after the last batch of 50 entries).
+Function:
+Retrieve HRV data.
+Response Data Format:
+(Variable-length instruction)
+0x56 ID1 ID2 YY MM DD HH mm SS D1 00 D3 D4 P1 P2 (No CRC check)
+The minimum length is 15 bytes. Each data packet represents one entry, and a response ending with 0x56 FF signifies the end of the data.
+ID1 ID2: Data read identifier
+YY MM DD HH mm SS: Date and time of the data: Year, Month, Day, Hour, Minute, Second.
+D1: HRV value (in hexadecimal)
+D3: Heart rate value (in hexadecimal)
+D4: Fatigue level (in hexadecimal)
+P1: Systolic blood pressure (Note: Blood pressure values may not be precise)
+P2: Diastolic blood pressure (Note: Blood pressure values may not be precise)
+Example:
+Send: 0x56 00 00 00 00 00 00 00 00 00 00 00 00 00 00 CRC
+Response:
+0x56 00 00 24 08 09 00 59 30 40 00 4D 1E 75 3E
+0x56 01 00 24 08 08 22 59 30 32 00 4E 38 76 3F
+0x56 02 00 24 08 27 08 59 30 33 00 00 50 00 00
+0x56 FF
+Explanation:
+00 00: Data ID
+24 08 27 08 59 30: The data timestamp is August 27, 2024, at 08:59:30.
+33: HRV value 51 (in hexadecimal 33)
+00: Heart rate value 0 (in hexadecimal 00)
+50: Fatigue level 80 (in hexadecimal 50)
+76 3F: Blood pressure: systolic 118, diastolic 63 (in hexadecimal 76 3F)
+
+20	获得温度历史数据（温度测量界面测试出的温度） Obtain historical temperature data (temperature measured from the temperature measurement interface)	
+Command Format:0x62 AA 00 00 YY MM DD HH mm SS 00 00 00 00 00 CRC
+AA:
+99: Delete temperature detailed data
+00: Read the most recent temperature data (retrieve the last 50 entries starting from the specified timestamp)
+YY MM DD HH mm SS: Data timestamp. Sending "00" with a timestamp allows you to query only data after a specified timestamp (for the first sync, return all data, and the timestamp after "00" will be from the historical data).
+02: Continue reading from the last read position (retrieve the next 50 entries after the last batch of 50 entries).
+Function:
+Retrieve detailed temperature data.
+Response Data Format:
+(Variable-length instruction)
+0x62 ID1 ID2 YY MM DD HH mm SS T1 T2 T3 T4 T5 T6 (No CRC check)
+The minimum length is 15 bytes. Each data packet represents 16 entry, and a response ending with 0x62 FF signifies the end of the data.
+ID1 ID2: Data read identifier
+YY MM DD HH mm SS: Date and time of the data: Year, Month, Day, Hour, Minute, Second.
+T1 T2 T3 T4 T5 T6: Temperature value in Celsius (°C), stored as a 2-byte value in little-endian format, with one decimal place of precision. For example, 59 01 represents 34.5°C.
+Example:
+Send: 0x62 00 00 00 00 00 00 00 00 00 00 00 00 00 00 CRC
+Response:
+0x62 00 00 24 08 09 00 59 59 5A 01 49 01 59 01
+~~~
+0x62 0A 00 24 08 27 08 56 59 D9 00 E0 00 D8 00
+0x62 FF
+Explanation:
+00 00: Data ID
+24 08 27 08 56 59: Timestamp for the data is August 27, 2024, at 08:56:59.
+5A 01: Temperature value of 34.6°C (little-endian representation)
+49 01: Temperature value of 32.9°C (little-endian representation)
+59 01: Temperature value of 34.5°C (little-endian representation).
+The data packets continue until the last packet with 0x62 FF, which signifies the end of the data
+
+21	获得血氧历史数据（自动测试数据） Obtain historical blood oxygen data (automatic test data).	
+Command Format:0x66 AA 00 00 YY MM DD HH mm SS 00 00 00 00 00 CRC
+AA:
+99: Delete blood oxygen data
+00: Read the most recent blood oxygen data (retrieve the last 50 entries starting from the specified timestamp)
+YY MM DD HH mm SS: Data timestamp. Sending "00" with a timestamp allows you to query only data after a specified timestamp (for the first sync, return all data, and the timestamp after "00" will be from the historical data).
+02: Continue reading from the last read position (retrieve the next 50 entries after the last batch of 50 entries).
+Response Data Format:
+(Variable-length instruction)
+0x66 ID1 ID2 YY MM DD HH mm SS HH (Data is segmented with 0x66-HH for each segment)
+The minimum length is 10 bytes. Each Bluetooth data packet can contain up to 22 data entries, with each entry representing one data point.
+ID1 ID2: Data read identifier (little-endian format)
+YY MM DD HH mm SS: Date and time of the data: Year, Month, Day, Hour, Minute, Second
+HH: Blood oxygen value (in hexadecimal). This is the blood oxygen saturation level.
+Example:
+Send: 0x66 00 00 00 00 00 00 00 00 00 00 00 00 00 00 CRC
+Response:
+0x66 00 00 24 08 09 00 00 23 61
+0x66 01 00 24 08 27 09 00 19 62
+0x66 FF
+Explanation:
+00 00: Data ID
+24 08 27 09 00 19: Timestamp for the data is August 27, 2024, at 09:00:19.
+62: Blood oxygen value of 98% (in hexadecimal, 0x62 equals 98).
+The data packets continue until the last packet with 0x66 FF, which signifies the end of the data
+
+22	多参数综合健康测量（心率/血氧/HRV/血压/压力等） Multi-parameter comprehensive health measurement (heart rate, blood oxygen, HRV, blood pressure, stress, etc.)	
+Command Format:0x28 AA BB 00 00 CC DD 00 00 00 00 00 00 00 00 CRC
+AA (Measurement Type):
+0x01: HRV/Blood Pressure measurement
+0x02: Heart rate measurement
+0x03: Blood oxygen measurement
+BB (Measurement Control):
+1: Start measurement
+0: Stop measurement
+CC DD: Test duration in hexadecimal, in seconds (little-endian format). If the value is less than 30 seconds, the wearable device defaults to 30 seconds.
+Expected Response:
+After sending the command to start or stop the measurement, the response will be: 0x28 AA 00 00 00 00 00 00 00 00 00 00 00 00 00 CRC
+Real-time Data Retrieval:
+To receive real-time data (like heart rate, blood oxygen, etc.), you need to send the 0x09 command while the measurement is active. The device will return updated data every second, and the response will be in the following format:
+0x09 AA BB CC DD EE FF GG HH II JJ KK LL 00 00 00 00 00 00 00 00 UU T1 T2 S1 00
+AA BB CC DD: Total steps taken
+EE FF GG HH: Calories burned (in hexadecimal, convert to decimal, and then divide by 100 to get kcal)
+II JJ KK LL: Walking distance (in hexadecimal, convert to decimal, and divide by 100 for km)
+UU: Heart rate value (hexadecimal)
+T1 T2: Temperature value (divide by 10 for actual temperature in °C, with one decimal place)
+S1: Blood oxygen value (hexadecimal)
+Status Query (AA = 80):
+To query the status of measurements, send a command with AA = 80:
+0x28 80 00 00 00 00 00 00 00 00 00 00 00 00 00 CRC
+AA (Test Mode):
+1: Heart rate measurement
+2: HRV measurement
+4: Blood oxygen measurement
+00: No measurement in progress
+Example Commands:
+Start Heart Rate Measurement (30 seconds):
+Command: 0x28 02 01 00 00 00 00 00 00 00 00 00 00 00 00 CRC
+Response: 0x28 02 00 00 00 00 00 00 00 00 00 00 00 00 00 CRC
+Query Status after 30 seconds:
+Command: 0x28 80 00 00 00 00 00 00 00 00 00 00 00 00 00 CRC
+Response: 0x28 80 01 02 00 00 00 00 00 00 00 00 00 00 00 AB
+01: Heart rate measurement is currently active.
+
+23	运动模式控制开关 Exercise mode control switch	
+Command Format :0x19 AA BB CC DD 00 00 00 00 00 00 00 00 00 00 CRC
+AA (Action)
+1: Start the exercise mode
+2: Pause the exercise mode
+3: Resume the exercise mode
+4: End the exercise mode
+5: Query the current exercise mode status
+BB (Exercise Mode Type):
+0: Run
+1: Cycling
+2: Badminton
+3: Football
+4: Tennis
+5: Yoga
+6: Meditation (for meditation mode, see specific parameters for CC and DD)
+7: Dance
+8: Basketball
+9: Walk
+10: Workout
+11: Cricket
+12: Hiking
+13: Aerobics
+14: Ping-Pong
+(Additional modes can be added)
+CC (Level, optional for Meditation Mode):
+0, 1, 2: Meditation levels (used only when BB = 6 for meditation mode)
+DD (Duration in minutes, optional for Meditation Mode):
+Time in minutes (used only when BB = 6 for meditation mode)
+For other exercise modes (non-meditation modes), CC and DD are set to 0.
+Response Format:
+0x19 AA YY MM DD HH mm SS 00 00 00 00 00 00 00 CRC
+AA:
+1: Success (operation successful)
+0: Failure (e.g., if there is a conflict, like trying to start a new mode while one is already running, or if the device is in another mode like blood pressure testing)
+YY MM DD HH mm SS: Timestamp of when the exercise mode was started.
+Examples:
+Start Exercise Mode (e.g., Running Mode):
+Command:0x19 01 00 00 00 00 00 00 00 00 00 00 00 00 00 1A
+AA = 1: Start mode
+BB = 00: Running mode (Run)
+CC and DD = 0: No additional parameters
+Response:0x19 01 24 09 03 15 51 47 00 00 00 00 00 00 00 F7
+AA = 01: Success
+24 09 03 15 51 47: Timestamp (24th September 2023, 15:51:47)
+Pause the Exercise Mode:
+Command:0x19 02 00 00 00 00 00 00 00 00 00 00 00 00 00 2B
+Response:0x19 01 00 24 09 03 15 51 47 00 00 00 00 00 00 F7
+AA = 01: Success (mode paused)
+BB = 00: Mode type (e.g., Run)
+Timestamp: 24th September 2023, 15:51:47
+Query the Current Mode Status:
+Command:0x19 05 00 00 00 00 00 00 00 00 00 00 00 00 00 1A
+Response:0x19 01 00 24 09 03 15 51 47 00 00 00 00 00 00 F7
+AA = 01: Current mode is active
+BB = 00: Mode type (e.g., Run)
+Timestamp: 24th September 2023, 15:51:47
+End the Exercise Mode (e.g., Running Mode):
+Command:0x19 04 00 00 00 00 00 00 00 00 00 00 00 00 00 2C
+Response:0x19 01 00 24 09 03 15 51 47 00 00 00 00 00 00 F7
+AA = 01: Success (mode ended)
+BB = 00: Mode type (e.g., Run)
+Timestamp: 24th September 2023, 15:51:47
+Special Handling for Meditation Mode (BB = 6):
+Start Meditation Mode (Level 1, 10 minutes):
+Command:0x19 01 06 01 0A 00 00 00 00 00 00 00 00 00 00 2D
+BB = 06: Meditation mode
+CC = 01: Meditation level 1
+DD = 0A: Duration of 10 minutes
+Pause Meditation Mode:
+Command:0x19 02 06 00 00 00 00 00 00 00 00 00 00 00 00 2E
+Response:0x19 01 00 24 09 03 15 51 47 00 00 00 00 00 00 F7
+Error Response (if command is incorrect or conflicting):
+If an error occurs, such as attempting to start a new mode while another one is already active, the response will indicate an error:
+Response:0xA6 00 00 00 00 00 00 00 00 00 00 00 00 00 00 CRC
+		
+24	戒指心跳数据包（运动模式下的心率数据） Ring heart rate data packet (heart rate data in exercise mode)
+Command Format:0x18 HR S1 S2 S3 S4 K1 K2 K3 K4 T1 T2 T3 T4 D1 D2 D3 D4 00 00 00
+HR: 0xFF indicates the ring has ended the exercise mode. Other values represent heart rate values.
+S1 S2 S3 S4: Step count.
+K1 K2 K3 K4: Calories (float value).
+T1 T2 T3 T4: Exercise duration.
+D1 D2 D3 D4: Distance calculated by the ring.
+Response:
+18 FF XX 00 00 00 00 00 00 00 00 00 00 00 00 CRC
+Indicates the exercise has ended: XX is the newly added value. If it’s 2, it means the end was automatically detected.
+Exercise mode exit logic (requires corresponding reminder on the app):
+After 10 minutes with fewer than 80 steps, the firmware returns 18 aa 01 (the app shows a pop-up asking if the user wants to end the exercise. If "No" is selected, the exercise continues; if "Yes" is selected, the exercise ends).
+After 20 minutes with fewer than 80 steps, the firmware returns 18 aa 02 (the app shows a pop-up asking if the user wants to end the exercise. If "No" is selected, the exercise continues; if "Yes" is selected, the exercise ends).
+After 30 minutes with fewer than 80 steps, the firmware returns 18 ff 02 (the app shows a pop-up to end the exercise. If "Confirm" is clicked, the exercise exits immediately).
+
+25	获得各运动模式里的运动数据（这里指运动模式里的数据，如跑步，骑自行车等）
+Obtain exercise data from various exercise modes (referring to data within the exercise modes, such as running, cycling, etc.)	
+Command Format:0x5C AA BB CC 00 00 00 00 00 00 00 00 00 00 00 CRC
+AA:
+99: Delete exercise detailed data
+00: Read the latest exercise data (retrieve the latest 50 data points starting from the timestamp)
+YY MM DD HH mm SS: Timestamp; if 00 is sent, you can query for new data after the specified timestamp (for the first sync, all data will be returned, and the timestamp after 00 will be from the historical data).
+02: Continue reading the next segment of data (retrieves the next 50 data points after the last read).
+Response data (variable-length command):
+0x5C ID1 ID2 YY MM DD HH mm SS TY HH Tt tt tt SS SS PP PP KK KK KK KK DD DD DD DD
+YY MM DD HH mm SS: Date and time (Year, Month, Day, Hour, Minute, Second)
+TY: Exercise type
+0: Run
+1: Cycling
+2: Badminton
+3: Football
+4: Tennis
+5: Yoga
+6: Meditation
+7: Dance
+8: Basketball
+9: Walk
+10: Workout
+11: Cricket
+12: Hiking
+13: Aerobics
+14: Ping-Pong
+15: Rope Jump
+16: Sit-ups
+17: Volleyball
+HH: Heart rate
+Tt tt: Exercise time (low byte first, high byte later, in seconds)
+SS SS: Exercise steps (low byte first, high byte later)
+PP pp: Exercise speed (capital PP for minutes, lowercase pp for seconds, for example: PP=10, pp=50 means it takes 10 minutes and 50 seconds to walk 1 kilometer)
+KK KK KK KK: Calories (low byte first, high byte later, float value in kcal)
+DD DD DD DD: Distance (low byte first, high byte later, float value in kilometers)
+Example:
+Send:
+0x5C 00 00 00 00 00 00 00 00 00 00 00 00 00 00 CRC
+Response:
+0x5C 00 00 24 09 03 10 36 47 00 8A 43 00 75 00 00 00 54 2A 0E 40 80 E3 6B 3D 5C FF
+00 00: Data ID
+24 09 03 10 36 47: Timestamp (24th September, 3rd 10:36:47)
+00: Exercise type (Running)
+8A: Heart rate (138 bpm)
+43 00: Exercise duration (67 seconds)
+75 00: Steps taken (117 steps)
+00 00: (Unused fields)
+54 2A 0E 40: Calories and distance in float format (calories = 54.4 kcal, distance = 2.45 km)
+		
+26	实时读取戒指温度 Real-time Temperature Reading of the Ring	
+Command Format:0x14 00 00 00 00 00 00 00 00 00 00 00 00 00 00 CRC
+Function: Real-time reading of the ring’s temperature.
+Command Response:
+If the checksum is correct and the execution is successful, the response is:
+0x14 AA BB CC DD EE FF GG HH II JJ 00 00 00 00 CRC
+AA BB: Ring temperature (the highest temperature value from the current 3 NTCs, in hexadecimal little-endian format).
+CC DD: Ring temperature, in decimal format with one decimal place. For example, if 02 64, it should be interpreted as 26.4℃.
+EE FF GG HH II JJ: Temperature data from the 3 NTCs, where every two bytes represent the temperature data for one NTC. For example, EE FF represents the temperature data of one NTC, in little-endian hexadecimal.
+Example:
+Sending:
+0x14 00 00 00 00 00 00 00 00 00 00 00 00 00 00 CRC
+Response:
+0x14 48 01 03 28 45 01 48 01 41 01 00 00 00 00 CRC
+48 01: Temperature is 32.8℃.
+03 28: Temperature in decimal format, i.e., 32.8℃.
+45 01: Temperature of 32.5℃.
+
+
+An example:
+56-00-00-25-07-02-13-58-48-39-00-59-22-77-40-
+56-01-00-25-07-02-12-58-42-13-00-62-3A-76-3F-
+56-02-00-25-07-02-11-58-54-2C-00-4A-2F-72-40-
+56-03-00-25-07-02-10-58-48-31-00-49-2E-71-3F-
+56-04-00-25-07-02-09-58-55-31-00-48-2D-70-3E-
+56-05-00-25-07-02-08-58-41-36-00-42-0B-74-3D-
+56-06-00-25-07-02-07-58-46-3D-00-58-21-76-3F-
+56-07-00-25-07-02-06-58-44-3A-00-41-0A-73-3C-
+56-08-00-25-07-02-05-58-50-22-13-3F-2E-71-3F-
+56-09-00-25-07-02-04-58-48-2C-00-41-2B-73-3C-
+56-0A-00-25-07-02-03-58-49-18-00-40-2F-72-40-
+56-0B-00-25-07-02-02-58-49-21-00-3E-2D-70-3E
+
+56-34-02-25-06-04-21-58-41-2A-00-48-2D-70-3E-
+56-35-02-25-06-04-19-58-38-30-00-58-3A-76-3F-
+56-36-02-25-06-04-18-58-41-36-00-4E-2E-76-3F-
+56-37-02-25-06-04-17-58-38-36-00-4B-2B-73-3C-
+56-38-02-25-06-04-16-58-38-27-00-55-37-73-3C-
+56-39-02-25-06-04-15-58-50-28-00-45-2F-77-40-
+56-3A-02-25-06-04-14-58-42-2B-00-4B-2B-73-3C-
+56-3B-02-25-06-04-13-58-36-20-00-5D-3A-71-3F-
+56-3C-02-25-06-04-12-58-40-31-00-53-3A-71-3F-
+56-3D-02-25-06-04-11-58-49-30-00-55-37-73-3C-
+56-3E-02-25-06-04-10-58-40-27-00-54-3B-72-40-
+56-3F-02-25-06-04-09-59-00-23-00-61-39-75-3E

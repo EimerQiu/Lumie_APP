@@ -826,27 +826,38 @@ Byte[15] = CRC
 **Command (16 bytes):**
 ```
 Byte[0]  = 0x2A
-Byte[1]  = measurement_type  (1=HR, 2=SpO2, 4=HRV)
-Byte[2]  = working_mode      (0=Off, 2=Interval)
-Byte[3]  = start_hour        (BCD, 0–23)
-Byte[4]  = start_minute      (BCD, 0–59)  [OR end_hour if FF-variant, see below]
-Byte[5]  = end_hour          (BCD, 0–23)  [OR end_minute if FF-variant]
-Byte[6]  = end_minute        (BCD, 0–59)  [OR 0xFF if full-day FF-variant]
-Byte[7]  = weekday_bits      (bitmask, bit0=Sun, bit1=Mon, ... bit6=Sat)
-Byte[8]  = interval_lo       (interval minutes, LE byte 0)
-Byte[9]  = interval_hi       (interval minutes, LE byte 1; 0x00 in FF-variant)
+Byte[1]  = working_mode      (0=Off, 2=Interval)
+Byte[2]  = start_hour        (BCD, 0–23)
+Byte[3]  = start_minute      (BCD, 0–59)
+Byte[4]  = end_hour          (BCD, 0–23)
+Byte[5]  = end_minute        (BCD, 0–59)
+Byte[6]  = weekday_bits      (bitmask, bit0=Sun, bit1=Mon, ... bit6=Sat)
+Byte[7]  = interval_high     (interval minutes, high byte, big-endian)
+Byte[8]  = interval_low      (interval minutes, low byte, big-endian)
+Byte[9]  = measurement_type  (1=HR, 2=SpO2, 4=HRV)
 Byte[10..14] = 0x00
 Byte[15] = CRC
 ```
 
-**Full-day (00:00–23:59) variant layout — use when start=00:00, end=23:59:**
+**Interval encoding (big-endian):**
+- For interval = 5 minutes: `Byte[7]=0x00, Byte[8]=0x05` → `(0x00 << 8) | 0x05 = 5`
+- For interval = 300 minutes: `Byte[7]=0x01, Byte[8]=0x2C` → `(0x01 << 8) | 0x2C = 300`
+
+**Example:**
 ```
-Byte[3]  = 0x00   (start_hour BCD = 0)
-Byte[4]  = 0x23   (end_hour BCD = 23, NOT start_minute)
-Byte[5]  = 0x59   (end_minute BCD = 59)
-Byte[6]  = 0xFF   (marker indicating full-day variant)
-Byte[8]  = interval_minutes & 0xFF
-Byte[9]  = 0x00
+Set Heart Rate interval to 10 minutes, 08:00–22:00, all weekdays:
+0x2A 02 08 00 22 00 7F 00 0A 01 00 00 00 00 00 CRC
+     |  |  |  |  |  |  |  |  |  |
+     |  |  |  |  |  |  |  |  |  +-- Measurement type (1=HR)
+     |  |  |  |  |  |  |  |  +------ Interval low (0x0A = 10)
+     |  |  |  |  |  |  |  +--------- Interval high (0x00)
+     |  |  |  |  |  |  +------------ Weekday bits (0x7F = all days)
+     |  |  |  |  |  +--------------- End minute (00)
+     |  |  |  |  +------------------ End hour (22 BCD)
+     |  |  |  +-------------------- Start minute (00)
+     |  |  +------------------------ Start hour (08 BCD)
+     |  +--------------------------- Working mode (02 = Interval)
+     +----------------------------- Command code
 ```
 
 **Weekday bitmask:**
@@ -882,21 +893,45 @@ Byte[15] = CRC
 
 **Success response (16 bytes):**
 
-Response mirrors the `0x2A` set command layout:
+Response matches the `0x2A` set command layout:
 
 ```
 Byte[0]  = 0x2B
-Byte[1]  = measurement_type  (echoed)
-Byte[2]  = working_mode      (0=Off, 2=Interval)
-Byte[3]  = start_hour        (BCD)
-Byte[4]  = start_minute or end_hour (BCD; see FF-variant below)
-Byte[5]  = end_hour or end_minute   (BCD)
-Byte[6]  = end_minute or 0xFF       (BCD or FF-marker)
-Byte[7]  = weekday_bits
-Byte[8]  = interval_lo
-Byte[9]  = interval_hi
+Byte[1]  = working_mode      (0=Off, 2=Interval)
+Byte[2]  = start_hour        (BCD)
+Byte[3]  = start_minute      (BCD)
+Byte[4]  = end_hour          (BCD)
+Byte[5]  = end_minute        (BCD)
+Byte[6]  = weekday_bits      (bitmask)
+Byte[7]  = interval_high     (interval minutes, high byte, big-endian)
+Byte[8]  = interval_low      (interval minutes, low byte, big-endian)
+Byte[9]  = measurement_type  (echoed)
 Byte[10..14] = 0x00
 Byte[15] = CRC
+```
+
+**Parse steps:**
+```
+interval = (Byte[7] << 8) | Byte[8]  // Big-endian 16-bit unsigned integer
+start_time = BCD(Byte[2]):BCD(Byte[3])
+end_time = BCD(Byte[4]):BCD(Byte[5])
+```
+
+**Example response:**
+```
+Read Blood Oxygen interval setting → Device responds:
+2B 02 08 00 22 00 7F 00 0A 02 00 00 00 00 00 CRC
+|  |  |  |  |  |  |  |  |  |
+|  |  |  |  |  |  |  |  |  +-- Measurement type (2=SpO2)
+|  |  |  |  |  |  |  |  +------ Interval low (0x0A = 10)
+|  |  |  |  |  |  |  +--------- Interval high (0x00)
+|  |  |  |  |  |  +------------ Weekday bits (0x7F = all days)
+|  |  |  |  |  +--------------- End minute (00)
+|  |  |  |  +------------------ End hour (22 BCD)
+|  |  |  +-------------------- Start minute (00)
+|  |  +------------------------ Start hour (08 BCD)
+|  +--------------------------- Working mode (02 = Interval)
++----------------------------- Response code
 ```
 
 **Parse steps — detect FF-variant:**

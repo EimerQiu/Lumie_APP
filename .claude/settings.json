@@ -2,7 +2,11 @@
   "permissions": {
     "allow": [
       "Edit(/.claude/skills/lumie-deployment/**)",
-      "Bash(dart analyze:*)"
+      "Bash(dart analyze:*)",
+      "Read(//Users/ciline/.claude/**)"
+    ],
+    "additionalDirectories": [
+      "/Users/ciline/.claude"
     ]
   }
 }

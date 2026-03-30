@@ -1,6 +1,5 @@
 // ble_service.dart
 import 'dart:async';
-import 'dart:convert';
 import 'dart:typed_data';
 import 'dart:math' as math;
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
@@ -30,11 +29,13 @@ class SyncTimeResult {
   final DateTime phoneSentAt;
   final DateTime? ringReadback;
   final int? maxMtu;
+  final String sentCmd; // Hex command that was sent
 
   SyncTimeResult({
     required this.phoneSentAt,
     this.ringReadback,
     this.maxMtu,
+    required this.sentCmd,
   });
 
   /// Difference in seconds between phone time sent and ring readback.
@@ -996,26 +997,16 @@ class BleService {
       final bytes = _extractHexBytes(msg);
       if (bytes.isEmpty) return;
       if (bytes.length >= 10 && bytes[0] == 0x2B) {
-        final mType = bytes[1];
-        final workingMode = bytes[2]; // 0=Off, 2=Interval
+        final workingMode = bytes[1]; // 0=Off, 2=Interval
+        final mType = bytes[9];       // Measurement type
         final String modeStr = workingMode == 0 ? 'off' : (workingMode == 2 ? 'interval' : 'unknown($workingMode)');
-        int startHour, startMin, endHour, endMin, interval;
-        if (bytes[6] == 0xFF) {
-          // FF-variant
-          startHour = _bcdToDecimal(bytes[3]);
-          startMin = 0;
-          endHour = _bcdToDecimal(bytes[4]);
-          endMin = _bcdToDecimal(bytes[5]);
-          interval = bytes[8];
-        } else {
-          // Standard
-          startHour = _bcdToDecimal(bytes[3]);
-          startMin = _bcdToDecimal(bytes[4]);
-          endHour = _bcdToDecimal(bytes[5]);
-          endMin = _bcdToDecimal(bytes[6]);
-          interval = bytes[8] | (bytes[9] << 8);
-        }
-        final weekdayBits = bytes[7];
+        final startHour = _bcdToDecimal(bytes[2]);
+        final startMin = _bcdToDecimal(bytes[3]);
+        final endHour = _bcdToDecimal(bytes[4]);
+        final endMin = _bcdToDecimal(bytes[5]);
+        final weekdayBits = bytes[6];
+        // Interval at [7,8] in big-endian format (high byte first)
+        final interval = (bytes[7] << 8) | bytes[8];
         result = {
           'measurement_type': mType,
           'working_mode': modeStr,
@@ -1067,7 +1058,8 @@ class BleService {
         final hasTimestamp = (bytes[3] | bytes[4] | bytes[5] | bytes[6] | bytes[7] | bytes[8]) != 0;
         String? timestamp;
         if (hasTimestamp) {
-          final year = 2000 + _bcdToDecimal(bytes[3]);
+          final yy = bytes[3];
+          final year = (yy == 0x25) ? 2025 : (2000 + _bcdToDecimal(yy));
           final month = _bcdToDecimal(bytes[4]);
           final day = _bcdToDecimal(bytes[5]);
           final hour = _bcdToDecimal(bytes[6]);
@@ -1822,7 +1814,7 @@ class BleService {
     final phoneSentAt = DateTime.now();
 
     // Send 0x01 to set time
-    await sendSetCurrentTimeCommand();
+    final sentCmd = await sendSetCurrentTimeCommand();
 
     // Small delay for ring to process
     await Future.delayed(const Duration(milliseconds: 500));
@@ -1834,6 +1826,7 @@ class BleService {
       phoneSentAt: phoneSentAt,
       ringReadback: readback?.ringTime,
       maxMtu: readback?.maxMtu,
+      sentCmd: sentCmd,
     );
   }
 
@@ -2403,12 +2396,9 @@ class BleService {
           // Listen to notifications
           characteristic.lastValueStream.listen((value) {
             if (value.isNotEmpty) {
-              String hexString = value
-                  .map((byte) => byte.toRadixString(16).padLeft(2, '0'))
-                  .join('-')
-                  .toUpperCase();
-              String parsedResponse = _parseMultiRecordResponse(value);
-              _messageController.add('$hexString\n$parsedResponse');
+              // Parse the response and emit parsed message to stream
+              String parsed = _parseResponse(value);
+              _messageController.add(parsed);
             }
           });
         }
@@ -2532,7 +2522,7 @@ class BleService {
   // [5]=Step length (cm)
   // [6..11]=Ring ID ASCII (6 chars), e.g., '000000' (0x30 0x30 ...)
   // [12..14]=Reserved (0x00)
-  Future<void> sendSetUserInfoCommand({
+  Future<String> sendSetUserInfoCommand({
     required int gender,
     required int age,
     required int heightCm,
@@ -2578,12 +2568,13 @@ class BleService {
         .join('-')
         .toUpperCase();
     await sendMessage(command);
+    return command;
   }
 
   int _decimalToBcd(int value) => ((value ~/ 10) << 4) | (value % 10);
 
   // 🕐 Set Time Command (0x01)
-  Future<void> sendSetCurrentTimeCommand() async {
+  Future<String> sendSetCurrentTimeCommand() async {
     final now = DateTime.now();
     final year = now.year - 2000;
     // Observed on device: BCD-encoded values actually apply, while plain decimal may ACK without updating RTC.
@@ -2613,6 +2604,7 @@ class BleService {
         .join('-')
         .toUpperCase();
     await sendMessage(command);
+    return command;
   }
 
   // 🕐 Get Time Command (0x41)
@@ -2772,7 +2764,7 @@ class BleService {
   // [3]=startHour(BCD), [4]=startMinute(BCD), [5]=endHour(BCD), [6]=endMinute(BCD)
   // [7]=weekday bits (bit0=Sun ... bit6=Sat), [8]=intervalHigh, [9]=intervalLow
   // [10..14]=0x00, [15]=CRC(sum of [0..14] & 0xFF)
-  Future<void> sendSetMeasurementIntervalCommand({
+  Future<String> sendSetMeasurementIntervalCommand({
     required int measurementType,
     required int workingMode,
     required int startHour,
@@ -2783,37 +2775,30 @@ class BleService {
     required int intervalMinutes,
   }) async {
     int bcd(int v) => ((v ~/ 10) << 4) | (v % 10);
-    int ih = (intervalMinutes >> 8) & 0xFF;
-    int il = intervalMinutes & 0xFF;
-    // Default (standard) layout
+    // Standard protocol layout (per manufacturer specification)
     int b3 = bcd(startHour & 0xFF);
     int b4 = bcd(startMinute & 0xFF);
     int b5 = bcd(endHour & 0xFF);
     int b6 = bcd(endMinute & 0xFF);
-    // Variant: full-day window uses FF-marker layout seen in getter responses
-    // If 00:00 - 23:59, send [3]=startHour, [4]=endHour, [5]=endMinute, [6]=0xFF
-    bool useFfVariant = (startHour == 0) &&
-        (startMinute == 0) &&
-        (endHour == 23) &&
-        (endMinute == 59);
-    if (useFfVariant) {
-      b3 = bcd(0);
-      b4 = bcd(23);
-      b5 = bcd(59);
-      b6 = 0xFF;
-    }
+    // Protocol layout (from manufacturer):
+    // [0]=0x2A, [1]=workingMode, [2]=startHour, [3]=startMinute
+    // [4]=endHour, [5]=endMinute, [6]=weekdayBits
+    // [7]=interval_high, [8]=interval_low, [9]=measurementType
+    // [10-14]=0x00, [15]=CRC
+    int intervalHigh = (intervalMinutes >> 8) & 0xFF;
+    int intervalLow = intervalMinutes & 0xFF;
+
     List<int> bytes = [
       0x2A,
-      measurementType & 0xFF,
-      workingMode & 0xFF,
-      b3,
-      b4,
-      b5,
-      b6,
-      weekdayBits & 0xFF,
-      // Interval: FF-variant uses 1 byte at [8]; standard uses 16-bit LE at [8..9]
-      if (useFfVariant) (intervalMinutes & 0xFF) else il,
-      if (useFfVariant) 0x00 else ih,
+      workingMode & 0xFF,          // [1] = AA
+      b3,                           // [2] = BB (start hour)
+      b4,                           // [3] = CC (start minute)
+      b5,                           // [4] = DD (end hour)
+      b6,                           // [5] = EE (end minute)
+      weekdayBits & 0xFF,           // [6] = FF (weekday bits)
+      intervalHigh,                 // [7] = GG (interval high byte)
+      intervalLow,                  // [8] = HH (interval low byte)
+      measurementType & 0xFF,       // [9] = II (measurement type)
       0x00, 0x00, 0x00, 0x00, 0x00,
       0x00,
     ];
@@ -2825,6 +2810,7 @@ class BleService {
         .join('-')
         .toUpperCase();
     await sendMessage(command);
+    return command;
   }
 
   // 📡 Real-time Step/HR/SpO2/Temperature Transmission Mode (0x09)
@@ -3732,26 +3718,18 @@ class BleService {
 
       case 0x2B: // Get measurement interval response
         if (bytes.length >= 10) {
-          int measurementType = bytes[1];
-          int workingMode = bytes[2];
-          // Time values are BCD; handle observed variant where [6] is 0xFF and endHour sits in [4].
-          int startHour = _bcdToDecimal(bytes[3]);
-          int startMinute = _bcdToDecimal(bytes[4]);
-          int endHour = _bcdToDecimal(bytes[5]);
-          int endMinute = _bcdToDecimal(bytes[6]);
-          int weekdayBits = bytes[7];
-          int intervalMinutes = 0;
-          // FF-variant: [6]==0xFF implies layout [3]=startHH, [4]=endHH, [5]=endmm, [6]=FF, [8]=interval(1B)
-          if (bytes[6] == 0xFF) {
-            startMinute = 0;
-            endHour = _bcdToDecimal(bytes[4]);
-            endMinute = _bcdToDecimal(bytes[5]);
-            intervalMinutes = bytes[8];
-          } else {
-            // Standard: interval is 16-bit little-endian at [8..9]
-            intervalMinutes =
-                bytes.length >= 10 ? (bytes[8] | (bytes[9] << 8)) : 0;
-          }
+          // Protocol layout per manufacturer:
+          // [1]=workingMode, [2]=startHour, [3]=startMin, [4]=endHour, [5]=endMin
+          // [6]=weekdayBits, [7]=interval_high, [8]=interval_low, [9]=measurementType
+          int workingMode = bytes[1];
+          int startHour = _bcdToDecimal(bytes[2]);
+          int startMinute = _bcdToDecimal(bytes[3]);
+          int endHour = _bcdToDecimal(bytes[4]);
+          int endMinute = _bcdToDecimal(bytes[5]);
+          int weekdayBits = bytes[6];
+          // Interval at [7,8] in big-endian format
+          int intervalMinutes = (bytes[7] << 8) | bytes[8];
+          int measurementType = bytes[9];
 
           String measurementName = measurementType == 1
               ? 'Heart Rate'
