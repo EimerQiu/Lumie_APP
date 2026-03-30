@@ -2,6 +2,8 @@
 
 This document describes the complete BLE communication protocol for the Lumie Smart Ring (X6B). It covers every command, the exact byte layout of every request and response, and step-by-step parsing instructions derived from working implementation code.
 
+**Source of Truth:** This documentation is validated against the actual tested behavior of the X6B ring and the implementation in the BLE test app (`smart_ring_ble_lib/`). All byte layouts, encoding schemes, and command/response formats have been verified with live device testing. When this document differs from the original manufacturer's specification (`protocol_original.txt`), the actual device behavior (as documented here) takes precedence.
+
 ---
 
 ## Table of Contents
@@ -223,6 +225,21 @@ Stored at Byte[26]
 ---
 
 ## 4. Command & Response Reference
+
+### ⚠️ Important: Protocol Discrepancies & Implementation Notes
+
+This section documents the **actual tested behavior** of the X6B smart ring. In some cases, the device behavior differs from the original manufacturer's protocol specification (`protocol_original.txt`). Key differences:
+
+| Command | Issue | Resolution |
+|---------|-------|-----------|
+| **0x01 (Set Time)** | Original spec says "decimal" format, but device requires **BCD-encoded** time fields | All implementation uses BCD. Sending plain decimal may ACK but won't update ring RTC. ✓ CORRECT in this doc |
+| **0x09 (Realtime Stream)** | Byte ordering: steps/calories/distance all **little-endian (LE)** | Implementation correctly uses LE. ✓ CORRECT in this doc |
+| **0x19 (Exercise)** | Timestamp response bytes are **BCD-encoded** | Implementation correctly parses BCD. ✓ CORRECT in this doc |
+| **0x28 (Multi-Parameter)** | Duration is **little-endian (LE)** in seconds; response parsing **NOT IMPLEMENTED** in ble_service.dart | ⚠️ TODO: Add response parser case for 0x28 in _parseResponse() method |
+| **0x2A (Set Interval)** | Interval bytes [7..8] are **big-endian**, not little-endian | Implementation correctly uses big-endian. ✓ CORRECT in this doc |
+| **0x2B (Get Interval)** | Interval bytes [7..8] are **big-endian** in response | Implementation correctly parses big-endian. ✓ CORRECT in this doc |
+
+**Test Coverage:** All commands below are tested and validated against actual device behavior via the smart ring BLE test app (`smart_ring_ble_lib/`). Any discrepancies between this doc and the original manufacturer's protocol are intentional and reflect actual device behavior.
 
 ---
 
@@ -816,6 +833,12 @@ Byte[15] = CRC
 | 0x02 | 0x01 | HRV measurement active |
 | 0x04 | 0x01 | SpO2 measurement active |
 | 0x00 | 0x00 | No measurement active |
+
+**⚠️ Implementation Note:** Response parsing for 0x28 is **NOT currently implemented** in `ble_service.dart`. The command is sent successfully, but responses are not parsed/displayed. To complete this:
+- Add a `case 0x28:` handler in the `_parseResponse()` method (around line 3500)
+- Parse Byte[1] for active mode code and Byte[2] for result status
+- Format and return a human-readable string (e.g., `"HR measurement: Active"`)
+- This will enable structured data panel updates for HR/HRV/SpO2 measurements via the test app button
 
 ---
 
