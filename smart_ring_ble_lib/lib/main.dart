@@ -903,7 +903,7 @@ class _MyHomePageState extends State<MyHomePage> {
                           ? Icons.bluetooth_connected
                           : Icons.bluetooth_disabled,
                       color: _connectionStatus == 'Connected'
-                          ? Colors.green
+                          ? Colors.blue
                           : Colors.red,
                     ),
                     const SizedBox(width: 8),
