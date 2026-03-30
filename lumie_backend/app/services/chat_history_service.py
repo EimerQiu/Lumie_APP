@@ -42,15 +42,26 @@ async def save_message(
 ) -> None:
     """Persist a single chat message."""
     db = get_database()
+    effective_metadata = metadata or {}
     doc = {
         "user_id": user_id,
         "session_id": session_id or "default",
         "role": role,
         "content": content,
-        "metadata": metadata or {},
+        "metadata": effective_metadata,
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
     await db.chat_messages.insert_one(doc)
+
+    message_type = effective_metadata.get("type")
+    if role == "assistant" and message_type in {"execution", "proactive"}:
+        logger.info(
+            "Advisor outbound message: type=%s user=%s session=%s content=%r",
+            message_type,
+            user_id,
+            session_id or "default",
+            content,
+        )
 
 
 async def save_exchange(

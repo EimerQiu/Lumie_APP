@@ -21,7 +21,11 @@ class Settings(BaseSettings):
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24 * 7  # 7 days
 
-    # Anthropic
+    # LLM provider
+    PALEBLUEDOT_API_KEY: str = os.getenv("PALEBLUEDOT_API_KEY", "")
+    PALEBLUEDOT_API_BASE_URL: str = os.getenv("PALEBLUEDOT_API_BASE_URL", "https://open.palebluedot.ai/v1")
+    PALEBLUEDOT_MODEL: str = os.getenv("PALEBLUEDOT_MODEL", "openai/gpt-5.4")
+    # Backward-compatible fallback while environments are migrated.
     ANTHROPIC_API_KEY: str = os.getenv("ANTHROPIC_API_KEY", "")
 
     # Sandbox (AI data analysis)

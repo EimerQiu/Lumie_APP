@@ -173,8 +173,9 @@ class _ChatTabState extends State<_ChatTab> {
 
   Future<void> _loadNewProactiveMessages(SharedPreferences prefs) async {
     final lastSeenStr = prefs.getString(_lastProactiveSeenKey);
-    final proactiveMessages =
-        await _historyService.fetchSessionMessages('proactive');
+    final proactiveMessages = await _historyService.fetchSessionMessages(
+      'proactive',
+    );
 
     final newMessages = proactiveMessages.where((m) {
       if (lastSeenStr == null) return true;
@@ -187,7 +188,9 @@ class _ChatTabState extends State<_ChatTab> {
       setState(() {
         for (final m in newMessages) {
           _items.add(
-            _ChatItem.message(_Message(text: m.content, isUser: false)),
+            _ChatItem.message(
+              _Message(text: m.content, isUser: false, isProactive: true),
+            ),
           );
         }
       });
@@ -346,7 +349,8 @@ class _ChatTabState extends State<_ChatTab> {
           } else {
             _items[idx] = _ChatItem.message(
               _Message(
-                text: "I wasn't able to complete this analysis. Please try rephrasing your question.",
+                text:
+                    "I wasn't able to complete this analysis. Please try rephrasing your question.",
                 isUser: false,
                 isAnalysisFailed: true,
               ),
@@ -462,10 +466,11 @@ class _ChatTabState extends State<_ChatTab> {
                     itemCount: _items.length + (_isTyping ? 1 : 0),
                     itemBuilder: (context, i) {
                       if (_isTyping && i == _items.length) {
-                        return const _TypingBubble();
+                        return const _TypingBubble(key: ValueKey('typing'));
                       }
                       final message = _items[i].message!;
                       return _ChatBubble(
+                        key: ValueKey(i),
                         message: message,
                         onCancelJob:
                             message.isAnalyzing &&
@@ -480,7 +485,7 @@ class _ChatTabState extends State<_ChatTab> {
                   ),
                 ),
         ),
-        _buildInput(),
+        if (!_isLoading) _buildInput(),
       ],
     );
   }
@@ -527,11 +532,14 @@ class _ChatTabState extends State<_ChatTab> {
         border: Border(top: BorderSide(color: AppColors.surfaceLight)),
       ),
       child: Row(
+        crossAxisAlignment: CrossAxisAlignment.end,
         children: [
           Expanded(
             child: TextField(
               controller: _input,
-              onSubmitted: (_) => _send(),
+              minLines: 1,
+              maxLines: null,
+              textInputAction: TextInputAction.newline,
               style: const TextStyle(
                 fontSize: 15,
                 color: AppColors.textPrimary,
@@ -546,7 +554,7 @@ class _ChatTabState extends State<_ChatTab> {
                   vertical: 12,
                 ),
                 border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(24),
+                  borderRadius: BorderRadius.circular(12),
                   borderSide: BorderSide.none,
                 ),
               ),
@@ -755,6 +763,7 @@ class _ChatItem {
 class _Message {
   final String text;
   final bool isUser;
+  final bool isProactive;
   final bool isAnalyzing;
   final bool isAnalysisFailed;
   final bool isGuidance;
@@ -765,6 +774,7 @@ class _Message {
   const _Message({
     required this.text,
     required this.isUser,
+    this.isProactive = false,
     this.isAnalyzing = false,
     this.isAnalysisFailed = false,
     this.isGuidance = false,
@@ -780,6 +790,7 @@ class _ChatBubble extends StatelessWidget {
   final bool isCancelling;
 
   const _ChatBubble({
+    super.key,
     required this.message,
     this.onCancelJob,
     this.isCancelling = false,
@@ -789,46 +800,73 @@ class _ChatBubble extends StatelessWidget {
   Widget build(BuildContext context) {
     return Padding(
       padding: const EdgeInsets.only(bottom: 12),
-      child: Row(
-        mainAxisAlignment: message.isUser
-            ? MainAxisAlignment.end
-            : MainAxisAlignment.start,
-        crossAxisAlignment: CrossAxisAlignment.end,
+      child: Column(
+        crossAxisAlignment: message.isUser
+            ? CrossAxisAlignment.end
+            : CrossAxisAlignment.start,
         children: [
-          if (!message.isUser) ...[
-            Container(
-              width: 28,
-              height: 28,
-              margin: const EdgeInsets.only(right: 8),
-              decoration: const BoxDecoration(
-                color: AppColors.primaryLemon,
-                shape: BoxShape.circle,
-              ),
-              child: const Center(
-                child: Text(
-                  '✦',
-                  style: TextStyle(fontSize: 12, color: AppColors.textOnYellow),
+          if (message.isProactive) ...[
+            Padding(
+              padding: const EdgeInsets.only(left: 36, bottom: 6),
+              child: Text(
+                'Proactive check-in',
+                style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600,
+                  color: AppColors.textSecondary.withValues(alpha: 0.85),
+                  letterSpacing: 0.2,
                 ),
               ),
             ),
           ],
-          Flexible(
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-              decoration: BoxDecoration(
-                color: message.isUser
-                    ? AppColors.primaryLemonDark
-                    : AppColors.backgroundWhite,
-                borderRadius: BorderRadius.only(
-                  topLeft: const Radius.circular(16),
-                  topRight: const Radius.circular(16),
-                  bottomLeft: Radius.circular(message.isUser ? 16 : 4),
-                  bottomRight: Radius.circular(message.isUser ? 4 : 16),
+          Row(
+            mainAxisAlignment: message.isUser
+                ? MainAxisAlignment.end
+                : MainAxisAlignment.start,
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              if (!message.isUser) ...[
+                Container(
+                  width: 28,
+                  height: 28,
+                  margin: const EdgeInsets.only(right: 8),
+                  decoration: const BoxDecoration(
+                    color: AppColors.primaryLemon,
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Center(
+                    child: Text(
+                      '✦',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: AppColors.textOnYellow,
+                      ),
+                    ),
+                  ),
                 ),
-                boxShadow: AppColors.cardShadow,
+              ],
+              Flexible(
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 14,
+                    vertical: 10,
+                  ),
+                  decoration: BoxDecoration(
+                    color: message.isUser
+                        ? AppColors.primaryLemonDark
+                        : AppColors.backgroundWhite,
+                    borderRadius: BorderRadius.only(
+                      topLeft: const Radius.circular(16),
+                      topRight: const Radius.circular(16),
+                      bottomLeft: Radius.circular(message.isUser ? 16 : 4),
+                      bottomRight: Radius.circular(message.isUser ? 4 : 16),
+                    ),
+                    boxShadow: AppColors.cardShadow,
+                  ),
+                  child: _buildContent(),
+                ),
               ),
-              child: _buildContent(),
-            ),
+            ],
           ),
         ],
       ),
@@ -1029,7 +1067,7 @@ class _ChatBubble extends StatelessWidget {
 }
 
 class _TypingBubble extends StatelessWidget {
-  const _TypingBubble();
+  const _TypingBubble({super.key});
 
   @override
   Widget build(BuildContext context) {

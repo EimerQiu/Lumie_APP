@@ -1,29 +1,14 @@
-"""Layer 2 LLM service — calls Claude to generate Python analysis code."""
+"""Layer 2 LLM service — generates Python analysis code."""
 import logging
 import re
-from typing import Optional
-
-import anthropic
-
 from ..core.config import settings
+from .llm_client import chat_completion
 
 logger = logging.getLogger(__name__)
 
-_MODEL = "claude-haiku-4-5-20251001"
+_MODEL = settings.PALEBLUEDOT_MODEL
 _MAX_TOKENS = 4000
 _TEMPERATURE = 0
-
-_client: Optional[anthropic.AsyncAnthropic] = None
-
-
-def _get_client() -> anthropic.AsyncAnthropic:
-    global _client
-    if _client is None:
-        if not settings.ANTHROPIC_API_KEY:
-            raise RuntimeError("ANTHROPIC_API_KEY is not set.")
-        _client = anthropic.AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
-    return _client
-
 
 def _strip_markdown_fences(text: str) -> str:
     """Remove markdown code block fences if present."""
@@ -50,16 +35,14 @@ async def generate_analysis_code(prompt: str) -> tuple[str, dict]:
         ValueError: If Claude's output is not valid Python.
         RuntimeError: If API key is missing.
     """
-    client = _get_client()
-
-    response = await client.messages.create(
+    response = await chat_completion(
         model=_MODEL,
         max_tokens=_MAX_TOKENS,
         temperature=_TEMPERATURE,
         messages=[{"role": "user", "content": prompt}],
     )
 
-    raw_text = response.content[0].text
+    raw_text = response.text
     code = _strip_markdown_fences(raw_text)
 
     token_usage = {

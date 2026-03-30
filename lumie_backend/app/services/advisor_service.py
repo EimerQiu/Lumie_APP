@@ -1,4 +1,4 @@
-"""Advisor service — intelligent routing via Claude tool_use.
+"""Advisor service — intelligent routing via LLM tool use.
 
 Layer 1: Routes user messages to either a direct reply (fast path) or
 data analysis (slow path) using Claude's tool_use capability.
@@ -8,8 +8,6 @@ import logging
 from datetime import datetime
 from typing import Optional
 from zoneinfo import ZoneInfo
-
-import anthropic
 
 from ..core.config import settings
 from ..core.database import get_database
@@ -21,24 +19,12 @@ from .analysis_service import (
 )
 from .task_service import TaskService
 from ..models.task import TaskCreate, TaskType
+from .llm_client import chat_completion
 
 logger = logging.getLogger(__name__)
 
-# Layer 1 model: Sonnet for accurate tool_use + fast response
-_MODEL = "claude-haiku-4-5-20251001"
-
-# One shared async Anthropic client (initialised lazily)
-_client: Optional[anthropic.AsyncAnthropic] = None
-
-
-def _get_client() -> anthropic.AsyncAnthropic:
-    global _client
-    if _client is None:
-        if not settings.ANTHROPIC_API_KEY:
-            raise RuntimeError("ANTHROPIC_API_KEY is not set in environment variables.")
-        _client = anthropic.AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
-    return _client
-
+# Layer 1 model routed through PaleBlueDot's OpenAI-compatible API.
+_MODEL = settings.PALEBLUEDOT_MODEL
 
 # ── Tool definition ──────────────────────────────────────────────────────────
 
@@ -287,8 +273,7 @@ async def get_advisor_reply(
 
     messages = [*history, {"role": "user", "content": message}]
 
-    client = _get_client()
-    response = await client.messages.create(
+    response = await chat_completion(
         model=_MODEL,
         max_tokens=800,
         temperature=0.3,
@@ -298,85 +283,62 @@ async def get_advisor_reply(
     )
 
     # ── Fast path: direct reply ──────────────────────────────────────────
-    if response.stop_reason == "end_turn":
-        reply_text = ""
-        for block in response.content:
-            if block.type == "text":
-                reply_text += block.text
-        return {"type": "direct", "reply": reply_text}
+    if not response.tool_calls:
+        return {"type": "direct", "reply": response.text or "I'm here to help!"}
 
     # ── Tool use path ─────────────────────────────────────────────────────
-    if response.stop_reason == "tool_use":
-        # Extract which tool was called
-        tool_name = None
-        tool_input = None
-        preflight_text = ""
-        for block in response.content:
-            if block.type == "tool_use":
-                tool_name = block.name
-                tool_input = block.input
-            elif block.type == "text":
-                preflight_text = block.text
+    tool_call = response.tool_calls[0]
+    tool_name = tool_call.name
+    tool_input = tool_call.arguments
+    preflight_text = response.text
 
-        if not tool_input or not tool_name:
-            return {"type": "direct", "reply": preflight_text or "I'm not sure how to help with that."}
+    if not tool_input or not tool_name:
+        return {"type": "direct", "reply": preflight_text or "I'm not sure how to help with that."}
 
-        # ── create_task path ──────────────────────────────────────────────
-        if tool_name == "create_task":
-            return await _handle_create_task(
-                user_id=user_id,
-                tool_input=tool_input,
-                timezone=ctx.get("timezone") or "UTC",
-                preflight_text=preflight_text,
-            )
-
-        # ── run_data_analysis path (default) ─────────────────────────────
-        # Check rate limit
-        rate_error = _check_rate_limit(user_id)
-        if rate_error:
-            return {"type": "direct", "reply": rate_error}
-
-        # Check subscription quota
-        subscription_tier = await _get_subscription_tier(user_id)
-        quota_msg = await check_analysis_quota(user_id, subscription_tier)
-        if quota_msg:
-            return {"type": "direct", "reply": quota_msg}
-
-        # Check parent permissions if target_user_id specified
-        effective_target = target_user_id or user_id
-        if target_user_id and target_user_id != user_id:
-            has_access = await _verify_team_admin_access(user_id, target_user_id, team_id)
-            if not has_access:
-                return {
-                    "type": "direct",
-                    "reply": "You don't have permission to view this user's data.",
-                }
-
-        # Create analysis job
-        job_id = await create_analysis_job(
+    # ── create_task path ──────────────────────────────────────────────
+    if tool_name == "create_task":
+        return await _handle_create_task(
             user_id=user_id,
-            prompt=tool_input["question"],
-            target_user_id=effective_target,
-            team_id=team_id,
-            data_types=tool_input.get("data_types", []),
-            time_range=tool_input.get("time_range", ""),
+            tool_input=tool_input,
+            timezone=ctx.get("timezone") or "UTC",
+            preflight_text=preflight_text,
         )
 
-        # Start async execution
-        asyncio.create_task(run_analysis_job(job_id))
+    # ── run_data_analysis path (default) ─────────────────────────────
+    rate_error = _check_rate_limit(user_id)
+    if rate_error:
+        return {"type": "direct", "reply": rate_error}
 
-        return {
-            "type": "analysis",
-            "reply": preflight_text or "Let me analyze your data...",
-            "job_id": job_id,
-        }
+    subscription_tier = await _get_subscription_tier(user_id)
+    quota_msg = await check_analysis_quota(user_id, subscription_tier)
+    if quota_msg:
+        return {"type": "direct", "reply": quota_msg}
 
-    # Unexpected stop_reason
-    reply_text = ""
-    for block in response.content:
-        if block.type == "text":
-            reply_text += block.text
-    return {"type": "direct", "reply": reply_text or "I'm here to help!"}
+    effective_target = target_user_id or user_id
+    if target_user_id and target_user_id != user_id:
+        has_access = await _verify_team_admin_access(user_id, target_user_id, team_id)
+        if not has_access:
+            return {
+                "type": "direct",
+                "reply": "You don't have permission to view this user's data.",
+            }
+
+    job_id = await create_analysis_job(
+        user_id=user_id,
+        prompt=tool_input["question"],
+        target_user_id=effective_target,
+        team_id=team_id,
+        data_types=tool_input.get("data_types", []),
+        time_range=tool_input.get("time_range", ""),
+    )
+
+    asyncio.create_task(run_analysis_job(job_id))
+
+    return {
+        "type": "analysis",
+        "reply": preflight_text or "Let me analyze your data...",
+        "job_id": job_id,
+    }
 
 
 async def _handle_create_task(

@@ -20,18 +20,17 @@ import logging
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
-import anthropic
-
 from ..core.config import settings
 from ..core.database import get_database
 from ..services.capability_service import get_user_enabled_capability_ids
 from ..services.skill_registry_service import skill_registry
 from ..services.notification_service import queue_checkin_notification
 from ..services.chat_history_service import save_message
+from .llm_client import chat_completion
 
 logger = logging.getLogger(__name__)
 
-_HAIKU_MODEL = "claude-haiku-4-5-20251001"
+_HAIKU_MODEL = settings.PALEBLUEDOT_MODEL
 
 # Capabilities whose data we can fetch directly from MongoDB
 _INTERNAL_CAP_ID = "lumie_internal_data"
@@ -145,6 +144,66 @@ async def _fetch_lumie_internal_data(db, user_id: str, now_utc: datetime, now_st
     return "\n".join(lines)
 
 
+async def _fetch_recent_dayprint_memory(db, user_id: str, now_utc: datetime) -> str:
+    """Fetch recent dayprint entries as lightweight follow-up memory."""
+    since_date = (now_utc - timedelta(days=5)).strftime("%Y-%m-%d")
+    docs = await db.dayprints.find(
+        {"user_id": user_id, "date": {"$gte": since_date}},
+        {"_id": 0, "date": 1, "events": 1},
+    ).sort("date", -1).to_list(5)
+
+    if not docs:
+        return "No recent dayprint memory."
+
+    lines: list[str] = []
+    for doc in docs:
+        date = doc.get("date", "unknown-date")
+        events = doc.get("events") or []
+        important = [e for e in events if e.get("type") == "important_insight"]
+        chats = [e for e in events if e.get("type") == "advisor_chat"]
+        completed = [e for e in events if e.get("type") == "task_completed"]
+
+        day_lines: list[str] = []
+
+        for event in important[-3:]:
+            data = event.get("data") or {}
+            summary = data.get("summary")
+            category = data.get("category", "other")
+            if summary:
+                day_lines.append(f"important_insight [{category}]: {summary}")
+
+        for event in chats[-3:]:
+            data = event.get("data") or {}
+            summary = data.get("summary")
+            if summary:
+                day_lines.append(f"advisor_chat: {summary}")
+
+        if completed:
+            completed_names = []
+            for event in completed[-3:]:
+                task_name = (event.get("data") or {}).get("task_name")
+                if task_name:
+                    completed_names.append(task_name)
+            if completed_names:
+                day_lines.append(
+                    "completed_tasks: " + ", ".join(completed_names)
+                )
+
+        if day_lines:
+            lines.append(f"{date}:")
+            lines.extend(f"  - {line}" for line in day_lines)
+
+    return "\n".join(lines) if lines else "No recent dayprint memory."
+
+
+def _preview_text(text: str, limit: int = 360) -> str:
+    """Compact preview for logs."""
+    compact = " ".join(text.split())
+    if len(compact) <= limit:
+        return compact
+    return compact[: limit - 3] + "..."
+
+
 # ── Main entry point ──────────────────────────────────────────────────────────
 
 async def run_proactive_check(user_id: str) -> dict:
@@ -213,6 +272,16 @@ async def run_proactive_check(user_id: str) -> dict:
         data_blocks.append(f"[Lumie Internal Data]\n{internal_data}")
         logger.info("Proactive[%s]: internal data fetched (%d chars)", user_id, len(internal_data))
 
+    logger.info("Proactive[%s]: fetching recent dayprint memory", user_id)
+    dayprint_memory = await _fetch_recent_dayprint_memory(db, user_id, now_utc)
+    data_blocks.append(f"[Recent Dayprint Memory]\n{dayprint_memory}")
+    logger.info("Proactive[%s]: dayprint memory fetched (%d chars)", user_id, len(dayprint_memory))
+    logger.info(
+        "Proactive[%s]: dayprint memory preview=%r",
+        user_id,
+        _preview_text(dayprint_memory),
+    )
+
     # Note execution-only capabilities so Haiku is aware
     for cap_id, label in _EXECUTION_CAPS.items():
         if cap_id in enabled_cap_ids:
@@ -258,9 +327,21 @@ async def run_proactive_check(user_id: str) -> dict:
         "the user's data — particularly the 'When To Use', 'Output Guidance', and domain "
         "knowledge sections:\n\n"
         f"{skills_block}\n\n"
-        "Based on these skill guidelines and the user's current data, decide whether to send "
+        "You also have recent dayprint memory from the past few days. Use it like lightweight "
+        "recall: notice unresolved concerns, recent struggles, prior advice topics, and places "
+        "where a gentle follow-up or progress check might make sense. Do not ask for follow-up "
+        "unless the memory suggests something genuinely worth revisiting.\n\n"
+        "Decision priority:\n"
+        "1. First check whether recent dayprint memory shows an unresolved issue, recent struggle, "
+        "important health concern, or prior advice topic that would meaningfully benefit from follow-up.\n"
+        "2. If yes, prefer a follow-up/progress-check nudge, as long as it is timely and not repetitive.\n"
+        "3. If no strong follow-up candidate exists, then look at the current structured data for something "
+        "actionable right now.\n"
+        "4. If both are weak, do not nudge.\n\n"
+        "Based on these skill guidelines, recent dayprint memory, and the user's current data, decide whether to send "
         "a nudge. Only nudge if there is something genuinely worth addressing right now. "
-        "Avoid nudging for minor, speculative, or future concerns.\n\n"
+        "Avoid nudging for minor, speculative, or future concerns. When recent memory and current data both suggest "
+        "good options, prefer the one that feels more personally grounded and continuity-aware rather than the more generic alert.\n\n"
         f"Nudge history: {last_nudge_str}\n\n"
         "Respond with valid JSON only — no markdown, no explanation:\n"
         '{"should_nudge": true|false, "message": "<friendly nudge message ≤120 chars, or null>", '
@@ -279,15 +360,14 @@ async def run_proactive_check(user_id: str) -> dict:
 
     # ── 6. Call Claude Haiku ─────────────────────────────────────────────────
     try:
-        client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
-        response = client.messages.create(
+        response = await chat_completion(
             model=_HAIKU_MODEL,
             max_tokens=200,
             temperature=0,
             system=system_prompt,
             messages=[{"role": "user", "content": user_message}],
         )
-        raw = response.content[0].text.strip()
+        raw = response.text.strip()
         if raw.startswith("```"):
             raw_lines = raw.split("\n")
             raw = "\n".join(raw_lines[1:-1]) if len(raw_lines) > 2 else raw
@@ -311,7 +391,11 @@ async def run_proactive_check(user_id: str) -> dict:
             content=message,
             metadata={"type": "proactive", "reason": reason},
         )
-        logger.info("Proactive[%s]: message saved to chat history (session=proactive)", user_id)
+        logger.info(
+            "Proactive[%s]: message saved to chat history (session=proactive) content=%r",
+            user_id,
+            message,
+        )
 
         # Push notification — only needed when app is in background
         await queue_checkin_notification(user_id, message)
@@ -320,7 +404,7 @@ async def run_proactive_check(user_id: str) -> dict:
             {"user_id": user_id},
             {"$set": {"last_nudge": {"reason": reason, "nudged_at": now_utc.isoformat()}}},
         )
-        logger.info("Proactive nudge queued for user=%s: %s", user_id, reason)
+        logger.info("Proactive nudge queued for user=%s: %s content=%r", user_id, reason, message)
     else:
         logger.info("Proactive: no nudge for user=%s: %s", user_id, reason)
 

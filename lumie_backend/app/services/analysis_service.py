@@ -9,6 +9,7 @@ import uuid
 from datetime import datetime
 from typing import Optional
 
+from ..core.config import settings
 from ..core.database import get_database
 from ..models.analysis import AnalysisJobStatus
 from .analysis_prompt_service import build_analysis_prompt
@@ -142,7 +143,7 @@ async def create_analysis_job(
         "finished_at": None,
         "timeout_sec": timeout,
         "docker_container_id": "",
-        "model": "claude-haiku-4-5-20251001",
+        "model": settings.PALEBLUEDOT_MODEL,
         "token_usage": {"input_tokens": 0, "output_tokens": 0},
         "data_types": data_types or [],
         "time_range": time_range,

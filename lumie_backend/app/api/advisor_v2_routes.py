@@ -11,6 +11,7 @@ Endpoints:
   PUT  /api/v2/advisor/skills/{skill_id}/credential — Save credential
   POST /api/v2/advisor/skills/{skill_id}/test       — Test credential
 """
+import asyncio
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -22,6 +23,8 @@ from ..services import skill_credential_service
 from ..services import execution_service
 from ..services.skill_registry_service import skill_registry
 from ..services.chat_history_service import save_exchange, save_message
+from ..services.dayprint_service import log_advisor_chat
+from ..core.database import get_database
 from ..models.execution_job import (
     AdvisorChatV2Request,
     AdvisorChatV2Response,
@@ -78,6 +81,16 @@ async def advisor_chat_v2(
                     "nav_hint": result.get("nav_hint"),
                 },
             )
+            # Log to Dayprint in background
+            db = get_database()
+            profile = await db.profiles.find_one({"user_id": user_id}, {"name": 1}) or {}
+            user_name = profile.get("name", "")
+            asyncio.create_task(
+                log_advisor_chat(
+                    user_id, user_name, request.message, result.get("reply", ""),
+                    session_id=request.session_id,
+                )
+            )
         elif response_type == "execution":
             await save_message(
                 user_id=user_id,
@@ -101,7 +114,7 @@ async def advisor_chat_v2(
         )
 
     except RuntimeError as e:
-        if "ANTHROPIC_API_KEY" in str(e):
+        if "PALEBLUEDOT_API_KEY" in str(e):
             raise HTTPException(status_code=503, detail="AI service not configured")
         raise HTTPException(status_code=502, detail=str(e))
     except Exception as e:
@@ -306,7 +319,15 @@ async def test_skill_credential(
 
     # For browser/email skills, we can't fully test yet (Phase 1)
     # Mark as saved_not_tested or valid based on completeness
-    has_required = bool(cred.get("base_url") and cred.get("username") and cred.get("password"))
+    # Gmail doesn't need base_url (hardcoded to https://mail.google.com)
+    has_required = bool(cred.get("username") and cred.get("password"))
+    if skill_id == "gmail_inbox_check":
+        # Gmail only needs username and password
+        pass
+    else:
+        # Other browser skills need base_url as well
+        has_required = bool(cred.get("base_url") and has_required)
+
     if has_required:
         await skill_credential_service.update_credential_status(
             user_id, skill_id, "valid", "fields_complete"
@@ -319,7 +340,8 @@ async def test_skill_credential(
         await skill_credential_service.update_credential_status(
             user_id, skill_id, "saved_not_tested", "fields_incomplete"
         )
+        required_msg = "base_url, username, or password" if skill_id != "gmail_inbox_check" else "username or password"
         return CredentialTestResponse(
             success=False, status="saved_not_tested",
-            message="Some required fields are missing (base_url, username, or password)",
+            message=f"Some required fields are missing ({required_msg})",
         )

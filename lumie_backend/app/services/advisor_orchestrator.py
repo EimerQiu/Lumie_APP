@@ -13,29 +13,20 @@ from datetime import datetime
 from typing import Optional
 from zoneinfo import ZoneInfo
 
-import anthropic
-
 from ..core.config import settings
 from ..core.database import get_database
 from . import capability_service
 from . import skill_credential_service
 from . import execution_service
+from .llm_client import chat_completion
 from .skill_registry_service import skill_registry, SkillIndexItem
 from .task_service import TaskService
 from ..models.task import TaskCreate, TaskType
 
 logger = logging.getLogger(__name__)
 
-# Layer 1 model: Sonnet for accurate tool_use + fast response
-_MODEL = "claude-haiku-4-5-20251001"
-_client: Optional[anthropic.AsyncAnthropic] = None
-
-
-def _get_client() -> anthropic.AsyncAnthropic:
-    global _client
-    if _client is None:
-        _client = anthropic.AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
-    return _client
+# Layer 1 model routed through PaleBlueDot's OpenAI-compatible API.
+_MODEL = settings.PALEBLUEDOT_MODEL
 
 
 # ── Main entry point ─────────────────────────────────────────────────────────
@@ -76,8 +67,7 @@ async def handle_chat(
 
     messages = [*history, {"role": "user", "content": message}]
 
-    client = _get_client()
-    response = await client.messages.create(
+    response = await chat_completion(
         model=_MODEL,
         max_tokens=800,
         temperature=0.3,
@@ -87,60 +77,40 @@ async def handle_chat(
     )
 
     # ── Step 4: Process response ─────────────────────────────────────────
+    if not response.tool_calls:
+        return {"type": "direct", "reply": response.text or "I'm here to help!"}
 
-    # Fast path: direct reply
-    if response.stop_reason == "end_turn":
-        reply_text = ""
-        for block in response.content:
-            if block.type == "text":
-                reply_text += block.text
-        return {"type": "direct", "reply": reply_text}
+    tool_call = response.tool_calls[0]
+    tool_name = tool_call.name
+    tool_input = tool_call.arguments
+    preflight_text = response.text
 
-    # Tool use path
-    if response.stop_reason == "tool_use":
-        tool_name = None
-        tool_input = None
-        preflight_text = ""
-        for block in response.content:
-            if block.type == "tool_use":
-                tool_name = block.name
-                tool_input = block.input
-            elif block.type == "text":
-                preflight_text = block.text
+    if not tool_input or not tool_name:
+        return {"type": "direct", "reply": preflight_text or "I'm not sure how to help with that."}
 
-        if not tool_input or not tool_name:
-            return {"type": "direct", "reply": preflight_text or "I'm not sure how to help with that."}
+    if tool_name == "create_task":
+        return await _handle_create_task(
+            user_id=user_id,
+            tool_input=tool_input,
+            timezone=ctx.get("timezone") or "UTC",
+            preflight_text=preflight_text,
+        )
 
-        # ── create_task tool ─────────────────────────────────────────
-        if tool_name == "create_task":
-            return await _handle_create_task(
-                user_id=user_id,
-                tool_input=tool_input,
-                timezone=ctx.get("timezone") or "UTC",
-                preflight_text=preflight_text,
-            )
+    if tool_name == "execute_skill":
+        return await _handle_skill_execution(
+            user_id=user_id,
+            session_id=session_id,
+            tool_input=tool_input,
+            preflight_text=preflight_text,
+            enabled_caps=enabled_caps,
+            ctx=ctx,
+            target_user_id=target_user_id,
+            team_id=team_id,
+            history=history,
+            message=message,
+        )
 
-        # ── execute_skill tool ───────────────────────────────────────
-        if tool_name == "execute_skill":
-            return await _handle_skill_execution(
-                user_id=user_id,
-                session_id=session_id,
-                tool_input=tool_input,
-                preflight_text=preflight_text,
-                enabled_caps=enabled_caps,
-                ctx=ctx,
-                target_user_id=target_user_id,
-                team_id=team_id,
-                history=history,
-                message=message,
-            )
-
-    # Fallback
-    reply_text = ""
-    for block in response.content:
-        if block.type == "text":
-            reply_text += block.text
-    return {"type": "direct", "reply": reply_text or "I'm here to help!"}
+    return {"type": "direct", "reply": preflight_text or "I'm here to help!"}
 
 
 # ── Skill execution handler ─────────────────────────────────────────────────

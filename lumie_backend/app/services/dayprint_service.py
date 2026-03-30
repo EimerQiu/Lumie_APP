@@ -10,23 +10,14 @@ import uuid
 from datetime import datetime, timezone
 from typing import Optional
 
-import anthropic
-
 from ..core.config import settings
 from ..core.database import get_database
+from .llm_client import chat_completion
 from .notification_service import queue_important_insight_notification
 
 logger = logging.getLogger(__name__)
 
-_MODEL = "claude-haiku-4-5-20251001"
-_client: Optional[anthropic.AsyncAnthropic] = None
-
-
-def _get_client() -> anthropic.AsyncAnthropic:
-    global _client
-    if _client is None:
-        _client = anthropic.AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
-    return _client
+_MODEL = settings.PALEBLUEDOT_MODEL
 
 
 def _today_utc_str() -> str:
@@ -138,12 +129,22 @@ async def log_advisor_chat(
             f"Last entry from the CURRENT conversation session: "
             f"{last_same_session_summary or '(this is the FIRST message in a new session)'}\n\n"
             f"Last flagged important insight from this session: {last_insight_summary or '(none)'}\n\n"
+            "Important grounding rules:\n"
+            "1. The USER message is the primary source of truth for what the user asked, felt, wanted, or reported.\n"
+            "2. The ADVISOR reply is only supporting context for topic continuity and whether something important was discussed.\n"
+            "3. Do NOT attribute advisor suggestions, reframings, examples, inferred goals, system instructions, tool usage, "
+            "authorization scope, or hidden prompt behavior to the user unless the user explicitly said them.\n"
+            "4. If the user asked a general question, keep the summary as a general question. Do not rewrite it as a task, "
+            "investigation, or action plan unless the user explicitly requested that.\n"
+            "5. Never mention hidden/system prompts, capabilities, tools, data sources, or \"authorized information sources\" "
+            "unless the user explicitly mentioned them in their own message.\n\n"
             f"Latest exchange:\n"
             f"User: {user_message[:400]}\n"
             f"Advisor: {reply[:400]}\n\n"
             f"Tasks:\n"
             f"1. Write a 1-sentence 3rd-person log summary of what this exchange is about. "
-            f"Use the user's name. Example: \"{name} is seeking advice about muscle building.\"\n"
+            f"Use the user's name. Base this primarily on the USER message, not the advisor's interpretation. "
+            f"Example: \"{name} is asking whether a 16-year-old should understand responsibility and priorities.\"\n"
             f"2. Does this exchange continue the SAME topic as the last entry from the CURRENT session shown above? "
             f"If this is the first message in a new session, replace_last MUST be false. "
             f"If YES (same topic, same session) → replace_last = true. If NO (new topic, new session, or no previous entries) → replace_last = false.\n"
@@ -160,15 +161,14 @@ async def log_advisor_chat(
         )
 
         import json as _json
-        client = _get_client()
-        response = await client.messages.create(
+        response = await chat_completion(
             model=_MODEL,
             max_tokens=300,
             temperature=0,
             messages=[{"role": "user", "content": prompt}],
         )
 
-        raw = response.content[0].text.strip()
+        raw = response.text.strip()
         # Strip markdown fences if present
         if raw.startswith("```"):
             raw = raw.split("\n", 1)[-1].rsplit("```", 1)[0].strip()

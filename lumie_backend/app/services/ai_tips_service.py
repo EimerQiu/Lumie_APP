@@ -2,28 +2,15 @@
 import logging
 import re
 from datetime import datetime, timedelta
-from typing import Optional
-
-import anthropic
 
 from ..core.config import settings
 from ..core.database import get_database
 from ..models.task import AiTipsResponse, TaskStats
+from .llm_client import chat_completion
 
 logger = logging.getLogger(__name__)
 
-_MODEL = "claude-haiku-4-5-20251001"
-
-_client: Optional[anthropic.Anthropic] = None
-
-
-def _get_client() -> anthropic.Anthropic:
-    global _client
-    if _client is None:
-        if not settings.ANTHROPIC_API_KEY:
-            raise RuntimeError("ANTHROPIC_API_KEY is not configured.")
-        _client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
-    return _client
+_MODEL = settings.PALEBLUEDOT_MODEL
 
 
 def _clean(text: str) -> str:
@@ -94,8 +81,7 @@ async def get_ai_tips(user_id: str, days_back: int, time_zone: str) -> AiTipsRes
     )
 
     try:
-        client = _get_client()
-        response = client.messages.create(
+        response = await chat_completion(
             model=_MODEL,
             max_tokens=250,
             system=(
@@ -111,7 +97,7 @@ async def get_ai_tips(user_id: str, days_back: int, time_zone: str) -> AiTipsRes
             ),
             messages=[{"role": "user", "content": prompt}],
         )
-        tip = response.content[0].text.strip()
+        tip = response.text.strip()
     except Exception as e:
         logger.error(f"Claude call failed in ai_tips_service: {e}")
         if rate >= 80:

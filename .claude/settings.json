@@ -4,7 +4,9 @@
       "Edit(/.claude/skills/lumie-deployment/**)",
       "Bash(dart analyze:*)",
       "Read(//Users/ciline/.claude/**)",
-      "Bash(git merge:*)"
+      "Bash(git merge:*)",
+      "Read(//tmp/**)",
+      "Read(//private/tmp/**)"
     ],
     "additionalDirectories": [
       "/Users/ciline/.claude"

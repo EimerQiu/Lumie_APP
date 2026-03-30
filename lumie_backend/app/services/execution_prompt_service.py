@@ -186,15 +186,20 @@ def build_browser_execution_prompt(
     skill_full_text: str,
     credential: dict,
     user_context: dict,
+    skill_id: str = "",
 ) -> str:
     """Build the prompt for generating browser automation steps."""
+    base_url = credential.get('base_url', '')
+    if not base_url and skill_id == 'gmail_inbox_check':
+        base_url = 'https://mail.google.com (hardcoded for Gmail)'
+
     return f"""You are generating browser automation instructions for Playwright.
 
 ## Skill Definition
 {skill_full_text}
 
 ## Credential Info
-- Base URL: {credential.get('base_url', 'not provided')}
+- Base URL: {base_url or 'from skill definition'}
 - Username: {credential.get('username', 'not provided')}
 - Navigation hints: {credential.get('notes', 'none')}
 
@@ -203,14 +208,16 @@ def build_browser_execution_prompt(
 
 ## Instructions
 
-Generate a JSON object with browser automation steps:
+Generate a JSON object with browser automation steps. Use explicit waits between navigation steps:
 
 ```json
 {{
     "steps": [
         {{"action": "goto", "url": "..."}},
+        {{"action": "wait", "milliseconds": 2000}},
         {{"action": "fill", "selector": "...", "value": "..."}},
         {{"action": "click", "selector": "..."}},
+        {{"action": "wait", "milliseconds": 3000}},
         {{"action": "wait", "selector": "..."}},
         {{"action": "extract", "selector": "...", "attribute": "text"}}
     ],
@@ -218,4 +225,13 @@ Generate a JSON object with browser automation steps:
 }}
 ```
 
-Generate ONLY the JSON. No explanation."""
+**Important action types:**
+- `goto`: Navigate to URL
+- `fill`: Fill input field (replace {{username}} and {{password}} with actual values)
+- `click`: Click element
+- `wait` with milliseconds: Wait specified time (e.g., 2000ms = 2 seconds)
+- `wait` with selector: Wait for element to appear (max 60 seconds)
+- `press`: Press keyboard key (e.g., "Enter")
+- `extract`: Extract text/html from element
+
+Generate ONLY the JSON. No explanation. Include explicit millisecond waits after navigation/clicks to allow page transitions."""

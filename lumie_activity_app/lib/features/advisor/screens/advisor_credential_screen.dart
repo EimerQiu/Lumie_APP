@@ -181,15 +181,41 @@ class _AdvisorCredentialScreenState extends State<AdvisorCredentialScreen> {
                     Text('Credentials', style: theme.textTheme.titleMedium),
                     const SizedBox(height: 12),
 
-                    TextField(
-                      controller: _baseUrlCtrl,
-                      decoration: const InputDecoration(
-                        labelText: 'Base URL',
-                        hintText: 'https://portal.example.edu',
-                        prefixIcon: Icon(Icons.link),
+                    // Only show base URL for non-Gmail skills
+                    if (widget.skillId != 'gmail_inbox_check') ...[
+                      TextField(
+                        controller: _baseUrlCtrl,
+                        decoration: const InputDecoration(
+                          labelText: 'Base URL',
+                          hintText: 'https://portal.example.edu',
+                          prefixIcon: Icon(Icons.link),
+                        ),
                       ),
-                    ),
-                    const SizedBox(height: 12),
+                      const SizedBox(height: 12),
+                    ] else
+                      // For Gmail, show hint that base URL is automatic
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 12),
+                        child: Container(
+                          padding: const EdgeInsets.all(12),
+                          decoration: BoxDecoration(
+                            color: theme.colorScheme.primaryContainer,
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: Row(
+                            children: [
+                              Icon(Icons.check_circle, color: theme.colorScheme.primary),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: Text(
+                                  'Gmail URL auto-configured',
+                                  style: theme.textTheme.bodySmall,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
 
                     TextField(
                       controller: _usernameCtrl,

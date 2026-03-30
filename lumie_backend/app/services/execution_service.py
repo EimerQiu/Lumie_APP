@@ -9,12 +9,11 @@ import uuid
 from datetime import datetime
 from typing import Optional
 
-import anthropic
-
 from ..core.config import settings
 from ..core.database import get_database
 from . import lumie_db_connector
 from . import browser_skill_runtime
+from .llm_client import chat_completion
 from .execution_prompt_service import (
     build_lumie_db_execution_prompt,
     build_browser_execution_prompt,
@@ -24,20 +23,12 @@ from .skill_registry_service import SkillIndexItem
 logger = logging.getLogger(__name__)
 
 # LLM for code generation (Layer 2)
-_CODE_GEN_MODEL = "claude-haiku-4-5-20251001"
-_client: Optional[anthropic.AsyncAnthropic] = None
+_CODE_GEN_MODEL = settings.PALEBLUEDOT_MODEL
 
 # Concurrency control
 _semaphore = asyncio.Semaphore(3)
 
 MAX_RETRIES = 2
-
-
-def _get_client() -> anthropic.AsyncAnthropic:
-    global _client
-    if _client is None:
-        _client = anthropic.AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
-    return _client
 
 
 # ── Job creation ─────────────────────────────────────────────────────────────
@@ -272,6 +263,7 @@ async def _execute_browser(
         skill_full_text=skill_full_text,
         credential=credential,
         user_context=user_context,
+        skill_id=skill.skill_id,
     )
 
     steps_json = await _generate_script(gen_prompt)
@@ -314,21 +306,16 @@ async def _generate_script(prompt: str) -> Optional[str]:
 
     Retries up to 2 times on transient API errors (overloaded, rate limit).
     """
-    client = _get_client()
-
     for attempt in range(3):
         try:
-            response = await client.messages.create(
+            response = await chat_completion(
                 model=_CODE_GEN_MODEL,
                 max_tokens=4096,
                 temperature=0,
                 messages=[{"role": "user", "content": prompt}],
             )
 
-            text = ""
-            for block in response.content:
-                if block.type == "text":
-                    text += block.text
+            text = response.text
 
             # Strip markdown code fencing if present
             text = text.strip()
@@ -343,15 +330,13 @@ async def _generate_script(prompt: str) -> Optional[str]:
 
             return text.strip()
 
-        except anthropic.APIStatusError as e:
-            if e.status_code in (429, 529) and attempt < 2:
+        except Exception as e:
+            status_code = getattr(getattr(e, "response", None), "status_code", None)
+            if status_code in (429, 529) and attempt < 2:
                 wait = 2 ** (attempt + 1)  # 2s, 4s
-                logger.warning(f"API transient error ({e.status_code}), retrying in {wait}s (attempt {attempt + 1}/3)")
+                logger.warning(f"API transient error ({status_code}), retrying in {wait}s (attempt {attempt + 1}/3)")
                 await asyncio.sleep(wait)
                 continue
-            logger.error(f"Script generation failed: {e}")
-            return None
-        except Exception as e:
             logger.error(f"Script generation failed: {e}")
             return None
 
@@ -374,7 +359,7 @@ async def _complete_job(
     )
     logger.info(f"Job {job_id} completed successfully")
 
-    # Save the result summary to chat history so it appears in History panel
+    # Save the result summary to chat history and log to Dayprint
     try:
         job = await db.execution_jobs.find_one({"job_id": job_id})
         if job:
@@ -383,6 +368,7 @@ async def _complete_job(
                 summary = result_data.get("summary", "")
             session_id = job.get("session_id") or "default"
             user_id = job.get("user_id", "")
+            prompt = job.get("prompt", "")
             if summary and user_id:
                 from .chat_history_service import save_message
                 await save_message(
@@ -391,6 +377,13 @@ async def _complete_job(
                     role="assistant",
                     content=summary,
                     metadata={"type": "execution", "job_id": job_id, "skill_id": job.get("skill_id")},
+                )
+                # Log to Dayprint
+                from .dayprint_service import log_advisor_chat
+                profile = await db.profiles.find_one({"user_id": user_id}, {"name": 1}) or {}
+                user_name = profile.get("name", "")
+                asyncio.create_task(
+                    log_advisor_chat(user_id, user_name, prompt, summary, session_id=session_id)
                 )
     except Exception as e:
         logger.warning(f"Failed to save execution result to chat history: {e}")
