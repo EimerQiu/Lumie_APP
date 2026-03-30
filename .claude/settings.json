@@ -3,7 +3,8 @@
     "allow": [
       "Edit(/.claude/skills/lumie-deployment/**)",
       "Bash(dart analyze:*)",
-      "Read(//Users/ciline/.claude/**)"
+      "Read(//Users/ciline/.claude/**)",
+      "Bash(git merge:*)"
     ],
     "additionalDirectories": [
       "/Users/ciline/.claude"
