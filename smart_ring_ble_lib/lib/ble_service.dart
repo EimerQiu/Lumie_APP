@@ -2398,7 +2398,9 @@ class BleService {
             if (value.isNotEmpty) {
               // Parse the response and emit parsed message to stream
               String parsed = _parseResponse(value);
-              _messageController.add(parsed);
+              if (parsed.isNotEmpty) {
+                _messageController.add(parsed);
+              }
             }
           });
         }
