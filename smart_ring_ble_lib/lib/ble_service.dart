@@ -3552,65 +3552,53 @@ class BleService {
         // A) 16-byte frame (with checksum): 09 S1 S2 S3 S4 C1 C2 C3 C4 D1 D2 D3 D4 HR T1 T2 [CRC]
         //    Steps S1..S4 LE, Calories C1..C4 LE (kcal*100), Distance D1..D4 LE (km*100), HR, Temp T1T2 LE (0.1°C). SpO2 may be provided via separate frame/field.
         // B) Extended (>=26 bytes) concatenated layout as per doc when not framing; keep legacy parse for backwards compatibility.
-        if (bytes.length == 16) {
-          // Verify checksum if present (we're called with exactly 16 bytes from checksum framing)
-          int calc = bytes.sublist(0, 15).fold(0, (s, b) => s + b) & 0xFF;
-          if (bytes[15] == calc) {
-            int steps = bytes[1] |
+        if (bytes.length >= 15) {
+          // Handle all packets >= 15 bytes; extract what we can from available data
+          int steps = 0, calRaw = 0, distRaw = 0, heartRate = 0, spo2 = 0;
+          double temp = 0.0;
+
+          // Parse core fields from beginning (work for both 16-byte and extended layouts)
+          if (bytes.length >= 13) {
+            steps = bytes[1] |
                 (bytes[2] << 8) |
                 (bytes[3] << 16) |
                 (bytes[4] << 24);
-            int calRaw = bytes[5] |
+            calRaw = bytes[5] |
                 (bytes[6] << 8) |
                 (bytes[7] << 16) |
                 (bytes[8] << 24);
-            double calories = calRaw / 100.0;
-            int distRaw = bytes[9] |
+            distRaw = bytes[9] |
                 (bytes[10] << 8) |
                 (bytes[11] << 16) |
                 (bytes[12] << 24);
-            double distanceKm = distRaw / 100.0;
-            int heartRate = bytes[13];
-            int t1 = bytes[14];
-            int t2 =
-                0; // No room for full temp or SpO2 in 16 payload if CRC occupies last; some firmwares pack temp in 1 byte.
-            double temp = t1 / 10.0;
-            return '📡 Real-time Mode:\n'
-                '🟢 Stream ACTIVE\n'
-                '👣 Steps: $steps\n'
-                '🔥 Calories: ${calories.toStringAsFixed(2)} kcal\n'
-                '📏 Distance: ${distanceKm.toStringAsFixed(2)} km\n'
-                '❤️ HR: $heartRate BPM\n'
-                '🌡️ Temperature: ${temp.toStringAsFixed(1)} °C';
           }
-        } else if (bytes.length >= 26) {
-          // Some notifications aggregate extra padding/frames; only use first 26 bytes per doc
-          if (bytes.length > 26) {
-            bytes = bytes.sublist(0, 26);
+
+          // Parse HR and temperature based on packet length
+          if (bytes.length == 16) {
+            heartRate = bytes[13];
+            temp = bytes[14] / 10.0;
+          } else if (bytes.length >= 25) {
+            heartRate = bytes[21];
+            temp = (bytes[22] | (bytes[23] << 8)) / 10.0;
+            if (bytes.length >= 25) {
+              spo2 = bytes[24];
+            }
           }
-          int steps =
-              bytes[1] | (bytes[2] << 8) | (bytes[3] << 16) | (bytes[4] << 24);
-          int calRaw =
-              bytes[5] | (bytes[6] << 8) | (bytes[7] << 16) | (bytes[8] << 24);
+
           double calories = calRaw / 100.0;
-          int distRaw = bytes[9] |
-              (bytes[10] << 8) |
-              (bytes[11] << 16) |
-              (bytes[12] << 24);
           double distanceKm = distRaw / 100.0;
-          int heartRate = bytes[21];
-          int t1 = bytes[22];
-          int t2 = bytes[23];
-          double tempDelta = (t1 | (t2 << 8)) / 10.0;
-          int spo2 = bytes[24];
-          return '📡 Real-time Mode:\n'
+
+          String output = '📡 Real-time Mode:\n'
               '🟢 Stream ACTIVE\n'
               '👣 Steps: $steps\n'
               '🔥 Calories: ${calories.toStringAsFixed(2)} kcal\n'
               '📏 Distance: ${distanceKm.toStringAsFixed(2)} km\n'
               '❤️ HR: $heartRate BPM\n'
-              '🌡️ Temperature: ${tempDelta.toStringAsFixed(1)} °C\n'
-              '🩸 SpO2: $spo2%';
+              '🌡️ Temperature: ${temp.toStringAsFixed(1)} °C';
+          if (spo2 > 0) {
+            output += '\n🩸 SpO2: $spo2%';
+          }
+          return output;
         }
         break;
 
