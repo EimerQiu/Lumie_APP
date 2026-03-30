@@ -87,13 +87,23 @@ class _MyHomePageState extends State<MyHomePage> {
   }
 
   Future<void> _showSetUserInfoDialog() async {
+    // Fetch current user info from ring first
+    final currentInfo = await _bleService.fetchUserInfo(timeout: const Duration(seconds: 2));
+
     final genderOptions = ['Female', 'Male'];
-    String selectedGender = 'Female';
-    final ageController = TextEditingController(text: '30');
-    final heightController = TextEditingController(text: '170');
-    final weightController = TextEditingController(text: '65');
-    final stepLenController = TextEditingController(text: '60');
-    final ringIdController = TextEditingController(text: '000000');
+    String selectedGender = currentInfo != null
+        ? (currentInfo['gender'] == 0 ? 'Female' : 'Male')
+        : 'Female';
+    final ageController = TextEditingController(
+        text: currentInfo?['age']?.toString() ?? '30');
+    final heightController = TextEditingController(
+        text: currentInfo?['height_cm']?.toString() ?? '170');
+    final weightController = TextEditingController(
+        text: currentInfo?['weight_kg']?.toString() ?? '65');
+    final stepLenController = TextEditingController(
+        text: currentInfo?['step_len_cm']?.toString() ?? '60');
+    final ringIdController = TextEditingController(
+        text: currentInfo?['ring_id']?.toString() ?? '000000');
 
     await showDialog(
       context: context,
@@ -179,7 +189,13 @@ class _MyHomePageState extends State<MyHomePage> {
                         throw 'Step length must be 20-120 cm';
                       if (ringId.isEmpty) ringId = '000000';
 
-                      await _bleService.sendSetUserInfoCommand(
+                      setState(() {
+                        _structuredDataTitle = 'Set User Info (0x02)';
+                        _structuredDataOutput = '⏳ Sending SET command...';
+                      });
+
+                      int messagesCountBefore = _messages.length;
+                      final sentCmd = await _bleService.sendSetUserInfoCommand(
                         gender: gender,
                         age: age,
                         heightCm: height,
@@ -187,11 +203,37 @@ class _MyHomePageState extends State<MyHomePage> {
                         stepLengthCm: stepLen,
                         ringId: ringId,
                       );
+
                       if (mounted) {
                         Navigator.of(ctx).pop();
+
+                        // Get the ACK response
+                        String receivedMsg = 'No response received';
+                        if (_messages.length > messagesCountBefore) {
+                          final lastMsg = _messages.last;
+                          if (lastMsg.contains('Received:')) {
+                            receivedMsg = lastMsg.replaceFirst('Received: ', '').trim();
+                          }
+                        }
+
+                        final buf = StringBuffer();
+                        buf.writeln('📤 SENT:\n$sentCmd\n');
+                        buf.writeln('📥 RECEIVED:\n$receivedMsg\n');
+                        buf.writeln('📊 PARSED DATA:');
+                        buf.writeln('✅ SET User Info (0x02) ACK');
+                        buf.writeln('👤 Gender: ${selectedGender}');
+                        buf.writeln('🎂 Age: $age years');
+                        buf.writeln('📏 Height: $height cm');
+                        buf.writeln('⚖️ Weight: $weight kg');
+                        buf.writeln('👣 Step Length: $stepLen cm');
+                        buf.writeln('🆔 Ring ID: $ringId');
+
+                        setState(() { _structuredDataOutput = buf.toString(); });
                         _addMessage(
-                            '✅ Set User Info (0x02) command sent. sendSetUserInfoCommand()');
-                        // Optionally refresh readback
+                            '✅ Set User Info (0x02) command sent.');
+
+                        // Auto-fetch to verify
+                        await Future.delayed(const Duration(milliseconds: 500));
                         await _bleService.sendGetUserInfoCommand();
                       }
                     } catch (e) {
@@ -210,18 +252,35 @@ class _MyHomePageState extends State<MyHomePage> {
 
   Future<void> _sendGetUserInfoCommand() async {
     try {
+      const sentCmd = '42-00-00-00-00-00-00-00-00-00-00-00-00-00-00-42';
       setState(() {
         _structuredDataTitle = 'User Info (0x42)';
-        _structuredDataOutput = 'Fetching user info...';
+        _structuredDataOutput = '📤 Sent: $sentCmd\n\n⏳ Waiting for response...';
       });
+
+      int messagesCountBefore = _messages.length;
       final result = await _bleService.fetchUserInfo(timeout: const Duration(seconds: 2));
+
       if (!mounted) return;
+
+      String receivedMsg = 'No response received';
+      if (_messages.length > messagesCountBefore) {
+        final lastMsg = _messages.last;
+        if (lastMsg.contains('Received:')) {
+          receivedMsg = lastMsg.replaceFirst('Received: ', '').trim();
+        }
+      }
+
       if (result == null) {
-        setState(() { _structuredDataOutput = 'No response or error (0xC2).'; });
+        setState(() { _structuredDataOutput = '📤 Sent: $sentCmd\n\n❌ No response (0xC2)'; });
         _addMessage('❌ User info fetch failed or timed out.');
         return;
       }
+
       final buf = StringBuffer();
+      buf.writeln('📤 SENT:\n$sentCmd\n');
+      buf.writeln('📥 RECEIVED:\n$receivedMsg\n');
+      buf.writeln('📊 PARSED DATA:');
       buf.writeln('👤 Gender: ${result['gender_name']} (${result['gender']})');
       buf.writeln('🎂 Age: ${result['age']}');
       buf.writeln('📏 Height: ${result['height_cm']} cm');
@@ -242,22 +301,39 @@ class _MyHomePageState extends State<MyHomePage> {
 
   Future<void> _sendGetExerciseModeDataLatest() async {
     try {
+      const sentCmd = '5C-00-00-00-00-00-00-00-00-00-00-00-00-00-00-5C';
       setState(() {
         _structuredDataTitle = 'Exercise Latest (0x5C)';
-        _structuredDataOutput = 'Fetching latest exercise data...';
+        _structuredDataOutput = '📤 Sent: $sentCmd\n\n⏳ Waiting for response...';
       });
+
+      int messagesCountBefore = _messages.length;
       final records = await _bleService.fetchExerciseLatest(timeout: const Duration(seconds: 4));
+
       if (!mounted) return;
+
+      String receivedMsg = 'No response received';
+      if (_messages.length > messagesCountBefore) {
+        final lastMsg = _messages.last;
+        if (lastMsg.contains('Received:')) {
+          receivedMsg = lastMsg.replaceFirst('Received: ', '').trim();
+        }
+      }
+
       if (records.isEmpty) {
-        setState(() { _structuredDataOutput = 'No exercise records received.'; });
+        setState(() { _structuredDataOutput = '📤 Sent: $sentCmd\n\n❌ No exercise records received'; });
         _addMessage('❌ No exercise data received.');
         return;
       }
+
       final buf = StringBuffer();
+      buf.writeln('📤 SENT:\n$sentCmd\n');
+      buf.writeln('📥 RECEIVED:\n$receivedMsg\n');
+      buf.writeln('📊 PARSED DATA:');
       buf.writeln('🏃 ${records.length} exercise record(s):');
       buf.writeln('');
       for (final r in records) {
-        buf.writeln('${r['timestamp']}: ${r['type_name']} - HR:${r['heart_rate']}bpm, ${r['duration_seconds']}s, ${r['steps']} steps, ${(r['distance_km'] as double).toStringAsFixed(2)}km, ${(r['calories'] as double).toStringAsFixed(1)}kcal');
+        buf.writeln('${r['timestamp']}: ${r['exercise_type_name']} - HR:${r['heart_rate']}bpm, ${r['duration_seconds']}s, ${r['steps']} steps, ${(r['distance'] as double).toStringAsFixed(2)}km, ${(r['calories'] as double).toStringAsFixed(1)}kcal');
       }
       setState(() { _structuredDataOutput = buf.toString(); });
       _addMessage('✅ Exercise Latest: ${records.length} records');
@@ -273,22 +349,39 @@ class _MyHomePageState extends State<MyHomePage> {
 
   Future<void> _sendGetExerciseModeDataContinue() async {
     try {
+      const sentCmd = '5C-02-00-00-00-00-00-00-00-00-00-00-00-00-00-5E';
       setState(() {
         _structuredDataTitle = 'Exercise Continue (0x5C)';
-        _structuredDataOutput = 'Fetching continued exercise data...';
+        _structuredDataOutput = '📤 Sent: $sentCmd\n\n⏳ Waiting for response...';
       });
+
+      int messagesCountBefore = _messages.length;
       final records = await _bleService.fetchExerciseContinue(timeout: const Duration(seconds: 4));
+
       if (!mounted) return;
+
+      String receivedMsg = 'No response received';
+      if (_messages.length > messagesCountBefore) {
+        final lastMsg = _messages.last;
+        if (lastMsg.contains('Received:')) {
+          receivedMsg = lastMsg.replaceFirst('Received: ', '').trim();
+        }
+      }
+
       if (records.isEmpty) {
-        setState(() { _structuredDataOutput = 'No more exercise records.'; });
+        setState(() { _structuredDataOutput = '📤 Sent: $sentCmd\n\n❌ No more exercise records'; });
         _addMessage('❌ No more exercise data received.');
         return;
       }
+
       final buf = StringBuffer();
+      buf.writeln('📤 SENT:\n$sentCmd\n');
+      buf.writeln('📥 RECEIVED:\n$receivedMsg\n');
+      buf.writeln('📊 PARSED DATA:');
       buf.writeln('🏃 ${records.length} exercise record(s):');
       buf.writeln('');
       for (final r in records) {
-        buf.writeln('${r['timestamp']}: ${r['type_name']} - HR:${r['heart_rate']}bpm, ${r['duration_seconds']}s, ${r['steps']} steps, ${(r['distance_km'] as double).toStringAsFixed(2)}km, ${(r['calories'] as double).toStringAsFixed(1)}kcal');
+        buf.writeln('${r['timestamp']}: ${r['exercise_type_name']} - HR:${r['heart_rate']}bpm, ${r['duration_seconds']}s, ${r['steps']} steps, ${(r['distance'] as double).toStringAsFixed(2)}km, ${(r['calories'] as double).toStringAsFixed(1)}kcal');
       }
       setState(() { _structuredDataOutput = buf.toString(); });
       _addMessage('✅ Exercise Continue: ${records.length} records');
@@ -304,13 +397,29 @@ class _MyHomePageState extends State<MyHomePage> {
 
   Future<void> _sendDeleteExerciseModeDetails() async {
     try {
+      const sentCmd = '5C-99-00-00-00-00-00-00-00-00-00-00-00-00-00-F5';
       setState(() {
         _structuredDataTitle = 'Exercise Delete (0x5C)';
-        _structuredDataOutput = 'Deleting exercise history...';
+        _structuredDataOutput = '📤 Sent: $sentCmd\n\n⏳ Waiting for response...';
       });
+
+      int messagesCountBefore = _messages.length;
       final success = await _bleService.deleteExerciseHistory(timeout: const Duration(seconds: 2));
+
       if (!mounted) return;
+
+      String receivedMsg = 'No response received';
+      if (_messages.length > messagesCountBefore) {
+        final lastMsg = _messages.last;
+        if (lastMsg.contains('Received:')) {
+          receivedMsg = lastMsg.replaceFirst('Received: ', '').trim();
+        }
+      }
+
       final buf = StringBuffer();
+      buf.writeln('📤 SENT:\n$sentCmd\n');
+      buf.writeln('📥 RECEIVED:\n$receivedMsg\n');
+      buf.writeln('📊 PARSED DATA:');
       if (success) {
         buf.writeln('✅ Exercise history deleted successfully.');
       } else {
@@ -341,6 +450,21 @@ class _MyHomePageState extends State<MyHomePage> {
         );
       }
     });
+  }
+
+  /// Get the last received message from the message log
+  String _getLastReceivedMessage() {
+    for (int i = _messages.length - 1; i >= 0; i--) {
+      if (_messages[i].contains('Received:')) {
+        return _messages[i].replaceFirst('Received: ', '').trim();
+      }
+    }
+    return 'No response received';
+  }
+
+  /// Format command display with sent → received → parsed data
+  String _formatCommandDisplay(String sentCmd, String receivedMsg, String parsedData) {
+    return '📤 SENT:\n$sentCmd\n\n📥 RECEIVED:\n$receivedMsg\n\n📊 PARSED DATA:\n$parsedData';
   }
 
   void _updateExerciseStateFromMessage(String message) {
@@ -400,14 +524,30 @@ class _MyHomePageState extends State<MyHomePage> {
   Future<void> _toggleHrMeasurement() async {
     try {
       if (_isHrMeasureActive) {
+        // STOP HR MEASUREMENT
+        const sentCmd = '28-02-00-00-00-00-00-00-00-00-00-00-00-00-00-2A';
+        setState(() {
+          _structuredDataTitle = 'HR Measurement (0x28)';
+          _structuredDataOutput = '📤 SENT:\n$sentCmd\n\n📊 Status: STOPPING...';
+        });
         await _bleService.sendStopMultiParamMeasurement(mode: 0x02);
-        _addMessage('✅ Stop HR Measure (0x28) command sent.');
         setState(() => _isHrMeasureActive = false);
+        setState(() {
+          _structuredDataOutput = '📤 SENT:\n$sentCmd\n\n📊 Status: ✅ STOPPED';
+        });
       } else {
+        // START HR MEASUREMENT
+        const sentCmd = '28-02-01-00-00-1E-00-00-00-00-00-00-00-00-00-31';
+        setState(() {
+          _structuredDataTitle = '❤️ HR Measurement (0x28)';
+          _structuredDataOutput = '📤 SENT:\n$sentCmd\n\n📊 Status: ❤️ RUNNING...\n\n⏳ Measuring for 30 seconds...';
+        });
         await _bleService.sendStartMultiParamMeasurement(
             mode: 0x02, durationSeconds: 30);
-        _addMessage('✅ Start HR Measure (0x28) command sent.');
         setState(() => _isHrMeasureActive = true);
+        setState(() {
+          _structuredDataOutput = '📤 SENT:\n$sentCmd\n\n📊 Status: ❤️ ACTIVE - Measuring heart rate...';
+        });
       }
     } catch (e) {
       _addMessage('❌ Failed to toggle HR measurement: $e.');
@@ -814,7 +954,7 @@ class _MyHomePageState extends State<MyHomePage> {
                     ],
                     const SizedBox(height: 8),
                     Container(
-                      height: 160,
+                      height: MediaQuery.of(context).size.height * 0.4,
                       decoration: BoxDecoration(
                         border: Border.all(color: Colors.grey.shade300),
                         borderRadius: BorderRadius.circular(8),
@@ -871,15 +1011,6 @@ class _MyHomePageState extends State<MyHomePage> {
                       runSpacing: 8,
                       children: [
                         // Original Commands
-                        ElevatedButton.icon(
-                          onPressed: _connectionStatus == 'Connected'
-                              ? _sendGetHrvDataCommand
-                              : null,
-                          icon: const Icon(Icons.favorite, size: 16),
-                          label: const Text('HRV Data (0x56)'),
-                          style: ElevatedButton.styleFrom(
-                              backgroundColor: Colors.red.shade100),
-                        ),
                         ElevatedButton.icon(
                           onPressed: _connectionStatus == 'Connected'
                               ? _sendGetTimeCommand
@@ -1086,15 +1217,6 @@ class _MyHomePageState extends State<MyHomePage> {
                         ),
                         ElevatedButton.icon(
                           onPressed: _connectionStatus == 'Connected'
-                              ? _sendGetSleepDataCommand
-                              : null,
-                          icon: const Icon(Icons.bedtime, size: 16),
-                          label: const Text('Sleep (0x53)'),
-                          style: ElevatedButton.styleFrom(
-                              backgroundColor: Colors.indigo.shade100),
-                        ),
-                        ElevatedButton.icon(
-                          onPressed: _connectionStatus == 'Connected'
                               ? _sendGetDetailedHeartRateCommand
                               : null,
                           icon: const Icon(Icons.monitor_heart, size: 16),
@@ -1268,15 +1390,6 @@ class _MyHomePageState extends State<MyHomePage> {
   }
 
   // Smart Ring Command Methods
-  Future<void> _sendGetHrvDataCommand() async {
-    try {
-      await _bleService.sendHrvCommand();
-      _addMessage('✅ HRV Data command sent. sendHrvCommand()');
-    } catch (e) {
-      _addMessage('❌ Failed to send HRV Data command: $e. sendHrvCommand()');
-    }
-  }
-
   Future<void> _sendGetTimeCommand() async {
     try {
       setState(() {
@@ -1320,12 +1433,27 @@ class _MyHomePageState extends State<MyHomePage> {
     try {
       setState(() {
         _structuredDataTitle = 'Sync Time (0x01 → 0x41)';
-        _structuredDataOutput = 'Syncing phone time to ring...';
+        _structuredDataOutput = '⏳ Syncing phone time to ring...';
       });
+
+      int messagesCountBefore = _messages.length;
       final result =
           await _bleService.syncTimeAndVerify(timeout: const Duration(seconds: 3));
+
       if (!mounted) return;
+
+      String receivedMsg = 'No response received';
+      if (_messages.length > messagesCountBefore) {
+        final lastMsg = _messages.last;
+        if (lastMsg.contains('Received:')) {
+          receivedMsg = lastMsg.replaceFirst('Received: ', '').trim();
+        }
+      }
+
       final buf = StringBuffer();
+      buf.writeln('📤 SENT:\n${result.sentCmd}\n');
+      buf.writeln('📥 RECEIVED:\n$receivedMsg\n');
+      buf.writeln('📊 PARSED DATA:');
       buf.writeln('📱 Phone Time Sent: ${result.phoneSentAt}');
       if (result.ringReadback != null) {
         buf.writeln('🕐 Ring Readback:   ${result.ringReadback}');
@@ -1364,18 +1492,38 @@ class _MyHomePageState extends State<MyHomePage> {
 
   Future<void> _sendGetBatteryCommand() async {
     try {
+      const sentCmd = '13-00-00-00-00-00-00-00-00-00-00-00-00-00-00-13';
       setState(() {
         _structuredDataTitle = 'Battery (0x13)';
-        _structuredDataOutput = 'Fetching battery info...';
+        _structuredDataOutput = '📤 Sent: $sentCmd\n\n⏳ Waiting for response...';
       });
+
+      int messagesCountBefore = _messages.length;
       final result = await _bleService.fetchBattery(timeout: const Duration(seconds: 2));
+
       if (!mounted) return;
+
+      // Get received message (should be added during fetch)
+      String receivedMsg = 'No response received';
+      if (_messages.length > messagesCountBefore) {
+        final lastMsg = _messages.last;
+        if (lastMsg.contains('Received:')) {
+          receivedMsg = lastMsg.replaceFirst('Received: ', '').trim();
+        }
+      }
+
       if (result == null) {
-        setState(() { _structuredDataOutput = 'No response or error (0x93).'; });
+        setState(() {
+          _structuredDataOutput = '📤 Sent: $sentCmd\n\n❌ No response (0x93)';
+        });
         _addMessage('❌ Battery fetch failed or timed out.');
         return;
       }
+
       final buf = StringBuffer();
+      buf.writeln('📤 SENT:\n$sentCmd\n');
+      buf.writeln('📥 RECEIVED:\n$receivedMsg\n');
+      buf.writeln('📊 PARSED DATA:');
       buf.writeln('🔋 Battery Level: ${result['battery_level']}%');
       buf.writeln('⚡ Charging: ${result['charging'] ? 'Yes' : 'No'}');
       buf.writeln('🔌 Voltage 1: ${(result['voltage_high'] as double).toStringAsFixed(1)}V');
@@ -1395,18 +1543,34 @@ class _MyHomePageState extends State<MyHomePage> {
 
   Future<void> _sendGetMacAddressCommand() async {
     try {
+      const sentCmd = '22-00-00-00-00-00-00-00-00-00-00-00-00-00-00';
       setState(() {
         _structuredDataTitle = 'MAC Address (0x22)';
-        _structuredDataOutput = 'Fetching MAC address...';
+        _structuredDataOutput = '📤 Sent: $sentCmd\n\n⏳ Waiting for response...';
       });
+      int messagesCountBefore = _messages.length;
       final result = await _bleService.fetchMacAddress(timeout: const Duration(seconds: 2));
       if (!mounted) return;
+
+      String receivedMsg = 'No response received';
+      if (_messages.length > messagesCountBefore) {
+        final lastMsg = _messages.last;
+        if (lastMsg.contains('Received:')) {
+          receivedMsg = lastMsg.replaceFirst('Received: ', '').trim();
+        }
+      }
+
       if (result == null) {
-        setState(() { _structuredDataOutput = 'No response or error (0xA2).'; });
+        setState(() {
+          _structuredDataOutput = '📤 Sent: $sentCmd\n\n❌ No response (0xA2)';
+        });
         _addMessage('❌ MAC address fetch failed or timed out.');
         return;
       }
       final buf = StringBuffer();
+      buf.writeln('📤 SENT:\n$sentCmd\n');
+      buf.writeln('📥 RECEIVED:\n$receivedMsg\n');
+      buf.writeln('📊 PARSED DATA:');
       buf.writeln('📡 MAC Address: ${result['mac']}');
       setState(() { _structuredDataOutput = buf.toString(); });
       _addMessage('✅ MAC: ${result['mac']}');
@@ -1422,18 +1586,37 @@ class _MyHomePageState extends State<MyHomePage> {
 
   Future<void> _sendGetFirmwareVersionCommand() async {
     try {
+      const sentCmd = '27-00-00-00-00-00-00-00-00-00-00-00-00-00-00-FF';
       setState(() {
         _structuredDataTitle = 'Firmware (0x27)';
-        _structuredDataOutput = 'Fetching firmware version...';
+        _structuredDataOutput = '📤 Sent: $sentCmd\n\n⏳ Waiting for response...';
       });
+
+      int messagesCountBefore = _messages.length;
       final result = await _bleService.fetchFirmwareVersion(timeout: const Duration(seconds: 2));
+
       if (!mounted) return;
+
+      String receivedMsg = 'No response received';
+      if (_messages.length > messagesCountBefore) {
+        final lastMsg = _messages.last;
+        if (lastMsg.contains('Received:')) {
+          receivedMsg = lastMsg.replaceFirst('Received: ', '').trim();
+        }
+      }
+
       if (result == null) {
-        setState(() { _structuredDataOutput = 'No response or error (0xA7).'; });
+        setState(() {
+          _structuredDataOutput = '📤 Sent: $sentCmd\n\n❌ No response (0xA7)';
+        });
         _addMessage('❌ Firmware fetch failed or timed out.');
         return;
       }
+
       final buf = StringBuffer();
+      buf.writeln('📤 SENT:\n$sentCmd\n');
+      buf.writeln('📥 RECEIVED:\n$receivedMsg\n');
+      buf.writeln('📊 PARSED DATA:');
       buf.writeln('📦 Version: ${result['version']}');
       buf.writeln('📅 Build Date: ${result['build_date']}');
       setState(() { _structuredDataOutput = buf.toString(); });
@@ -1476,14 +1659,31 @@ class _MyHomePageState extends State<MyHomePage> {
                   onPressed: () async {
                     Navigator.of(ctx).pop();
                     try {
+                      // Build the sent command
+                      String sentCmd = '2B-${selType.toRadixString(16).padLeft(2, '0')}-00-00-00-00-00-00-00-00-00-00-00-00-00';
+                      int checksum = (0x2B + selType) & 0xFF;
+                      sentCmd += '-${checksum.toRadixString(16).padLeft(2, '0').toUpperCase()}';
+
                       setState(() {
                         _structuredDataTitle = 'Intervals (0x2B)';
-                        _structuredDataOutput = 'Fetching interval for type=$selType...';
+                        _structuredDataOutput = '📤 Sent: $sentCmd\n\n⏳ Waiting for response...';
                       });
+
+                      int messagesCountBefore = _messages.length;
                       final result = await _bleService.fetchMeasurementInterval(selType, timeout: const Duration(seconds: 2));
+
                       if (!mounted) return;
+
+                      String receivedMsg = 'No response received';
+                      if (_messages.length > messagesCountBefore) {
+                        final lastMsg = _messages.last;
+                        if (lastMsg.contains('Received:')) {
+                          receivedMsg = lastMsg.replaceFirst('Received: ', '').trim();
+                        }
+                      }
+
                       if (result == null) {
-                        setState(() { _structuredDataOutput = 'No response or error (0xAB).'; });
+                        setState(() { _structuredDataOutput = '📤 Sent: $sentCmd\n\n❌ No response (0xAB)'; });
                         _addMessage('❌ Interval fetch failed.');
                         return;
                       }
@@ -1495,9 +1695,12 @@ class _MyHomePageState extends State<MyHomePage> {
                         if ((bits >> i) & 1 == 1) weekdayStr += '${days[i]} ';
                       }
                       final buf = StringBuffer();
+                      buf.writeln('📤 SENT:\n$sentCmd\n');
+                      buf.writeln('📥 RECEIVED:\n$receivedMsg\n');
+                      buf.writeln('📊 PARSED DATA:');
                       buf.writeln('📋 Type: ${typeNames[result['measurement_type']] ?? result['measurement_type']}');
-                      buf.writeln('⚙️ Mode: ${result['working_mode_name']} (${result['working_mode']})');
-                      buf.writeln('🕐 Window: ${result['start_hour'].toString().padLeft(2, '0')}:${result['start_minute'].toString().padLeft(2, '0')} - ${result['end_hour'].toString().padLeft(2, '0')}:${result['end_minute'].toString().padLeft(2, '0')}');
+                      buf.writeln('⚙️ Mode: ${result['working_mode']}');
+                      buf.writeln('🕐 Window: ${result['start_hour'].toString().padLeft(2, '0')}:${result['start_min'].toString().padLeft(2, '0')} - ${result['end_hour'].toString().padLeft(2, '0')}:${result['end_min'].toString().padLeft(2, '0')}');
                       buf.writeln('📅 Days: ${weekdayStr.trim()}');
                       buf.writeln('⏱️ Interval: ${result['interval_minutes']} min');
                       setState(() { _structuredDataOutput = buf.toString(); });
@@ -1533,10 +1736,10 @@ class _MyHomePageState extends State<MyHomePage> {
     ];
     int selType = 1;
     int selMode = 2;
-    final startHourCtl = TextEditingController(text: '08');
+    final startHourCtl = TextEditingController(text: '00');
     final startMinCtl = TextEditingController(text: '00');
-    final endHourCtl = TextEditingController(text: '22');
-    final endMinCtl = TextEditingController(text: '00');
+    final endHourCtl = TextEditingController(text: '23');
+    final endMinCtl = TextEditingController(text: '59');
     final intervalCtl = TextEditingController(text: '10');
     List<bool> weekdaySel = List<bool>.filled(7, true); // Sun..Sat
 
@@ -1673,7 +1876,13 @@ class _MyHomePageState extends State<MyHomePage> {
                         if (weekdaySel[i]) wbits |= (1 << i);
                       }
 
-                      await _bleService.sendSetMeasurementIntervalCommand(
+                      setState(() {
+                        _structuredDataTitle = 'Set Interval (0x2A)';
+                        _structuredDataOutput = '⏳ Sending SET command...';
+                      });
+
+                      int messagesCountBefore = _messages.length;
+                      final sentCmd = await _bleService.sendSetMeasurementIntervalCommand(
                         measurementType: selType,
                         workingMode: selMode,
                         startHour: sh,
@@ -1683,10 +1892,33 @@ class _MyHomePageState extends State<MyHomePage> {
                         weekdayBits: wbits,
                         intervalMinutes: interval,
                       );
+
                       if (mounted) {
                         Navigator.of(ctx).pop();
+
+                        // Get the ACK response
+                        String receivedMsg = 'No response received';
+                        if (_messages.length > messagesCountBefore) {
+                          final lastMsg = _messages.last;
+                          if (lastMsg.contains('Received:')) {
+                            receivedMsg = lastMsg.replaceFirst('Received: ', '').trim();
+                          }
+                        }
+
+                        final buf = StringBuffer();
+                        buf.writeln('📤 SENT:\n$sentCmd\n');
+                        buf.writeln('📥 RECEIVED:\n$receivedMsg\n');
+                        buf.writeln('📊 PARSED DATA:');
+                        buf.writeln('✅ SET Measurement Interval (0x2A) ACK');
+                        buf.writeln('📋 Type: ${selType == 1 ? 'Heart Rate' : selType == 2 ? 'Blood Oxygen' : selType == 4 ? 'HRV' : 'Unknown'}');
+                        buf.writeln('⏱️ Interval: $interval min');
+
+                        setState(() { _structuredDataOutput = buf.toString(); });
                         _addMessage(
                             '✅ Set Measurement Interval (0x2A) command sent.');
+
+                        // Auto-fetch to verify
+                        await Future.delayed(const Duration(milliseconds: 500));
                         await _bleService
                             .sendGetMeasurementIntervalCommand(selType);
                       }
@@ -1706,18 +1938,37 @@ class _MyHomePageState extends State<MyHomePage> {
 
   Future<void> _sendGetExerciseDataCommand() async {
     try {
+      const sentCmd = '19-05-00-00-00-00-00-00-00-00-00-00-00-00-00-24';
       setState(() {
         _structuredDataTitle = 'Exercise Status (0x19)';
-        _structuredDataOutput = 'Fetching exercise status...';
+        _structuredDataOutput = '📤 Sent: $sentCmd\n\n⏳ Waiting for response...';
       });
+
+      int messagesCountBefore = _messages.length;
       final result = await _bleService.fetchExerciseStatus(timeout: const Duration(seconds: 2));
+
       if (!mounted) return;
+
+      String receivedMsg = 'No response received';
+      if (_messages.length > messagesCountBefore) {
+        final lastMsg = _messages.last;
+        if (lastMsg.contains('Received:')) {
+          receivedMsg = lastMsg.replaceFirst('Received: ', '').trim();
+        }
+      }
+
       if (result == null) {
-        setState(() { _structuredDataOutput = 'No response or error (0x99).'; });
+        setState(() {
+          _structuredDataOutput = '📤 Sent: $sentCmd\n\n❌ No response (0x99)';
+        });
         _addMessage('❌ Exercise status fetch failed or timed out.');
         return;
       }
+
       final buf = StringBuffer();
+      buf.writeln('📤 SENT:\n$sentCmd\n');
+      buf.writeln('📥 RECEIVED:\n$receivedMsg\n');
+      buf.writeln('📊 PARSED DATA:');
       buf.writeln('🏃 Active: ${result['is_active'] ? 'Yes' : 'No'}');
       buf.writeln('🕐 Has Timestamp: ${result['has_timestamp'] ? 'Yes' : 'No'}');
       if (result['timestamp'] != null) {
@@ -1738,20 +1989,40 @@ class _MyHomePageState extends State<MyHomePage> {
   Future<void> _toggleExerciseMode() async {
     try {
       if (_isExerciseActive) {
+        // END EXERCISE
+        const sentCmd = '19-06-00-00-00-00-00-00-00-00-00-00-00-00-00-25';
+        setState(() {
+          _structuredDataTitle = 'Exercise Mode (0x19)';
+          _structuredDataOutput = '📤 SENT:\n$sentCmd\n\n📊 Status: STOPPING...';
+        });
+
         await _bleService.sendEndExerciseCommand();
-        _addMessage('✅ End Exercise command sent. _toggleExerciseMode()');
-        // Optimistically update UI, then verify with a status poll shortly after
         setState(() => _isExerciseActive = false);
+        setState(() {
+          _structuredDataOutput = '📤 SENT:\n$sentCmd\n\n📊 Status: ✅ STOPPED';
+        });
+        _addMessage('✅ End Exercise command sent.');
+
         Future.delayed(const Duration(milliseconds: 700), () async {
           try {
             await _bleService.sendGetExerciseDataCommand();
           } catch (_) {}
         });
       } else {
+        // START EXERCISE
+        const sentCmd = '19-01-00-00-00-00-00-00-00-00-00-00-00-00-00-1A';
+        setState(() {
+          _structuredDataTitle = 'Exercise Mode (0x19)';
+          _structuredDataOutput = '📤 SENT:\n$sentCmd\n\n📊 Status: 🏃 RUNNING...\n\n⏳ Waiting for exercise data...';
+        });
+
         await _bleService.sendStartExerciseCommand();
-        _addMessage('✅ Start Exercise command sent. _toggleExerciseMode()');
-        // Optimistically update UI, then verify with a status poll shortly after
         setState(() => _isExerciseActive = true);
+        setState(() {
+          _structuredDataOutput = '📤 SENT:\n$sentCmd\n\n📊 Status: 🏃 ACTIVE - Receiving exercise data...';
+        });
+        _addMessage('✅ Start Exercise command sent.');
+
         Future.delayed(const Duration(milliseconds: 700), () async {
           try {
             await _bleService.sendGetExerciseDataCommand();
@@ -1759,26 +2030,42 @@ class _MyHomePageState extends State<MyHomePage> {
         });
       }
     } catch (e) {
+      setState(() {
+        _structuredDataOutput = '❌ Failed: $e';
+      });
       _addMessage(
-          '❌ Failed to toggle exercise mode: $e. _toggleExerciseMode()');
+          '❌ Failed to toggle exercise mode: $e.');
     }
   }
 
   Future<void> _toggleRealtimeMode() async {
     try {
       if (_isRealtimeActive) {
+        // STOP REALTIME
+        const sentCmd = '09-00-00-00-00-00-00-00-00-00-00-00-00-00-00-09';
+        setState(() {
+          _structuredDataTitle = 'Realtime Mode (0x09)';
+          _structuredDataOutput = '📤 SENT:\n$sentCmd\n\n📊 Status: STOPPING...';
+        });
         await _bleService.sendStopRealtimeMode();
-        _addMessage('✅ Stop Realtime command sent. _toggleRealtimeMode()');
+        setState(() => _isRealtimeActive = false);
         // Ignore trailing 0x09 frames for 1.5s so UI doesn't flip back to active
         _ignoreRealtimeUntilMs = DateTime.now().millisecondsSinceEpoch + 1500;
-        setState(() => _isRealtimeActive = false);
-      } else {
-        await _bleService.sendStartRealtimeMode(enableTemperature: true);
-        _addMessage('✅ Start Realtime command sent. _toggleRealtimeMode()');
-        // Optimistically set to true; will remain true when first 0x09 packet arrives
         setState(() {
-          _isRealtimeActive = true;
-          _ignoreRealtimeUntilMs = 0; // clear guard on start
+          _structuredDataOutput = '📤 SENT:\n$sentCmd\n\n📊 Status: ✅ STOPPED';
+        });
+      } else {
+        // START REALTIME
+        const sentCmd = '09-01-01-00-00-00-00-00-00-00-00-00-00-00-00-0B';
+        setState(() {
+          _structuredDataTitle = 'Realtime Mode (0x09)';
+          _structuredDataOutput = '📤 SENT:\n$sentCmd\n\n📊 Status: 📡 RUNNING...\n\n⏳ Waiting for sensor data...';
+        });
+        await _bleService.sendStartRealtimeMode(enableTemperature: true);
+        setState(() => _isRealtimeActive = true);
+        _ignoreRealtimeUntilMs = 0; // clear guard on start
+        setState(() {
+          _structuredDataOutput = '📤 SENT:\n$sentCmd\n\n📊 Status: 📡 ACTIVE - Receiving sensor data...';
         });
       }
     } catch (e) {
@@ -1789,22 +2076,39 @@ class _MyHomePageState extends State<MyHomePage> {
 
   Future<void> _sendGetTotalStepCountCommand() async {
     try {
+      const sentCmd = '51-00-00-00-00-00-00-00-00-00-00-00-00-00-00-51';
       setState(() {
         _structuredDataTitle = 'Steps (0x51)';
-        _structuredDataOutput = 'Fetching step data...';
+        _structuredDataOutput = '📤 Sent: $sentCmd\n\n⏳ Waiting for response...';
       });
+
+      int messagesCountBefore = _messages.length;
       final records = await _bleService.fetchTotalSteps(timeout: const Duration(seconds: 4));
+
       if (!mounted) return;
+
+      String receivedMsg = 'No response received';
+      if (_messages.length > messagesCountBefore) {
+        final lastMsg = _messages.last;
+        if (lastMsg.contains('Received:')) {
+          receivedMsg = lastMsg.replaceFirst('Received: ', '').trim();
+        }
+      }
+
       if (records.isEmpty) {
-        setState(() { _structuredDataOutput = 'No step records received.'; });
+        setState(() { _structuredDataOutput = '📤 Sent: $sentCmd\n\n❌ No step records received'; });
         _addMessage('❌ No step data received.');
         return;
       }
+
       final buf = StringBuffer();
+      buf.writeln('📤 SENT:\n$sentCmd\n');
+      buf.writeln('📥 RECEIVED:\n$receivedMsg\n');
+      buf.writeln('📊 PARSED DATA:');
       buf.writeln('📊 ${records.length} day(s) of step data:');
       buf.writeln('');
       for (final r in records) {
-        buf.writeln('${r['date']}: ${r['steps']} steps, ${r['exercise_time']}s exercise, ${(r['calories'] as double).toStringAsFixed(1)} kcal, ${(r['distance'] as double).toStringAsFixed(2)} km');
+        buf.writeln('${r['date']}: ${r['steps']} steps, ${r['exercise_time_seconds']}s exercise, ${(r['calories_kcal'] as double).toStringAsFixed(1)} kcal, ${(r['distance_km'] as double).toStringAsFixed(2)} km');
       }
       setState(() { _structuredDataOutput = buf.toString(); });
       _addMessage('✅ Steps fetched: ${records.length} records');
@@ -1820,22 +2124,39 @@ class _MyHomePageState extends State<MyHomePage> {
 
   Future<void> _sendGetDetailedStepCountCommand() async {
     try {
+      const sentCmd = '52-00-00-00-00-00-00-00-00-00-00-00-00-00-00-52';
       setState(() {
         _structuredDataTitle = 'Step Details (0x52)';
-        _structuredDataOutput = 'Fetching detailed step data...';
+        _structuredDataOutput = '📤 Sent: $sentCmd\n\n⏳ Waiting for response...';
       });
+
+      int messagesCountBefore = _messages.length;
       final records = await _bleService.fetchDetailedSteps(timeout: const Duration(seconds: 4));
+
       if (!mounted) return;
+
+      String receivedMsg = 'No response received';
+      if (_messages.length > messagesCountBefore) {
+        final lastMsg = _messages.last;
+        if (lastMsg.contains('Received:')) {
+          receivedMsg = lastMsg.replaceFirst('Received: ', '').trim();
+        }
+      }
+
       if (records.isEmpty) {
-        setState(() { _structuredDataOutput = 'No detailed step records received.'; });
+        setState(() { _structuredDataOutput = '📤 Sent: $sentCmd\n\n❌ No detailed step records received'; });
         _addMessage('❌ No detailed step data received.');
         return;
       }
+
       final buf = StringBuffer();
+      buf.writeln('📤 SENT:\n$sentCmd\n');
+      buf.writeln('📥 RECEIVED:\n$receivedMsg\n');
+      buf.writeln('📊 PARSED DATA:');
       buf.writeln('📊 ${records.length} segment(s) of detailed steps:');
       buf.writeln('');
       for (final r in records) {
-        buf.writeln('${r['timestamp']}: ${r['total_steps']} steps, ${(r['calories'] as double).toStringAsFixed(1)} kcal, ${(r['distance'] as double).toStringAsFixed(2)} km, ${(r['per_minute'] as List).length} min entries');
+        buf.writeln('${r['timestamp']}: ${r['steps']} steps, ${(r['calories'] as double).toStringAsFixed(1)} kcal, ${(r['distance'] as double).toStringAsFixed(2)} km, ${(r['per_minute'] as List).length} min entries');
       }
       setState(() { _structuredDataOutput = buf.toString(); });
       _addMessage('✅ Step Details: ${records.length} segments');
@@ -1849,51 +2170,37 @@ class _MyHomePageState extends State<MyHomePage> {
     }
   }
 
-  Future<void> _sendGetSleepDataCommand() async {
-    try {
-      setState(() {
-        _structuredDataTitle = 'Sleep (0x53)';
-        _structuredDataOutput = 'Fetching sleep data...';
-      });
-      final records = await _bleService.fetchSleepData(timeout: const Duration(seconds: 4));
-      if (!mounted) return;
-      if (records.isEmpty) {
-        setState(() { _structuredDataOutput = 'No sleep records received.'; });
-        _addMessage('❌ No sleep data received.');
-        return;
-      }
-      final buf = StringBuffer();
-      buf.writeln('😴 ${records.length} sleep session(s):');
-      buf.writeln('');
-      for (final r in records) {
-        buf.writeln('- ${r.toString()}');
-      }
-      setState(() { _structuredDataOutput = buf.toString(); });
-      _addMessage('✅ Sleep fetched: ${records.length} records');
-    } catch (e) {
-      if (!mounted) return;
-      setState(() {
-        _structuredDataTitle = 'Sleep (0x53)';
-        _structuredDataOutput = 'Error: $e';
-      });
-      _addMessage('❌ Failed to fetch sleep data: $e');
-    }
-  }
-
   Future<void> _sendGetDetailedHeartRateCommand() async {
     try {
+      const sentCmd = '54-00-00-00-00-00-00-00-00-00-00-00-00-00-00-54';
       setState(() {
         _structuredDataTitle = 'HR Detail (0x54)';
-        _structuredDataOutput = 'Fetching detailed heart rate data...';
+        _structuredDataOutput = '📤 Sent: $sentCmd\n\n⏳ Waiting for response...';
       });
+
+      int messagesCountBefore = _messages.length;
       final records = await _bleService.fetchDetailedHeartRate(timeout: const Duration(seconds: 4));
+
       if (!mounted) return;
+
+      String receivedMsg = 'No response received';
+      if (_messages.length > messagesCountBefore) {
+        final lastMsg = _messages.last;
+        if (lastMsg.contains('Received:')) {
+          receivedMsg = lastMsg.replaceFirst('Received: ', '').trim();
+        }
+      }
+
       if (records.isEmpty) {
-        setState(() { _structuredDataOutput = 'No detailed heart rate records received.'; });
+        setState(() { _structuredDataOutput = '📤 Sent: $sentCmd\n\n❌ No detailed heart rate records received'; });
         _addMessage('❌ No detailed HR data received.');
         return;
       }
+
       final buf = StringBuffer();
+      buf.writeln('📤 SENT:\n$sentCmd\n');
+      buf.writeln('📥 RECEIVED:\n$receivedMsg\n');
+      buf.writeln('📊 PARSED DATA:');
       buf.writeln('❤️ ${records.length} HR measurement(s):');
       buf.writeln('');
       for (final r in records) {
@@ -1914,18 +2221,35 @@ class _MyHomePageState extends State<MyHomePage> {
 
   Future<void> _sendGetHeartRateHistoryCommand() async {
     try {
+      const sentCmd = '55-00-00-00-00-00-00-00-00-00-00-00-00-00-00-55';
       setState(() {
         _structuredDataTitle = 'HR History (0x55)';
-        _structuredDataOutput = 'Fetching heart rate history...';
+        _structuredDataOutput = '📤 Sent: $sentCmd\n\n⏳ Waiting for response...';
       });
+
+      int messagesCountBefore = _messages.length;
       final records = await _bleService.fetchHeartRateHistory(timeout: const Duration(seconds: 4));
+
       if (!mounted) return;
+
+      String receivedMsg = 'No response received';
+      if (_messages.length > messagesCountBefore) {
+        final lastMsg = _messages.last;
+        if (lastMsg.contains('Received:')) {
+          receivedMsg = lastMsg.replaceFirst('Received: ', '').trim();
+        }
+      }
+
       if (records.isEmpty) {
-        setState(() { _structuredDataOutput = 'No heart rate history received.'; });
+        setState(() { _structuredDataOutput = '📤 Sent: $sentCmd\n\n❌ No heart rate history received'; });
         _addMessage('❌ No HR history received.');
         return;
       }
+
       final buf = StringBuffer();
+      buf.writeln('📤 SENT:\n$sentCmd\n');
+      buf.writeln('📥 RECEIVED:\n$receivedMsg\n');
+      buf.writeln('📊 PARSED DATA:');
       buf.writeln('💓 ${records.length} HR reading(s):');
       buf.writeln('');
       for (final r in records) {
@@ -1945,18 +2269,35 @@ class _MyHomePageState extends State<MyHomePage> {
 
   Future<void> _sendGetTemperatureDataCommand() async {
     try {
+      const sentCmd = '62-00-00-00-00-00-00-00-00-00-00-00-00-00-00-62';
       setState(() {
         _structuredDataTitle = 'Temperature (0x62)';
-        _structuredDataOutput = 'Fetching temperature data...';
+        _structuredDataOutput = '📤 Sent: $sentCmd\n\n⏳ Waiting for response...';
       });
+
+      int messagesCountBefore = _messages.length;
       final records = await _bleService.fetchTemperatureData(timeout: const Duration(seconds: 4));
+
       if (!mounted) return;
+
+      String receivedMsg = 'No response received';
+      if (_messages.length > messagesCountBefore) {
+        final lastMsg = _messages.last;
+        if (lastMsg.contains('Received:')) {
+          receivedMsg = lastMsg.replaceFirst('Received: ', '').trim();
+        }
+      }
+
       if (records.isEmpty) {
-        setState(() { _structuredDataOutput = 'No temperature records received.'; });
+        setState(() { _structuredDataOutput = '📤 Sent: $sentCmd\n\n❌ No temperature records received'; });
         _addMessage('❌ No temperature data received.');
         return;
       }
+
       final buf = StringBuffer();
+      buf.writeln('📤 SENT:\n$sentCmd\n');
+      buf.writeln('📥 RECEIVED:\n$receivedMsg\n');
+      buf.writeln('📊 PARSED DATA:');
       buf.writeln('🌡️ ${records.length} temperature reading(s):');
       buf.writeln('');
       for (final r in records) {
@@ -1977,25 +2318,44 @@ class _MyHomePageState extends State<MyHomePage> {
 
   Future<void> _sendGetRingTemperatureCommand() async {
     try {
+      const sentCmd = '14-00-00-00-00-00-00-00-00-00-00-00-00-00-00-14';
       setState(() {
         _structuredDataTitle = 'Ring Temp (0x14)';
-        _structuredDataOutput = 'Fetching ring temperature...';
+        _structuredDataOutput = '📤 Sent: $sentCmd\n\n⏳ Waiting for response...';
       });
+
+      int messagesCountBefore = _messages.length;
       final result = await _bleService.fetchRingTemperature(timeout: const Duration(seconds: 2));
+
       if (!mounted) return;
+
+      String receivedMsg = 'No response received';
+      if (_messages.length > messagesCountBefore) {
+        final lastMsg = _messages.last;
+        if (lastMsg.contains('Received:')) {
+          receivedMsg = lastMsg.replaceFirst('Received: ', '').trim();
+        }
+      }
+
       if (result == null) {
-        setState(() { _structuredDataOutput = 'No response or error (0x94).'; });
+        setState(() {
+          _structuredDataOutput = '📤 Sent: $sentCmd\n\n❌ No response (0x94)';
+        });
         _addMessage('❌ Ring temperature fetch failed or timed out.');
         return;
       }
+
       final buf = StringBuffer();
-      buf.writeln('🌡️ Highest: ${result['highest']}°C');
-      buf.writeln('🌡️ Decimal Temp: ${result['decimal_temp']}°C');
-      buf.writeln('NTC1: ${result['ntc1']}°C');
-      buf.writeln('NTC2: ${result['ntc2']}°C');
-      buf.writeln('NTC3: ${result['ntc3']}°C');
+      buf.writeln('📤 SENT:\n$sentCmd\n');
+      buf.writeln('📥 RECEIVED:\n$receivedMsg\n');
+      buf.writeln('📊 PARSED DATA:');
+      buf.writeln('🌡️ Highest: ${(result['highest_temp'] as double).toStringAsFixed(1)}°C');
+      buf.writeln('🌡️ Decimal Temp: ${(result['decimal_temp'] as double).toStringAsFixed(1)}°C');
+      buf.writeln('🧪 NTC1: ${(result['ntc1'] as double).toStringAsFixed(1)}°C');
+      buf.writeln('🧪 NTC2: ${(result['ntc2'] as double).toStringAsFixed(1)}°C');
+      buf.writeln('🧪 NTC3: ${(result['ntc3'] as double).toStringAsFixed(1)}°C');
       setState(() { _structuredDataOutput = buf.toString(); });
-      _addMessage('✅ Ring Temp: ${result['highest']}°C');
+      _addMessage('✅ Ring Temp: ${(result['highest_temp'] as double).toStringAsFixed(1)}°C');
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -2008,18 +2368,35 @@ class _MyHomePageState extends State<MyHomePage> {
 
   Future<void> _sendGetBloodOxygenDataCommand() async {
     try {
+      const sentCmd = '66-00-00-00-00-00-00-00-00-00-00-00-00-00-00-66';
       setState(() {
         _structuredDataTitle = 'Blood O2 (0x66)';
-        _structuredDataOutput = 'Fetching blood oxygen data...';
+        _structuredDataOutput = '📤 Sent: $sentCmd\n\n⏳ Waiting for response...';
       });
+
+      int messagesCountBefore = _messages.length;
       final records = await _bleService.fetchBloodOxygenData(timeout: const Duration(seconds: 4));
+
       if (!mounted) return;
+
+      String receivedMsg = 'No response received';
+      if (_messages.length > messagesCountBefore) {
+        final lastMsg = _messages.last;
+        if (lastMsg.contains('Received:')) {
+          receivedMsg = lastMsg.replaceFirst('Received: ', '').trim();
+        }
+      }
+
       if (records.isEmpty) {
-        setState(() { _structuredDataOutput = 'No blood oxygen records received.'; });
+        setState(() { _structuredDataOutput = '📤 Sent: $sentCmd\n\n❌ No blood oxygen records received'; });
         _addMessage('❌ No blood oxygen data received.');
         return;
       }
+
       final buf = StringBuffer();
+      buf.writeln('📤 SENT:\n$sentCmd\n');
+      buf.writeln('📥 RECEIVED:\n$receivedMsg\n');
+      buf.writeln('📊 PARSED DATA:');
       buf.writeln('🩸 ${records.length} SpO2 reading(s):');
       buf.writeln('');
       for (final r in records) {
