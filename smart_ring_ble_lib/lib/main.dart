@@ -484,6 +484,14 @@ class _MyHomePageState extends State<MyHomePage> {
           _isExerciseActive = true;
         });
       }
+      // Append incoming exercise data to structured data panel if exercise mode is active
+      if (_isExerciseActive) {
+        setState(() {
+          // Extract just the exercise data lines (skip the header "🏃 Live Exercise Data:")
+          final dataLines = message.split('\n').skip(1).join('\n');
+          _structuredDataOutput = '📤 SENT:\n19-01-00-00-00-00-00-00-00-00-00-00-00-00-00-1A\n\n📊 Status: 🏃 ACTIVE - Receiving exercise data...\n\n📥 LATEST DATA:\n$dataLines';
+        });
+      }
     }
   }
 
@@ -494,6 +502,14 @@ class _MyHomePageState extends State<MyHomePage> {
       if (now > _ignoreRealtimeUntilMs && !_isRealtimeActive) {
         setState(() {
           _isRealtimeActive = true;
+        });
+      }
+      // Append incoming realtime data to structured data panel if realtime mode is active
+      if (_isRealtimeActive) {
+        setState(() {
+          // Extract just the realtime data lines (skip the header "📡 Real-time Mode:")
+          final dataLines = message.split('\n').skip(1).join('\n');
+          _structuredDataOutput = '📤 SENT:\n09-01-01-00-00-00-00-00-00-00-00-00-00-00-00-0B\n\n📊 Status: 📡 ACTIVE - Receiving sensor data...\n\n📥 LATEST DATA:\n$dataLines';
         });
       }
     }
