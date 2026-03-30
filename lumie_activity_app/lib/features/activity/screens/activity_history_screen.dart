@@ -2,11 +2,37 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/services/rest_days_service.dart';
+import '../../../core/services/steps_service.dart';
 import '../../../shared/models/activity_models.dart';
 import '../../../shared/widgets/gradient_card.dart';
-import '../../../shared/widgets/intensity_badge.dart';
 import '../../ring/providers/ring_provider.dart';
 import 'workout_recording_screen.dart';
+
+// ─── Internal view model ──────────────────────────────────────────────────────
+
+class _DayData {
+  final DateTime date;
+  final int steps;
+  final int activeMinutes; // from ring exercise_time_seconds
+  final int goalMinutes;
+  final String goalReason;
+  final bool goalIsReduced;
+
+  const _DayData({
+    required this.date,
+    required this.steps,
+    required this.activeMinutes,
+    required this.goalMinutes,
+    required this.goalReason,
+    required this.goalIsReduced,
+  });
+
+  bool get goalMet => activeMinutes >= goalMinutes;
+  double get goalProgress =>
+      goalMinutes > 0 ? (activeMinutes / goalMinutes).clamp(0.0, 1.5) : 0.0;
+}
+
+// ─── Screen ───────────────────────────────────────────────────────────────────
 
 class ActivityHistoryScreen extends StatefulWidget {
   const ActivityHistoryScreen({super.key});
@@ -16,8 +42,13 @@ class ActivityHistoryScreen extends StatefulWidget {
 }
 
 class _ActivityHistoryScreenState extends State<ActivityHistoryScreen> {
-  int _selectedDayIndex = 0;
+  int _selectedDayIndex = 0; // 0 = today, 6 = 6 days ago
   bool _isTodayRestDay = false;
+  bool _isLoading = true;
+  List<_DayData> _weekData = [];
+
+  RingProvider? _ringProvider;
+  bool _lastConnected = false;
 
   @override
   void initState() {
@@ -27,104 +58,144 @@ class _ActivityHistoryScreenState extends State<ActivityHistoryScreen> {
     });
   }
 
-  // Mock data for the week
-  final List<DailyActivitySummary> _weekData = [
-    DailyActivitySummary(
-      date: DateTime.now(),
-      totalActiveMinutes: 42,
-      goalMinutes: 60,
-      dominantIntensity: ActivityIntensity.moderate,
-      activities: [],
-      ringTrackedMinutes: 35,
-      manualMinutes: 7,
-    ),
-    DailyActivitySummary(
-      date: DateTime.now().subtract(const Duration(days: 1)),
-      totalActiveMinutes: 65,
-      goalMinutes: 60,
-      dominantIntensity: ActivityIntensity.moderate,
-      activities: [],
-      ringTrackedMinutes: 55,
-      manualMinutes: 10,
-    ),
-    DailyActivitySummary(
-      date: DateTime.now().subtract(const Duration(days: 2)),
-      totalActiveMinutes: 30,
-      goalMinutes: 45,
-      dominantIntensity: ActivityIntensity.low,
-      activities: [],
-      ringTrackedMinutes: 30,
-      manualMinutes: 0,
-    ),
-    DailyActivitySummary(
-      date: DateTime.now().subtract(const Duration(days: 3)),
-      totalActiveMinutes: 55,
-      goalMinutes: 60,
-      dominantIntensity: ActivityIntensity.high,
-      activities: [],
-      ringTrackedMinutes: 50,
-      manualMinutes: 5,
-    ),
-    DailyActivitySummary(
-      date: DateTime.now().subtract(const Duration(days: 4)),
-      totalActiveMinutes: 40,
-      goalMinutes: 60,
-      dominantIntensity: ActivityIntensity.moderate,
-      activities: [],
-      ringTrackedMinutes: 40,
-      manualMinutes: 0,
-    ),
-    DailyActivitySummary(
-      date: DateTime.now().subtract(const Duration(days: 5)),
-      totalActiveMinutes: 72,
-      goalMinutes: 60,
-      dominantIntensity: ActivityIntensity.high,
-      activities: [],
-      ringTrackedMinutes: 62,
-      manualMinutes: 10,
-    ),
-    DailyActivitySummary(
-      date: DateTime.now().subtract(const Duration(days: 6)),
-      totalActiveMinutes: 25,
-      goalMinutes: 45,
-      dominantIntensity: ActivityIntensity.low,
-      activities: [],
-      ringTrackedMinutes: 25,
-      manualMinutes: 0,
-    ),
-  ];
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final ringProvider = Provider.of<RingProvider>(context, listen: false);
+    if (_ringProvider != ringProvider) {
+      _ringProvider?.removeListener(_onRingStateChanged);
+      _ringProvider = ringProvider;
+      _lastConnected = ringProvider.isConnected;
+      ringProvider.addListener(_onRingStateChanged);
+      _loadData();
+    }
+  }
 
-  // ── Record Workout ─────────────────────────────────────────────────────────
+  void _onRingStateChanged() {
+    if (!mounted) return;
+    final connected = _ringProvider?.isConnected ?? false;
+    if (connected && !_lastConnected) {
+      // Ring just connected — re-sync and reload
+      _loadData();
+    }
+    _lastConnected = connected;
+  }
+
+  @override
+  void dispose() {
+    _ringProvider?.removeListener(_onRingStateChanged);
+    super.dispose();
+  }
+
+  // ─── Data loading ─────────────────────────────────────────────────────────
+
+  Future<void> _loadData() async {
+    setState(() => _isLoading = true);
+
+    final ringProvider = Provider.of<RingProvider>(context, listen: false);
+
+    // 1. If ring is connected, pull step data via BLE and sync to backend.
+    if (ringProvider.isConnected) {
+      final steps = await ringProvider.fetchStepHistory();
+      if (steps.isNotEmpty) {
+        await StepsService().syncFromRingRecords(steps);
+      }
+    }
+
+    // 2. Fetch 7-day history + today's goal from backend.
+    final now = DateTime.now();
+    final startDate = DateTime(
+      now.year,
+      now.month,
+      now.day,
+    ).subtract(const Duration(days: 6));
+
+    final history = await StepsService().getHistory(start: startDate, end: now);
+    final todayGoal = await StepsService().getGoal(now);
+
+    // 3. Build a _DayData entry for each of the last 7 days.
+    //    Days with no ring data show 0 steps / 0 active minutes.
+    final weekData = <_DayData>[];
+    for (var i = 0; i < 7; i++) {
+      final day = DateTime(
+        now.year,
+        now.month,
+        now.day,
+      ).subtract(Duration(days: i));
+      final dateStr = _fmtDate(day);
+
+      final matches = history.where((h) => h.dateStr == dateStr);
+      final record = matches.isEmpty ? null : matches.first;
+
+      int goalMinutes;
+      String goalReason;
+      bool goalIsReduced;
+      if (i == 0 && todayGoal != null) {
+        goalMinutes = todayGoal.goalMinutes;
+        goalReason = todayGoal.reason;
+        goalIsReduced = todayGoal.isReduced;
+      } else if (record != null) {
+        goalMinutes = record.goalMinutes;
+        goalReason = record.goalReason;
+        goalIsReduced = record.goalIsReduced;
+      } else {
+        // No data for this day — use simple weekday/weekend baseline.
+        goalMinutes = day.weekday >= 6 ? 45 : 60;
+        goalReason = '';
+        goalIsReduced = false;
+      }
+
+      weekData.add(
+        _DayData(
+          date: day,
+          steps: record?.steps ?? 0,
+          activeMinutes: record?.activeMinutes ?? 0,
+          goalMinutes: goalMinutes,
+          goalReason: goalReason,
+          goalIsReduced: goalIsReduced,
+        ),
+      );
+    }
+
+    if (mounted) {
+      setState(() {
+        _weekData = weekData;
+        _isLoading = false;
+      });
+    }
+  }
+
+  static String _fmtDate(DateTime d) =>
+      '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
+
+  // ─── Workout recording ────────────────────────────────────────────────────
 
   void _onRecordWorkout() {
     final ring = context.read<RingProvider>();
-
     if (!ring.isPaired || !ring.isBluetoothOn) {
       _showRingRequiredDialog(ring);
       return;
     }
-
     _showActivityPicker();
   }
 
   void _showRingRequiredDialog(RingProvider ring) {
     final bool bluetoothOff = ring.isPaired && !ring.isBluetoothOn;
-    final String title = 'Ring Not Connected';
-    final String message = bluetoothOff
-        ? 'Turn on Bluetooth to connect your Lumie Ring for heart rate tracking.'
-        : 'Your Lumie Ring is not connected.\n\nIf your ring is in the charger, remove it and make sure it\'s nearby.';
-
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: Row(
+        title: const Row(
           children: [
-            const Icon(Icons.bluetooth_disabled, color: AppColors.error),
-            const SizedBox(width: 8),
-            Text(title),
+            Icon(Icons.bluetooth_disabled, color: AppColors.error),
+            SizedBox(width: 8),
+            Text('Ring Not Connected'),
           ],
         ),
-        content: Text(message),
+        content: Text(
+          bluetoothOff
+              ? 'Turn on Bluetooth to connect your Lumie Ring for heart rate tracking.'
+              : 'Your Lumie Ring is not connected.\n\nIf your ring is in the charger, remove it and make sure it\'s nearby.',
+        ),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(ctx).pop(),
@@ -166,6 +237,8 @@ class _ActivityHistoryScreenState extends State<ActivityHistoryScreen> {
     );
   }
 
+  // ─── Build ────────────────────────────────────────────────────────────────
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -180,29 +253,33 @@ class _ActivityHistoryScreenState extends State<ActivityHistoryScreen> {
         ),
       ),
       body: Container(
-        decoration: const BoxDecoration(
-          gradient: AppColors.primaryGradient,
-        ),
+        decoration: const BoxDecoration(gradient: AppColors.primaryGradient),
         child: SafeArea(
           child: Column(
             children: [
               _buildAppBar(context),
-              _buildWeekSelector(),
-              Expanded(
-                child: SingleChildScrollView(
-                  padding: const EdgeInsets.only(bottom: 100),
-                  child: Column(
-                    children: [
-                      const SizedBox(height: 16),
-                      _buildSelectedDaySummary(),
-                      const SizedBox(height: 16),
-                      _buildWeeklyOverview(),
-                      const SizedBox(height: 16),
-                      _buildActivityList(),
-                    ],
+              if (_isLoading)
+                const Expanded(
+                  child: Center(child: CircularProgressIndicator()),
+                )
+              else ...[
+                _buildWeekSelector(),
+                Expanded(
+                  child: SingleChildScrollView(
+                    padding: const EdgeInsets.only(bottom: 100),
+                    child: Column(
+                      children: [
+                        const SizedBox(height: 16),
+                        _buildSelectedDaySummary(),
+                        const SizedBox(height: 16),
+                        _buildWeeklyOverview(),
+                        const SizedBox(height: 16),
+                        _buildActivityList(),
+                      ],
+                    ),
                   ),
                 ),
-              ),
+              ],
             ],
           ),
         ),
@@ -230,18 +307,14 @@ class _ActivityHistoryScreenState extends State<ActivityHistoryScreen> {
               ),
             ),
           ),
-          IconButton(
-            icon: const Icon(Icons.calendar_month),
-            onPressed: () {},
-          ),
+          IconButton(icon: const Icon(Icons.refresh), onPressed: _loadData),
         ],
       ),
     );
   }
 
   Widget _buildWeekSelector() {
-    final days = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
-
+    const days = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 16),
       padding: const EdgeInsets.all(12),
@@ -264,11 +337,7 @@ class _ActivityHistoryScreenState extends State<ActivityHistoryScreen> {
           final dayOfWeek = dayData.date.weekday % 7;
 
           return GestureDetector(
-            onTap: () {
-              setState(() {
-                _selectedDayIndex = 6 - index;
-              });
-            },
+            onTap: () => setState(() => _selectedDayIndex = 6 - index),
             child: AnimatedContainer(
               duration: const Duration(milliseconds: 200),
               width: 40,
@@ -284,7 +353,9 @@ class _ActivityHistoryScreenState extends State<ActivityHistoryScreen> {
                     style: TextStyle(
                       fontSize: 12,
                       fontWeight: FontWeight.w600,
-                      color: isSelected ? AppColors.textOnYellow : AppColors.textSecondary,
+                      color: isSelected
+                          ? AppColors.textOnYellow
+                          : AppColors.textSecondary,
                     ),
                   ),
                   const SizedBox(height: 4),
@@ -293,7 +364,9 @@ class _ActivityHistoryScreenState extends State<ActivityHistoryScreen> {
                     style: TextStyle(
                       fontSize: 16,
                       fontWeight: FontWeight.bold,
-                      color: isSelected ? AppColors.textOnYellow : AppColors.textPrimary,
+                      color: isSelected
+                          ? AppColors.textOnYellow
+                          : AppColors.textPrimary,
                     ),
                   ),
                   const SizedBox(height: 4),
@@ -318,13 +391,13 @@ class _ActivityHistoryScreenState extends State<ActivityHistoryScreen> {
 
   Widget _buildSelectedDaySummary() {
     final selected = _weekData[_selectedDayIndex];
-    final progress = selected.goalProgress.clamp(0.0, 1.0);
     final isViewingTodayOnRestDay = _selectedDayIndex == 0 && _isTodayRestDay;
 
     return GradientCard(
       gradient: AppColors.cardGradient,
       child: Column(
         children: [
+          // Rest-day banner
           if (isViewingTodayOnRestDay) ...[
             Container(
               width: double.infinity,
@@ -332,16 +405,25 @@ class _ActivityHistoryScreenState extends State<ActivityHistoryScreen> {
               decoration: BoxDecoration(
                 color: AppColors.accentMint.withValues(alpha: 0.15),
                 borderRadius: BorderRadius.circular(10),
-                border: Border.all(color: AppColors.accentMint.withValues(alpha: 0.4)),
+                border: Border.all(
+                  color: AppColors.accentMint.withValues(alpha: 0.4),
+                ),
               ),
-              child: Row(
+              child: const Row(
                 children: [
-                  const Icon(Icons.self_improvement, size: 16, color: AppColors.accentMint),
-                  const SizedBox(width: 8),
-                  const Expanded(
+                  Icon(
+                    Icons.self_improvement,
+                    size: 16,
+                    color: AppColors.accentMint,
+                  ),
+                  SizedBox(width: 8),
+                  Expanded(
                     child: Text(
                       'Rest Day — light movement only. Your full data is shown below.',
-                      style: TextStyle(fontSize: 12, color: AppColors.textSecondary),
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: AppColors.textSecondary,
+                      ),
                     ),
                   ),
                 ],
@@ -349,68 +431,120 @@ class _ActivityHistoryScreenState extends State<ActivityHistoryScreen> {
             ),
             const SizedBox(height: 14),
           ],
+
+          // Date + goal label
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    _formatDate(selected.date),
-                    style: const TextStyle(
-                      fontSize: 18,
-                      fontWeight: FontWeight.bold,
-                      color: AppColors.textPrimary,
+              Text(
+                _formatDate(selected.date),
+                style: const TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                  color: AppColors.textPrimary,
+                ),
+              ),
+              if (selected.goalMet)
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 2,
+                  ),
+                  decoration: BoxDecoration(
+                    color: AppColors.success.withValues(alpha: 0.2),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: const Text(
+                    'Goal Met!',
+                    style: TextStyle(
+                      fontSize: 10,
+                      color: AppColors.success,
+                      fontWeight: FontWeight.w600,
                     ),
                   ),
-                  const SizedBox(height: 4),
-                  Row(
-                    children: [
-                      Text(
-                        'Goal: ${selected.goalMinutes} min',
-                        style: const TextStyle(
-                          fontSize: 13,
-                          color: AppColors.textSecondary,
-                        ),
-                      ),
-                      if (selected.goalMet) ...[
-                        const SizedBox(width: 8),
-                        Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                          decoration: BoxDecoration(
-                            color: AppColors.success.withValues(alpha: 0.2),
-                            borderRadius: BorderRadius.circular(10),
+                ),
+            ],
+          ),
+          const SizedBox(height: 16),
+
+          // Steps (hero) + active time side by side
+          Row(
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      children: [
+                        Text(
+                          _fmtSteps(selected.steps),
+                          style: const TextStyle(
+                            fontSize: 36,
+                            fontWeight: FontWeight.bold,
+                            color: AppColors.textPrimary,
+                            height: 1.0,
                           ),
-                          child: const Text(
-                            'Goal Met!',
+                        ),
+                        const SizedBox(width: 4),
+                        const Padding(
+                          padding: EdgeInsets.only(bottom: 4),
+                          child: Text(
+                            'steps',
                             style: TextStyle(
-                              fontSize: 10,
-                              color: AppColors.success,
-                              fontWeight: FontWeight.w600,
+                              fontSize: 13,
+                              color: AppColors.textSecondary,
                             ),
                           ),
                         ),
                       ],
-                    ],
-                  ),
-                ],
+                    ),
+                    const SizedBox(height: 4),
+                    Row(
+                      children: [
+                        const Icon(
+                          Icons.directions_walk,
+                          size: 14,
+                          color: AppColors.textLight,
+                        ),
+                        const SizedBox(width: 4),
+                        Text(
+                          'Ring tracked',
+                          style: const TextStyle(
+                            fontSize: 11,
+                            color: AppColors.textLight,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
               ),
               Column(
                 crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
                   Text(
-                    '${selected.totalActiveMinutes}',
+                    '${selected.activeMinutes}',
                     style: const TextStyle(
-                      fontSize: 36,
+                      fontSize: 28,
                       fontWeight: FontWeight.bold,
                       color: AppColors.textPrimary,
+                      height: 1.0,
                     ),
                   ),
-                  const Text(
-                    'minutes',
-                    style: TextStyle(
-                      fontSize: 13,
+                  Text(
+                    'min active',
+                    style: const TextStyle(
+                      fontSize: 12,
                       color: AppColors.textSecondary,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    'Goal: ${selected.goalMinutes} min',
+                    style: const TextStyle(
+                      fontSize: 11,
+                      color: AppColors.textLight,
                     ),
                   ),
                 ],
@@ -418,52 +552,50 @@ class _ActivityHistoryScreenState extends State<ActivityHistoryScreen> {
             ],
           ),
           const SizedBox(height: 16),
+
+          // Progress bar
           ClipRRect(
             borderRadius: BorderRadius.circular(8),
             child: LinearProgressIndicator(
-              value: progress,
+              value: selected.goalProgress,
               minHeight: 12,
               backgroundColor: AppColors.surfaceLight,
               valueColor: AlwaysStoppedAnimation<Color>(
-                selected.goalMet ? AppColors.success : AppColors.primaryLemonDark,
+                selected.goalMet
+                    ? AppColors.success
+                    : AppColors.primaryLemonDark,
               ),
             ),
           ),
-          const SizedBox(height: 12),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Row(
-                children: [
-                  const Icon(Icons.watch, size: 16, color: AppColors.textSecondary),
-                  const SizedBox(width: 4),
-                  Text(
-                    'Ring: ${selected.ringTrackedMinutes} min',
-                    style: const TextStyle(fontSize: 12, color: AppColors.textSecondary),
-                  ),
-                ],
+
+          // Goal reason
+          if (selected.goalReason.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: Text(
+                selected.goalReason,
+                style: TextStyle(
+                  fontSize: 11,
+                  color: selected.goalIsReduced
+                      ? AppColors.warning
+                      : AppColors.textLight,
+                  fontStyle: FontStyle.italic,
+                ),
               ),
-              Row(
-                children: [
-                  const Icon(Icons.edit_note, size: 16, color: AppColors.textSecondary),
-                  const SizedBox(width: 4),
-                  Text(
-                    'Manual: ${selected.manualMinutes} min',
-                    style: const TextStyle(fontSize: 12, color: AppColors.textSecondary),
-                  ),
-                ],
-              ),
-              IntensityBadge(intensity: selected.dominantIntensity),
-            ],
-          ),
+            ),
+          ],
         ],
       ),
     );
   }
 
   Widget _buildWeeklyOverview() {
-    final totalMinutes = _weekData.fold<int>(0, (sum, d) => sum + d.totalActiveMinutes);
-    final avgMinutes = (totalMinutes / 7).round();
+    final totalSteps = _weekData.fold<int>(0, (sum, d) => sum + d.steps);
+    final totalActive = _weekData.fold<int>(
+      0,
+      (sum, d) => sum + d.activeMinutes,
+    );
     final goalsMet = _weekData.where((d) => d.goalMet).length;
 
     return GradientCard(
@@ -484,22 +616,22 @@ class _ActivityHistoryScreenState extends State<ActivityHistoryScreen> {
             children: [
               Expanded(
                 child: _WeekStatItem(
-                  label: 'Total Time',
-                  value: '$totalMinutes min',
+                  label: 'Total Steps',
+                  value: _fmtSteps(totalSteps),
+                  icon: Icons.directions_walk,
+                ),
+              ),
+              Expanded(
+                child: _WeekStatItem(
+                  label: 'Active Time',
+                  value: '$totalActive min',
                   icon: Icons.timer,
                 ),
               ),
               Expanded(
                 child: _WeekStatItem(
-                  label: 'Daily Avg',
-                  value: '$avgMinutes min',
-                  icon: Icons.show_chart,
-                ),
-              ),
-              Expanded(
-                child: _WeekStatItem(
                   label: 'Goals Met',
-                  value: '$goalsMet/7 days',
+                  value: '$goalsMet/7',
                   icon: Icons.flag,
                 ),
               ),
@@ -511,39 +643,13 @@ class _ActivityHistoryScreenState extends State<ActivityHistoryScreen> {
   }
 
   Widget _buildActivityList() {
-    // Mock activities for selected day
-    final activities = [
-      ActivityRecord(
-        id: '1',
-        activityType: ActivityType.predefinedTypes[0],
-        startTime: DateTime.now().subtract(const Duration(hours: 2)),
-        endTime: DateTime.now().subtract(const Duration(hours: 1, minutes: 45)),
-        durationMinutes: 15,
-        intensity: ActivityIntensity.low,
-        source: ActivitySource.ring,
-        isEstimated: false,
-        heartRateAvg: 85,
-      ),
-      ActivityRecord(
-        id: '2',
-        activityType: ActivityType.predefinedTypes[4],
-        startTime: DateTime.now().subtract(const Duration(hours: 5)),
-        endTime: DateTime.now().subtract(const Duration(hours: 4, minutes: 40)),
-        durationMinutes: 20,
-        intensity: ActivityIntensity.moderate,
-        source: ActivitySource.ring,
-        isEstimated: false,
-        heartRateAvg: 92,
-      ),
-    ];
-
     return GradientCard(
       gradient: AppColors.cardGradient,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           const Text(
-            'Activities',
+            'Workouts',
             style: TextStyle(
               fontSize: 16,
               fontWeight: FontWeight.w600,
@@ -551,102 +657,79 @@ class _ActivityHistoryScreenState extends State<ActivityHistoryScreen> {
             ),
           ),
           const SizedBox(height: 12),
-          ...activities.map((activity) => _buildActivityItem(activity)),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildActivityItem(ActivityRecord activity) {
-    return Container(
-      margin: const EdgeInsets.only(bottom: 12),
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: AppColors.backgroundWhite,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: AppColors.surfaceLight),
-      ),
-      child: Row(
-        children: [
           Container(
-            width: 44,
-            height: 44,
+            padding: const EdgeInsets.all(16),
             decoration: BoxDecoration(
-              gradient: AppColors.warmGradient,
-              borderRadius: BorderRadius.circular(12),
+              color: AppColors.surfaceLight.withValues(alpha: 0.5),
+              borderRadius: BorderRadius.circular(10),
             ),
-            child: Center(
-              child: Text(
-                activity.activityType.icon,
-                style: const TextStyle(fontSize: 22),
-              ),
-            ),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+            child: Row(
               children: [
-                Row(
-                  children: [
-                    Text(
-                      activity.activityType.name,
-                      style: const TextStyle(
-                        fontSize: 14,
-                        fontWeight: FontWeight.w600,
-                        color: AppColors.textPrimary,
-                      ),
+                Icon(Icons.info_outline, size: 16, color: AppColors.textLight),
+                const SizedBox(width: 8),
+                const Expanded(
+                  child: Text(
+                    'Tap "Record Workout" to log a session with heart rate data.',
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: AppColors.textSecondary,
                     ),
-                    if (activity.isEstimated) ...[
-                      const SizedBox(width: 6),
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                        decoration: BoxDecoration(
-                          color: AppColors.textLight.withValues(alpha: 0.2),
-                          borderRadius: BorderRadius.circular(4),
-                        ),
-                        child: const Text(
-                          'Estimated',
-                          style: TextStyle(fontSize: 10, color: AppColors.textSecondary),
-                        ),
-                      ),
-                    ],
-                  ],
-                ),
-                Text(
-                  '${activity.durationMinutes} min',
-                  style: const TextStyle(fontSize: 12, color: AppColors.textSecondary),
+                  ),
                 ),
               ],
             ),
           ),
-          if (activity.intensity != null)
-            IntensityBadge(
-              intensity: activity.intensity!,
-              isEstimated: activity.isEstimated,
-            ),
         ],
       ),
     );
   }
 
+  // ─── Helpers ──────────────────────────────────────────────────────────────
+
   String _formatDate(DateTime date) {
     final now = DateTime.now();
-    if (date.year == now.year && date.month == now.month && date.day == now.day) {
+    if (date.year == now.year &&
+        date.month == now.month &&
+        date.day == now.day) {
       return 'Today';
     }
-    final yesterday = now.subtract(const Duration(days: 1));
+    final yesterday = DateTime(
+      now.year,
+      now.month,
+      now.day,
+    ).subtract(const Duration(days: 1));
     if (date.year == yesterday.year &&
         date.month == yesterday.month &&
         date.day == yesterday.day) {
       return 'Yesterday';
     }
-    final months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    const months = [
+      'Jan',
+      'Feb',
+      'Mar',
+      'Apr',
+      'May',
+      'Jun',
+      'Jul',
+      'Aug',
+      'Sep',
+      'Oct',
+      'Nov',
+      'Dec',
+    ];
     return '${months[date.month - 1]} ${date.day}';
+  }
+
+  static String _fmtSteps(int steps) {
+    if (steps >= 1000) {
+      final k = steps / 1000.0;
+      return '${k.toStringAsFixed(k >= 10 ? 0 : 1)}k';
+    }
+    return '$steps';
   }
 }
 
-// ── Activity Picker Bottom Sheet ───────────────────────────────────────────
+// ── Activity Picker Bottom Sheet ──────────────────────────────────────────────
 
 class _ActivityPickerSheet extends StatelessWidget {
   final void Function(ActivityType) onSelected;
@@ -730,7 +813,7 @@ class _ActivityPickerSheet extends StatelessWidget {
   }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
+// ─── Week stat item ───────────────────────────────────────────────────────────
 
 class _WeekStatItem extends StatelessWidget {
   final String label;

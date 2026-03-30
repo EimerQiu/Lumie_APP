@@ -150,6 +150,23 @@ class RingRawSleepRecord {
   int get totalMinutes => totalSleepMinutes + awakeMinutes;
 }
 
+/// Raw daily step record parsed from ring command 0x51.
+/// One record = one calendar day (ID=0 today, ID=1 yesterday, etc.).
+/// The ring resets today's counters at midnight automatically.
+class RingRawDailySteps {
+  final DateTime date;            // local calendar date from ring BCD
+  final int steps;
+  final int exerciseTimeSeconds;  // ring's active-movement time for the day
+  final double distanceKm;
+
+  const RingRawDailySteps({
+    required this.date,
+    required this.steps,
+    required this.exerciseTimeSeconds,
+    required this.distanceKm,
+  });
+}
+
 /// Real-time data streamed from ring (command 0x09)
 class RingStreamData {
   final int steps;
