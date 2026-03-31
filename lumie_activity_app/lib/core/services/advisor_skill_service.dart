@@ -13,6 +13,8 @@ class AdvisorSkill {
   final List<String> tags;
   final bool requiresCredentials;
   final bool requiresPing;
+  final String? sharedCredentialId;
+  final String? credentialDisplayName;
   final String status;
 
   const AdvisorSkill({
@@ -24,6 +26,8 @@ class AdvisorSkill {
     required this.tags,
     required this.requiresCredentials,
     required this.requiresPing,
+    this.sharedCredentialId,
+    this.credentialDisplayName,
     required this.status,
   });
 
@@ -40,12 +44,15 @@ class AdvisorSkill {
           [],
       requiresCredentials: json['requires_credentials'] as bool? ?? false,
       requiresPing: json['requires_ping'] as bool? ?? false,
+      sharedCredentialId: json['shared_credential_id'] as String?,
+      credentialDisplayName: json['credential_display_name'] as String?,
       status: json['status'] as String? ?? 'indexed',
     );
   }
 
   bool get isIndexed => status == 'indexed';
   bool get isLumieInternal => capabilityId == 'lumie_internal_data';
+  bool get hasSharedCredential => sharedCredentialId != null;
 }
 
 /// Credential info for a skill (sanitized — no password/ping values).

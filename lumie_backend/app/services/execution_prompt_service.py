@@ -235,3 +235,53 @@ Generate a JSON object with browser automation steps. Use explicit waits between
 - `extract`: Extract text/html from element
 
 Generate ONLY the JSON. No explanation. Include explicit millisecond waits after navigation/clicks to allow page transitions."""
+
+
+def build_external_api_post_body_prompt(
+    user_request: str,
+    skill_full_text: str,
+) -> str:
+    """Build the prompt for generating a JSON POST body for an external API call."""
+    return f"""You are generating a JSON request body for an external API call.
+
+## Skill Definition
+{skill_full_text}
+
+## User Request
+{user_request}
+
+## Instructions
+Based on the skill's API Request Body section and the user's request, generate the correct JSON body.
+- Output ONLY valid JSON, nothing else
+- No markdown, no explanation
+- Infer all fields from the user's request and the skill definition defaults"""
+
+
+def build_external_api_summary_prompt(
+    user_request: str,
+    skill_full_text: str,
+    api_data: str,
+    user_context: dict,
+) -> str:
+    """Build the prompt for summarizing an external API response."""
+    return f"""You are summarizing real-time data from an external API for a user.
+
+## Skill Definition
+{skill_full_text}
+
+## API Response Data
+{api_data}
+
+## User Request
+{user_request}
+
+## Instructions
+Based on the skill's Output Guidance section and the API data above, write a concise, friendly natural language summary for the user.
+- Be specific with numbers and values
+- Use plain text only (no markdown headers or bullet lists)
+- Focus on what the user asked about; include other key metrics briefly
+- Keep it to 2-4 sentences unless more detail is warranted
+- Bold key numbers with **value**
+- Skip items with N/A values unless the user specifically asked about them
+
+Return ONLY the summary text. No explanation, no metadata."""

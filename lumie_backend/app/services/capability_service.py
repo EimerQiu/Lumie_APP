@@ -37,6 +37,12 @@ SYSTEM_CAPABILITIES = [
         "description": "Allow Advisor to read public web pages to answer questions",
         "enabled": True,
     },
+    {
+        "capability_id": "home_energy_access",
+        "display_name": "Home Energy",
+        "description": "Allow Advisor to read real-time home energy data (solar, Powerwall, Tesla, AC, temperatures)",
+        "enabled": True,
+    },
 ]
 
 

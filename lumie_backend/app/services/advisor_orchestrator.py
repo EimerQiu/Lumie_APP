@@ -191,7 +191,8 @@ async def _handle_skill_execution(
     # ── Step 8: Load credentials ─────────────────────────────────────
     credential = None
     if skill.requires_credentials or skill.requires_ping:
-        credential = await skill_credential_service.get_credential(user_id, skill_id)
+        cred_key = f"__shared__{skill.shared_credential_id}" if skill.shared_credential_id else skill_id
+        credential = await skill_credential_service.get_credential(user_id, cred_key)
 
         # Auto-provision Lumie internal credentials
         if not credential and skill.capability_id == "lumie_internal_data" and skill.requires_ping:

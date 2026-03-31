@@ -202,6 +202,8 @@ async def list_skills(
                 "tags": s.tags,
                 "requires_credentials": s.requires_credentials,
                 "requires_ping": s.requires_ping,
+                "shared_credential_id": s.shared_credential_id,
+                "credential_display_name": s.credential_display_name,
                 "status": s.status,
             }
             for s in all_skills
@@ -242,6 +244,19 @@ async def reindex_skills(
     return {"message": "Reindex complete", **result}
 
 
+# ── Credential helpers ───────────────────────────────────────────────────────
+
+def _resolve_credential_key(skill) -> str:
+    """Return the DB key used to store/retrieve a skill's credential.
+
+    Skills with a shared_credential_id use a shared pool key
+    (__shared__{id}) that is independent of any skill_id.
+    """
+    if skill.shared_credential_id:
+        return f"__shared__{skill.shared_credential_id}"
+    return skill.skill_id
+
+
 # ── Credentials ──────────────────────────────────────────────────────────────
 
 @router.get("/skills/{skill_id}/credential")
@@ -250,9 +265,11 @@ async def get_skill_credential(
     user_id: str = Depends(get_current_user_id),
 ):
     """Get the credential for a skill (sanitized — no passwords or pings)."""
-    cred = await skill_credential_service.get_credential(user_id, skill_id)
+    skill = skill_registry.get_skill(skill_id)
+    cred_key = _resolve_credential_key(skill) if skill else skill_id
+    cred = await skill_credential_service.get_credential(user_id, cred_key)
     if not cred:
-        return {"status": "missing", "skill_id": skill_id}
+        return {"status": "missing", "skill_id": cred_key}
     return skill_credential_service.sanitize_credential_for_response(cred)
 
 
@@ -270,7 +287,7 @@ async def save_skill_credential(
 
     cred = await skill_credential_service.save_credential(
         user_id=user_id,
-        skill_id=skill_id,
+        skill_id=_resolve_credential_key(skill),
         data=request.model_dump(exclude_none=True),
     )
 
@@ -290,7 +307,8 @@ async def test_skill_credential(
     if not skill:
         raise HTTPException(status_code=404, detail="Skill not found")
 
-    cred = await skill_credential_service.get_credential(user_id, skill_id)
+    cred_key = _resolve_credential_key(skill)
+    cred = await skill_credential_service.get_credential(user_id, cred_key)
     if not cred:
         return CredentialTestResponse(
             success=False, status="missing",
@@ -302,7 +320,7 @@ async def test_skill_credential(
         ping = cred.get("ping")
         if not ping:
             await skill_credential_service.update_credential_status(
-                user_id, skill_id, "invalid", "ping_missing"
+                user_id, cred_key, "invalid", "ping_missing"
             )
             return CredentialTestResponse(
                 success=False, status="invalid",
@@ -310,12 +328,71 @@ async def test_skill_credential(
             )
         # Ping is auto-generated and always valid if it exists
         await skill_credential_service.update_credential_status(
-            user_id, skill_id, "valid", "ping_ok"
+            user_id, cred_key, "valid", "ping_ok"
         )
         return CredentialTestResponse(
             success=True, status="valid",
             message="Internal access credentials are valid",
         )
+
+    # For external_api skills, test reachability (GET skills) or key presence (POST skills)
+    if skill.runtime_type == "external_api":
+        base_url = cred.get("base_url", "").rstrip("/")
+        if not base_url:
+            await skill_credential_service.update_credential_status(
+                user_id, cred_key, "saved_not_tested", "fields_incomplete"
+            )
+            return CredentialTestResponse(
+                success=False, status="saved_not_tested",
+                message="Base URL is required",
+            )
+        # POST skills: just verify base_url + api_key are present (can't safely test-fire a write action)
+        if skill.api_method == "POST":
+            if not cred.get("password"):
+                await skill_credential_service.update_credential_status(
+                    user_id, cred_key, "saved_not_tested", "fields_incomplete"
+                )
+                return CredentialTestResponse(
+                    success=False, status="saved_not_tested",
+                    message="API key (password field) is required",
+                )
+            await skill_credential_service.update_credential_status(
+                user_id, cred_key, "valid", "fields_complete"
+            )
+            return CredentialTestResponse(
+                success=True, status="valid",
+                message="Credentials saved.",
+            )
+        # GET skills: live reachability test
+        import httpx
+        endpoint = skill.api_endpoint or ""
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.get(base_url + endpoint)
+                resp.raise_for_status()
+            await skill_credential_service.update_credential_status(
+                user_id, cred_key, "valid", "reachable"
+            )
+            return CredentialTestResponse(
+                success=True, status="valid",
+                message="Connection successful — API is reachable.",
+            )
+        except httpx.HTTPStatusError as e:
+            await skill_credential_service.update_credential_status(
+                user_id, cred_key, "invalid", f"http_{e.response.status_code}"
+            )
+            return CredentialTestResponse(
+                success=False, status="invalid",
+                message=f"API returned HTTP {e.response.status_code}",
+            )
+        except Exception as e:
+            await skill_credential_service.update_credential_status(
+                user_id, cred_key, "invalid", "unreachable"
+            )
+            return CredentialTestResponse(
+                success=False, status="invalid",
+                message=f"Could not reach API: {e}",
+            )
 
     # For browser/email skills, we can't fully test yet (Phase 1)
     # Mark as saved_not_tested or valid based on completeness
@@ -330,7 +407,7 @@ async def test_skill_credential(
 
     if has_required:
         await skill_credential_service.update_credential_status(
-            user_id, skill_id, "valid", "fields_complete"
+            user_id, cred_key, "valid", "fields_complete"
         )
         return CredentialTestResponse(
             success=True, status="valid",
@@ -338,7 +415,7 @@ async def test_skill_credential(
         )
     else:
         await skill_credential_service.update_credential_status(
-            user_id, skill_id, "saved_not_tested", "fields_incomplete"
+            user_id, cred_key, "saved_not_tested", "fields_incomplete"
         )
         required_msg = "base_url, username, or password" if skill_id != "gmail_inbox_check" else "username or password"
         return CredentialTestResponse(

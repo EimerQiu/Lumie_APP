@@ -40,6 +40,10 @@ class SkillIndexItem:
     tags: list[str] = field(default_factory=list)
     keywords: list[str] = field(default_factory=list)
     allowed_connectors: list[str] = field(default_factory=list)
+    api_endpoint: Optional[str] = None
+    api_method: str = "GET"
+    shared_credential_id: Optional[str] = None
+    credential_display_name: Optional[str] = None
     status: str = "indexed"
     file_path: str = ""
     last_error: Optional[str] = None
@@ -165,6 +169,10 @@ class SkillRegistry:
             tags=tags,
             keywords=keywords,
             allowed_connectors=fm.get("allowed_connectors", []),
+            api_endpoint=fm.get("api_endpoint"),
+            api_method=fm.get("api_method", "GET").upper(),
+            shared_credential_id=fm.get("shared_credential_id"),
+            credential_display_name=fm.get("credential_display_name"),
             status="indexed",
             file_path=str(fpath),
         )

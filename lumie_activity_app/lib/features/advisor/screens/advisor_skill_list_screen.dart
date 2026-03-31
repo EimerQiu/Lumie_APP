@@ -83,13 +83,16 @@ class _AdvisorSkillListScreenState extends State<AdvisorSkillListScreen> {
                       final skill = _skills[index];
                       return _SkillCard(
                         skill: skill,
+                        allSkills: _skills,
                         onTap: () async {
+                          // Credential screen title: use credentialDisplayName if set
+                          final credTitle = skill.credentialDisplayName ?? skill.title;
                           await Navigator.push(
                             context,
                             MaterialPageRoute(
                               builder: (_) => AdvisorCredentialScreen(
                                 skillId: skill.skillId,
-                                skillTitle: skill.title,
+                                skillTitle: credTitle,
                                 isLumieInternal: skill.isLumieInternal,
                               ),
                             ),
@@ -106,9 +109,10 @@ class _AdvisorSkillListScreenState extends State<AdvisorSkillListScreen> {
 
 class _SkillCard extends StatelessWidget {
   final AdvisorSkill skill;
+  final List<AdvisorSkill> allSkills;
   final VoidCallback onTap;
 
-  const _SkillCard({required this.skill, required this.onTap});
+  const _SkillCard({required this.skill, required this.allSkills, required this.onTap});
 
   @override
   Widget build(BuildContext context) {
@@ -131,21 +135,42 @@ class _SkillCard extends StatelessWidget {
 
     final statusColor = skill.isIndexed ? Colors.green : Colors.orange;
 
+    final credLabel = skill.credentialDisplayName;
+
     return Card(
       margin: const EdgeInsets.only(bottom: 8),
       child: ListTile(
         leading: Icon(runtimeIcon, color: theme.colorScheme.primary),
         title: Text(skill.title),
-        subtitle: Text(
-          skill.summary,
-          maxLines: 2,
-          overflow: TextOverflow.ellipsis,
+        subtitle: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              skill.summary,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+            ),
+            if (credLabel != null)
+              Padding(
+                padding: const EdgeInsets.only(top: 2),
+                child: Text(
+                  'Uses "$credLabel" credential',
+                  style: theme.textTheme.labelSmall?.copyWith(
+                    color: theme.colorScheme.primary,
+                  ),
+                ),
+              ),
+          ],
         ),
         trailing: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
             if (skill.requiresCredentials && !skill.isLumieInternal)
-              const Icon(Icons.key, size: 16, color: Colors.amber),
+              Icon(
+                skill.hasSharedCredential ? Icons.link : Icons.key,
+                size: 16,
+                color: skill.hasSharedCredential ? theme.colorScheme.primary : Colors.amber,
+              ),
             const SizedBox(width: 4),
             Icon(Icons.circle, size: 8, color: statusColor),
             const SizedBox(width: 4),

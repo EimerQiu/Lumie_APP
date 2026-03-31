@@ -17,6 +17,8 @@ from .llm_client import chat_completion
 from .execution_prompt_service import (
     build_lumie_db_execution_prompt,
     build_browser_execution_prompt,
+    build_external_api_summary_prompt,
+    build_external_api_post_body_prompt,
 )
 from .skill_registry_service import SkillIndexItem
 
@@ -134,8 +136,9 @@ async def _execute_job(
                 db, job_id, job, skill, skill_full_text, credential, user_context,
             )
         elif skill.runtime_type == "external_api":
-            # Phase 1: not implemented
-            await _fail_job(db, job_id, "External API runtime not yet available")
+            await _execute_external_api(
+                db, job_id, job, skill, skill_full_text, credential, user_context,
+            )
         elif skill.runtime_type == "hybrid":
             # Phase 1: not implemented
             await _fail_job(db, job_id, "Hybrid runtime not yet available")
@@ -297,6 +300,88 @@ async def _execute_browser(
     else:
         await _fail_job(db, job_id, result.get("error", "Browser execution failed"),
                         result.get("stdout", ""), result.get("stderr", ""))
+
+
+# ── External API execution ──────────────────────────────────────────────────
+
+async def _execute_external_api(
+    db, job_id: str, job: dict, skill: SkillIndexItem,
+    skill_full_text: str, credential: Optional[dict],
+    user_context: dict,
+) -> None:
+    """Make an HTTP GET request and summarize the response with LLM."""
+    import httpx
+    import json as _json
+
+    if not credential:
+        await _fail_job(db, job_id, "No credentials configured for this external API skill")
+        return
+
+    base_url = credential.get("base_url", "").rstrip("/")
+    endpoint = (skill.api_endpoint or "").strip()
+    url = base_url + endpoint if endpoint else base_url
+
+    if not url:
+        await _fail_job(db, job_id, "No URL configured for this external API skill")
+        return
+
+    await db.execution_jobs.update_one(
+        {"job_id": job_id},
+        {"$set": {"status": "running"}},
+    )
+
+    api_method = skill.api_method  # "GET" or "POST"
+    api_key = credential.get("password") or credential.get("api_key")
+    headers = {}
+    if api_key:
+        headers["X-API-Key"] = api_key
+
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            if api_method == "POST":
+                # Generate request body via LLM
+                body_prompt = build_external_api_post_body_prompt(
+                    user_request=job["prompt"],
+                    skill_full_text=skill_full_text,
+                )
+                body_json_str = await _generate_script(body_prompt)
+                if not body_json_str:
+                    await _fail_job(db, job_id, "LLM failed to generate request body")
+                    return
+                try:
+                    body = _json.loads(body_json_str)
+                except _json.JSONDecodeError:
+                    await _fail_job(db, job_id, f"LLM generated invalid JSON body: {body_json_str}")
+                    return
+                await db.execution_jobs.update_one(
+                    {"job_id": job_id},
+                    {"$set": {"generated_script": body_json_str}},
+                )
+                response = await client.post(url, json=body, headers=headers)
+            else:
+                response = await client.get(url, headers=headers)
+            response.raise_for_status()
+            api_data = response.json()
+    except httpx.HTTPStatusError as e:
+        await _fail_job(db, job_id, f"API returned HTTP {e.response.status_code}")
+        return
+    except httpx.RequestError as e:
+        await _fail_job(db, job_id, f"HTTP request failed: {e}")
+        return
+    except Exception as e:
+        await _fail_job(db, job_id, f"Failed to fetch API data: {e}")
+        return
+
+    # Generate a user-friendly summary via LLM
+    summary_prompt = build_external_api_summary_prompt(
+        user_request=job["prompt"],
+        skill_full_text=skill_full_text,
+        api_data=_json.dumps(api_data, ensure_ascii=False),
+        user_context=user_context,
+    )
+
+    summary = await _generate_script(summary_prompt)
+    await _complete_job(db, job_id, {"summary": summary or "", "data": api_data})
 
 
 # ── LLM script generation ───────────────────────────────────────────────────

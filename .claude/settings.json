@@ -6,7 +6,11 @@
       "Read(//Users/ciline/.claude/**)",
       "Bash(git merge:*)",
       "Read(//tmp/**)",
-      "Read(//private/tmp/**)"
+      "Read(//private/tmp/**)",
+      "Bash(find /Users/ciline/Documents/development/projects/swing -type f \\\\\\(-name *.dart -o -name *.py -o -name *.java -o -name *.swift \\\\\\))",
+      "Bash(find /Users/ciline/Documents/development/projects/swing/golf_swing_recorder -type f -name *.task -o -name *pose* -o -name *landmarker*)",
+      "Bash(python -c \":*)",
+      "Bash(python3 -c \":*)"
     ],
     "additionalDirectories": [
       "/Users/ciline/.claude"
