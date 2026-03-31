@@ -37,6 +37,8 @@ class RingBleService {
   Timer? _keepAliveTimer;
 
   bool get isConnected => _connectedDevice != null && _writeChar != null;
+  String? get connectedBleDeviceId => _connectedDevice?.remoteId.str;
+  String? get connectedBleDeviceName => _connectedDevice?.platformName;
 
   // ─── Scanning ────────────────────────────────────────────────────────────
 
@@ -294,6 +296,53 @@ class RingBleService {
     }
 
     debugPrint('[Ring BLE] scanAndReconnect: found $deviceId — connecting');
+    await reconnect(deviceId);
+  }
+
+  /// Scan-based reconnect by advertised BLE device name.
+  /// Useful on iOS where the platform device ID may change across launches.
+  Future<void> scanAndReconnectByName(String storedDeviceName) async {
+    debugPrint(
+      '[Ring BLE] scanAndReconnectByName: scanning for $storedDeviceName',
+    );
+    await FlutterBluePlus.stopScan();
+
+    String? firstX6bId;
+    final exactMatch = Completer<String>();
+    StreamSubscription<List<ScanResult>>? scanSub;
+
+    scanSub = FlutterBluePlus.scanResults.listen((results) {
+      for (final result in results) {
+        final name = result.device.platformName;
+        if (!name.toUpperCase().startsWith('X6B')) continue;
+        final id = result.device.remoteId.str;
+        firstX6bId ??= id;
+        if (name == storedDeviceName && !exactMatch.isCompleted) {
+          exactMatch.complete(id);
+        }
+      }
+    });
+
+    await FlutterBluePlus.startScan(timeout: const Duration(seconds: 10));
+
+    String deviceId;
+    try {
+      deviceId = await exactMatch.future.timeout(const Duration(seconds: 10));
+    } on TimeoutException {
+      final fallback = firstX6bId;
+      if (fallback == null) throw Exception('Ring not found during scan');
+      debugPrint(
+        '[Ring BLE] scanAndReconnectByName: no exact name match, using first X6B ($fallback)',
+      );
+      deviceId = fallback;
+    } finally {
+      await scanSub.cancel();
+      await FlutterBluePlus.stopScan();
+    }
+
+    debugPrint(
+      '[Ring BLE] scanAndReconnectByName: found $deviceId — connecting',
+    );
     await reconnect(deviceId);
   }
 

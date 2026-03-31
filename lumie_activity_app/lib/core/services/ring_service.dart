@@ -14,6 +14,8 @@ class RingService {
 
   static const String _ringInfoKey = 'ring_info';
   static const String _ringPromptShownKey = 'ring_prompt_shown';
+  static const String _ringBleDeviceIdKey = 'ring_ble_device_id';
+  static const String _ringBleDeviceNameKey = 'ring_ble_device_name';
 
   String? _token;
 
@@ -21,9 +23,9 @@ class RingService {
   void clearToken() => _token = null;
 
   Map<String, String> get _headers => {
-        'Content-Type': 'application/json',
-        if (_token != null) 'Authorization': 'Bearer $_token',
-      };
+    'Content-Type': 'application/json',
+    if (_token != null) 'Authorization': 'Bearer $_token',
+  };
 
   // ─── Local storage helpers ────────────────────────────────────────────────
 
@@ -61,11 +63,43 @@ class RingService {
     await prefs.remove(_ringInfoKey);
   }
 
+  Future<String?> loadLastBleDeviceId() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString(_ringBleDeviceIdKey);
+  }
+
+  Future<void> saveLastBleDeviceId(String deviceId) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_ringBleDeviceIdKey, deviceId);
+  }
+
+  Future<void> clearLastBleDeviceId() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_ringBleDeviceIdKey);
+  }
+
+  Future<String?> loadLastBleDeviceName() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString(_ringBleDeviceNameKey);
+  }
+
+  Future<void> saveLastBleDeviceName(String deviceName) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_ringBleDeviceNameKey, deviceName);
+  }
+
+  Future<void> clearLastBleDeviceName() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_ringBleDeviceNameKey);
+  }
+
   /// Clear ring-related prefs on logout
   Future<void> clearOnLogout() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove(_ringInfoKey);
     await prefs.remove(_ringPromptShownKey);
+    await prefs.remove(_ringBleDeviceIdKey);
+    await prefs.remove(_ringBleDeviceNameKey);
   }
 
   // ─── Backend API calls ────────────────────────────────────────────────────
@@ -77,15 +111,17 @@ class RingService {
     String? firmwareVersion,
   }) async {
     try {
-      final response = await http.post(
-        Uri.parse('${ApiConstants.baseUrl}/ring/pair'),
-        headers: _headers,
-        body: jsonEncode({
-          'ring_device_id': ringDeviceId,
-          'ring_name': ringName,
-          if (firmwareVersion != null) 'firmware_version': firmwareVersion,
-        }),
-      ).timeout(ApiConstants.receiveTimeout);
+      final response = await http
+          .post(
+            Uri.parse('${ApiConstants.baseUrl}/ring/pair'),
+            headers: _headers,
+            body: jsonEncode({
+              'ring_device_id': ringDeviceId,
+              'ring_name': ringName,
+              if (firmwareVersion != null) 'firmware_version': firmwareVersion,
+            }),
+          )
+          .timeout(ApiConstants.receiveTimeout);
 
       if (response.statusCode == 200 || response.statusCode == 201) {
         final info = RingInfo.fromJson(jsonDecode(response.body));
@@ -120,23 +156,29 @@ class RingService {
   /// POST /ring/unpair — Remove ring binding from user profile
   Future<void> unpairRing() async {
     try {
-      await http.post(
-        Uri.parse('${ApiConstants.baseUrl}/ring/unpair'),
-        headers: _headers,
-      ).timeout(ApiConstants.receiveTimeout);
+      await http
+          .post(
+            Uri.parse('${ApiConstants.baseUrl}/ring/unpair'),
+            headers: _headers,
+          )
+          .timeout(ApiConstants.receiveTimeout);
     } catch (_) {
       // Best-effort; always clear locally
     }
     await clearLocalRingInfo();
+    await clearLastBleDeviceId();
+    await clearLastBleDeviceName();
   }
 
   /// GET /ring/status — Fetch current ring status from backend
   Future<RingInfo?> getRingStatus() async {
     try {
-      final response = await http.get(
-        Uri.parse('${ApiConstants.baseUrl}/ring/status'),
-        headers: _headers,
-      ).timeout(ApiConstants.receiveTimeout);
+      final response = await http
+          .get(
+            Uri.parse('${ApiConstants.baseUrl}/ring/status'),
+            headers: _headers,
+          )
+          .timeout(ApiConstants.receiveTimeout);
 
       if (response.statusCode == 200) {
         final info = RingInfo.fromJson(jsonDecode(response.body));

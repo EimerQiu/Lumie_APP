@@ -8,6 +8,7 @@
 
 import 'dart:convert';
 import 'dart:io';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import '../constants/api_constants.dart';
@@ -66,9 +67,15 @@ class PushNotificationService {
   Future<dynamic> _handleMethodCall(MethodCall call) async {
     if (call.method == 'onNotificationTap') {
       final data = Map<String, dynamic>.from(call.arguments as Map);
+      debugPrint(
+        '[Push] onNotificationTap: type=${data['type']} navigate_to=${data['navigate_to']} request_id=${data['request_id']}',
+      );
       _onTap?.call(data);
     } else if (call.method == 'onNotificationReceived') {
       final data = Map<String, dynamic>.from(call.arguments as Map);
+      debugPrint(
+        '[Push] onNotificationReceived: type=${data['type']} navigate_to=${data['navigate_to']} request_id=${data['request_id']}',
+      );
       _onReceive?.call(data);
     }
   }

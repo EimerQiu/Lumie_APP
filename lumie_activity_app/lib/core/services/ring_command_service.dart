@@ -19,27 +19,42 @@ class RingCommandService {
   /// Check for a pending command and execute it if present.
   /// [bleService] must be connected when this is called.
   Future<void> checkAndExecute(RingBleService bleService) async {
-    if (_running) return;
-    if (!bleService.isConnected) return;
+    if (_running) {
+      print('[RingCmd] checkAndExecute skipped: already running');
+      return;
+    }
+    if (!bleService.isConnected) {
+      print('[RingCmd] checkAndExecute skipped: BLE not connected');
+      return;
+    }
 
     final token = AuthService().token;
-    if (token == null) return;
+    if (token == null) {
+      print('[RingCmd] checkAndExecute skipped: auth token missing');
+      return;
+    }
 
     _running = true;
     try {
       // Poll for a pending command
-      final response = await http.get(
-        Uri.parse('${ApiConstants.baseUrl}/ring/command/pending'),
-        headers: {
-          'Authorization': 'Bearer $token',
-          'Content-Type': 'application/json',
-        },
-      ).timeout(const Duration(seconds: 5));
+      final response = await http
+          .get(
+            Uri.parse('${ApiConstants.baseUrl}/ring/command/pending'),
+            headers: {
+              'Authorization': 'Bearer $token',
+              'Content-Type': 'application/json',
+            },
+          )
+          .timeout(const Duration(seconds: 5));
 
+      print('[RingCmd] pending response: status=${response.statusCode}');
       if (response.statusCode != 200) return;
 
       final body = response.body.trim();
-      if (body == 'null' || body.isEmpty) return;
+      if (body == 'null' || body.isEmpty) {
+        print('[RingCmd] no pending command');
+        return;
+      }
 
       final doc = json.decode(body) as Map<String, dynamic>;
       final requestId = doc['request_id'] as String;
@@ -117,18 +132,20 @@ class RingCommandService {
 
     // Post result back to backend
     try {
-      await http.post(
-        Uri.parse('${ApiConstants.baseUrl}/ring/command/$requestId/result'),
-        headers: {
-          'Authorization': 'Bearer $token',
-          'Content-Type': 'application/json',
-        },
-        body: json.encode({
-          'success': success,
-          'data': resultData,
-          'error': error,
-        }),
-      ).timeout(const Duration(seconds: 10));
+      await http
+          .post(
+            Uri.parse('${ApiConstants.baseUrl}/ring/command/$requestId/result'),
+            headers: {
+              'Authorization': 'Bearer $token',
+              'Content-Type': 'application/json',
+            },
+            body: json.encode({
+              'success': success,
+              'data': resultData,
+              'error': error,
+            }),
+          )
+          .timeout(const Duration(seconds: 10));
       print('[RingCmd] Result posted for $requestId: success=$success');
     } catch (e) {
       print('[RingCmd] Failed to post result: $e');

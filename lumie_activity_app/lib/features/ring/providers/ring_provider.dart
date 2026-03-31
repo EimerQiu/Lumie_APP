@@ -100,27 +100,45 @@ class RingProvider extends ChangeNotifier with WidgetsBindingObserver {
       }
       return;
     }
-    final deviceId = _ringInfo?.ringDeviceId;
-    if (deviceId == null) return;
-    debugPrint('[Ring] tryReconnect: $deviceId');
+    final bleDeviceName = await _ringService.loadLastBleDeviceName();
+    final bleDeviceId =
+        await _ringService.loadLastBleDeviceId() ?? _ringInfo?.ringDeviceId;
+    if (bleDeviceName == null && bleDeviceId == null) return;
+    debugPrint('[Ring] tryReconnect: name=$bleDeviceName id=$bleDeviceId');
 
     _state = RingProviderState.reconnecting;
     notifyListeners();
 
     try {
-      // Fast path: direct connect by stored device ID (works on Android and
-      // when the ring has been seen recently on iOS).
       try {
-        await _bleService.reconnect(deviceId);
+        if (bleDeviceName != null && bleDeviceName.isNotEmpty) {
+          await _bleService.scanAndReconnectByName(bleDeviceName);
+        } else if (bleDeviceId != null) {
+          await _bleService.reconnect(bleDeviceId);
+        } else {
+          throw Exception('No cached ring identifier available');
+        }
       } catch (directError) {
-        // Slow path: scan for X6B rings and connect to the one that matches.
-        // Required on iOS cold-start where CoreBluetooth needs to re-discover.
         debugPrint(
-          '[Ring] Direct reconnect failed ($directError) — trying scan fallback',
+          '[Ring] Preferred reconnect failed ($directError) — trying scan fallback',
         );
-        await _bleService.scanAndReconnect(deviceId);
+        if (bleDeviceId != null) {
+          await _bleService.scanAndReconnect(bleDeviceId);
+        } else if (bleDeviceName != null && bleDeviceName.isNotEmpty) {
+          await _bleService.scanAndReconnectByName(bleDeviceName);
+        } else {
+          throw Exception('No cached ring identifier available');
+        }
       }
       final battery = await _bleService.fetchBatteryLevel();
+      final connectedBleId = _bleService.connectedBleDeviceId;
+      if (connectedBleId != null) {
+        await _ringService.saveLastBleDeviceId(connectedBleId);
+      }
+      final connectedBleName = _bleService.connectedBleDeviceName;
+      if (connectedBleName != null && connectedBleName.isNotEmpty) {
+        await _ringService.saveLastBleDeviceName(connectedBleName);
+      }
       _ringInfo = _ringInfo?.copyWith(
         connectionStatus: RingConnectionStatus.connected,
         batteryLevel: battery ?? _ringInfo?.batteryLevel,
@@ -149,8 +167,10 @@ class RingProvider extends ChangeNotifier with WidgetsBindingObserver {
     const retryInterval = Duration(seconds: 30);
 
     for (var attempt = 1; attempt <= maxAttempts; attempt++) {
-      final deviceId = _ringInfo?.ringDeviceId;
-      if (deviceId == null) return; // Ring unpaired while retrying
+      final bleDeviceName = await _ringService.loadLastBleDeviceName();
+      final bleDeviceId =
+          await _ringService.loadLastBleDeviceId() ?? _ringInfo?.ringDeviceId;
+      if (bleDeviceName == null && bleDeviceId == null) return;
       if (_bleService.isConnected) return; // Already reconnected
 
       final delay = attempt == 1 ? firstDelay : retryInterval;
@@ -164,14 +184,34 @@ class RingProvider extends ChangeNotifier with WidgetsBindingObserver {
 
       try {
         try {
-          await _bleService.reconnect(deviceId);
+          if (bleDeviceName != null && bleDeviceName.isNotEmpty) {
+            await _bleService.scanAndReconnectByName(bleDeviceName);
+          } else if (bleDeviceId != null) {
+            await _bleService.reconnect(bleDeviceId);
+          } else {
+            throw Exception('No cached ring identifier available');
+          }
         } catch (directError) {
           debugPrint(
-            '[Ring] Auto-reconnect direct failed ($directError) — trying scan',
+            '[Ring] Auto-reconnect preferred path failed ($directError) — trying scan',
           );
-          await _bleService.scanAndReconnect(deviceId);
+          if (bleDeviceId != null) {
+            await _bleService.scanAndReconnect(bleDeviceId);
+          } else if (bleDeviceName != null && bleDeviceName.isNotEmpty) {
+            await _bleService.scanAndReconnectByName(bleDeviceName);
+          } else {
+            throw Exception('No cached ring identifier available');
+          }
         }
         final battery = await _bleService.fetchBatteryLevel();
+        final connectedBleId = _bleService.connectedBleDeviceId;
+        if (connectedBleId != null) {
+          await _ringService.saveLastBleDeviceId(connectedBleId);
+        }
+        final connectedBleName = _bleService.connectedBleDeviceName;
+        if (connectedBleName != null && connectedBleName.isNotEmpty) {
+          await _ringService.saveLastBleDeviceName(connectedBleName);
+        }
         _ringInfo = _ringInfo?.copyWith(
           connectionStatus: RingConnectionStatus.connected,
           batteryLevel: battery ?? _ringInfo?.batteryLevel,
@@ -220,14 +260,26 @@ class RingProvider extends ChangeNotifier with WidgetsBindingObserver {
   /// If we are connected, execute immediately. If paired but disconnected,
   /// reconnect first; successful reconnect will poll pending commands.
   Future<void> handleRemoteRingCommand() async {
+    debugPrint(
+      '[Ring] handleRemoteRingCommand: isConnected=$isConnected isPaired=$isPaired state=$_state',
+    );
     if (isConnected) {
+      debugPrint(
+        '[Ring] Remote ring command: already connected, checking pending commands now',
+      );
       _syncSleepInBackground();
       return;
     }
 
     if (isPaired) {
+      debugPrint(
+        '[Ring] Remote ring command: paired but disconnected, attempting reconnect',
+      );
       await _tryReconnect();
+      return;
     }
+
+    debugPrint('[Ring] Remote ring command ignored: ring is not paired');
   }
 
   @override
@@ -316,6 +368,8 @@ class RingProvider extends ChangeNotifier with WidgetsBindingObserver {
         ringName: bleInfo.ringName!,
         firmwareVersion: bleInfo.firmwareVersion,
       );
+      await _ringService.saveLastBleDeviceId(ring.deviceId);
+      await _ringService.saveLastBleDeviceName(ring.displayName);
 
       _ringInfo = savedInfo.copyWith(
         batteryLevel: bleInfo.batteryLevel,

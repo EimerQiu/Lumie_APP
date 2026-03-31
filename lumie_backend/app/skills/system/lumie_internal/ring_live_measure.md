@@ -31,7 +31,7 @@ output_schema:
 ---
 
 # Purpose
-Use this skill when the user asks for a **live, on-demand** reading from their ring — not historical data. Examples: "measure my heart rate", "what is my heart rate right now", "check my temperature". This skill sends a command to the ring via push notification and waits for the result (up to 35 seconds).
+Use this skill when the user asks for a **live, on-demand** reading from their ring — not historical data. Examples: "measure my heart rate", "what is my heart rate right now", "check my temperature". This skill sends a command to the ring via push notification and waits for the result. Heart-rate measurements may need up to about 50 seconds end-to-end because the ring protocol requires a 30-second minimum measurement plus wake-up / reconnect time.
 
 # When To Use
 - "Measure my heart rate"
@@ -93,10 +93,16 @@ await db.notification_queue.insert_one({
 })
 ```
 
-## Step 3 — Poll for the result (up to 35 seconds)
+## Step 3 — Poll for the result
+
+For heart-rate measurements, allow extra time for push delivery, app wake-up,
+possible BLE reconnect, and the ring's 30-second minimum measurement window.
 
 ```python
-for _ in range(17):
+wait_seconds = duration_seconds + 20 if command_type == "hr_measure" else 20
+poll_attempts = max(10, (wait_seconds + 1) // 2)
+
+for _ in range(poll_attempts):
     await asyncio.sleep(2)
     doc = await db.ring_command_requests.find_one({"request_id": request_id})
     if doc and doc.get("status") in ("completed", "failed"):
