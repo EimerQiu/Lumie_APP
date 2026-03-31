@@ -54,30 +54,17 @@ class SleepService {
       return;
     }
 
-    // ── Validity filter ────────────────────────────────────────────────────
-    // Minimum 3 continuous hours; must have at least some deep or REM data
-    // (all-light with no body stages means ring is likely not being worn).
-    final valid = records.where((r) {
-      if (r.totalSleepMinutes < 180) {
-        debugPrint('[Sleep] Skipping record: only ${r.totalSleepMinutes} min '
-            '(< 180 min minimum)');
-        return false;
-      }
-      final hasRealStages = r.deepMinutes > 0 || r.remMinutes > 0;
-      if (!hasRealStages) {
-        debugPrint('[Sleep] Skipping record: all-light, no deep/REM — '
-            'ring likely not worn');
-        return false;
-      }
-      return true;
-    }).toList();
+    // Skip only completely empty records (0-minute segments from ring buffer)
+    final valid = records.where((r) => r.totalSleepMinutes > 0).toList();
 
     if (valid.isEmpty) {
       lastSyncedAt = DateTime.now();
-      debugPrint('[Sleep] syncFromRingRecords: all records failed validity '
-          'checks — nothing to upload');
+      debugPrint('[Sleep] syncFromRingRecords: no non-zero records to upload');
       return;
     }
+
+    debugPrint('[Sleep] syncFromRingRecords: uploading ${valid.length} segment(s) '
+        '(backend merges by night)');
 
     final sessions = valid
         .map((r) => _ringRecordToPayload(r, hrHistory))

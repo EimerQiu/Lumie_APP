@@ -50,9 +50,7 @@ class RingBleService {
 
     final found = <String>{};
 
-    await FlutterBluePlus.startScan(
-      timeout: _scanTimeout,
-    );
+    await FlutterBluePlus.startScan(timeout: _scanTimeout);
 
     FlutterBluePlus.scanResults.listen((results) {
       for (final result in results) {
@@ -64,18 +62,19 @@ class RingBleService {
         found.add(id);
 
         debugPrint('[Ring BLE] Found ring: $name ($id) RSSI=${result.rssi}');
-        onFound(DiscoveredRing(
-          deviceId: id,
-          displayName: name,
-          rssi: result.rssi,
-        ));
+        onFound(
+          DiscoveredRing(deviceId: id, displayName: name, rssi: result.rssi),
+        );
       }
     });
 
-    await FlutterBluePlus.isScanning.where((s) => !s).first.timeout(
-      _scanTimeout + const Duration(seconds: 2),
-      onTimeout: () => false,
-    );
+    await FlutterBluePlus.isScanning
+        .where((s) => !s)
+        .first
+        .timeout(
+          _scanTimeout + const Duration(seconds: 2),
+          onTimeout: () => false,
+        );
     debugPrint('[Ring BLE] Scan complete, found ${found.length} ring(s)');
     onTimeout();
   }
@@ -94,10 +93,15 @@ class RingBleService {
     required int heightCm,
     required int weightKg,
   }) async {
-    debugPrint('[Ring BLE] connectAndPair: ${ring.deviceId} (${ring.displayName})');
+    debugPrint(
+      '[Ring BLE] connectAndPair: ${ring.deviceId} (${ring.displayName})',
+    );
     final device = BluetoothDevice.fromId(ring.deviceId);
 
-    await device.connect(autoConnect: false, timeout: const Duration(seconds: 15));
+    await device.connect(
+      autoConnect: false,
+      timeout: const Duration(seconds: 15),
+    );
     _connectedDevice = device;
     debugPrint('[Ring BLE] BLE connected to ${ring.deviceId}');
 
@@ -140,8 +144,15 @@ class RingBleService {
     final mac = await _getMacAddress();
     debugPrint('[Ring BLE] MAC address: $mac');
 
-    await _setUserInfo(gender: gender, age: age, heightCm: heightCm, weightKg: weightKg);
-    debugPrint('[Ring BLE] User info set (0x02): gender=$gender age=$age h=${heightCm}cm w=${weightKg}kg');
+    await _setUserInfo(
+      gender: gender,
+      age: age,
+      heightCm: heightCm,
+      weightKg: weightKg,
+    );
+    debugPrint(
+      '[Ring BLE] User info set (0x02): gender=$gender age=$age h=${heightCm}cm w=${weightKg}kg',
+    );
 
     final firmwareVersion = await _getFirmwareVersion();
     debugPrint('[Ring BLE] Firmware: $firmwareVersion');
@@ -150,7 +161,8 @@ class RingBleService {
     debugPrint('[Ring BLE] Battery: $batteryLevel%');
 
     final macFormatted = mac ?? ring.deviceId;
-    final ringName = 'Lumie Ring ${macFormatted.length >= 5 ? macFormatted.substring(macFormatted.length - 5).replaceAll(':', '') : macFormatted}';
+    final ringName =
+        'Lumie Ring ${macFormatted.length >= 5 ? macFormatted.substring(macFormatted.length - 5).replaceAll(':', '') : macFormatted}';
 
     _subscribeToConnectionState(device);
     _startKeepAlive();
@@ -254,7 +266,8 @@ class RingBleService {
 
     scanSub = FlutterBluePlus.scanResults.listen((results) {
       for (final result in results) {
-        if (!result.device.platformName.toUpperCase().startsWith('X6B')) continue;
+        if (!result.device.platformName.toUpperCase().startsWith('X6B'))
+          continue;
         final id = result.device.remoteId.str;
         firstX6bId ??= id;
         if (id == storedDeviceId && !exactMatch.isCompleted) {
@@ -271,7 +284,9 @@ class RingBleService {
     } on TimeoutException {
       final fallback = firstX6bId;
       if (fallback == null) throw Exception('Ring not found during scan');
-      debugPrint('[Ring BLE] scanAndReconnect: no exact match, using first X6B ($fallback)');
+      debugPrint(
+        '[Ring BLE] scanAndReconnect: no exact match, using first X6B ($fallback)',
+      );
       deviceId = fallback;
     } finally {
       await scanSub.cancel();
@@ -292,7 +307,10 @@ class RingBleService {
     await _connectionStateSub?.cancel();
     _connectionStateSub = null;
 
-    await device.connect(autoConnect: false, timeout: const Duration(seconds: 10));
+    await device.connect(
+      autoConnect: false,
+      timeout: const Duration(seconds: 10),
+    );
     _connectedDevice = device;
     debugPrint('[Ring BLE] BLE reconnected to $deviceId');
 
@@ -317,7 +335,9 @@ class RingBleService {
     }
 
     if (_writeChar == null || _notifyChar == null) {
-      debugPrint('[Ring BLE] ERROR: characteristics not found during reconnect');
+      debugPrint(
+        '[Ring BLE] ERROR: characteristics not found during reconnect',
+      );
       await disconnect();
       throw Exception('Characteristics not found during reconnect');
     }
@@ -325,7 +345,9 @@ class RingBleService {
     await _notifyChar!.setNotifyValue(true);
     _subscribeRawNotifyLog();
     final timeSynced = await _setTime();
-    debugPrint('[Ring BLE] Reconnect complete, time sync ${timeSynced ? "ok" : "failed"}');
+    debugPrint(
+      '[Ring BLE] Reconnect complete, time sync ${timeSynced ? "ok" : "failed"}',
+    );
     _subscribeToConnectionState(device);
     _startKeepAlive();
   }
@@ -349,11 +371,13 @@ class RingBleService {
     final completer = Completer<List<HrDataPoint>>();
     StreamSubscription<List<int>>? sub;
 
-    sub = _notifyChar!.lastValueStream.listen((data) {
+    sub = _notifyChar!.onValueReceived.listen((data) {
       if (data.isEmpty || data[0] != 0x55) return;
 
       if (data.length >= 2 && data[1] == 0xFF) {
-        debugPrint('[Ring BLE] HR history end marker — ${results.length} record(s) in last 24 h');
+        debugPrint(
+          '[Ring BLE] HR history end marker — ${results.length} record(s) in last 24 h',
+        );
         if (!completer.isCompleted) completer.complete(results);
         return;
       }
@@ -380,12 +404,284 @@ class RingBleService {
       return await completer.future.timeout(
         const Duration(seconds: 3),
         onTimeout: () {
-          debugPrint('[Ring BLE] HR history timeout, got ${results.length} records');
+          debugPrint(
+            '[Ring BLE] HR history timeout, got ${results.length} records',
+          );
           return results;
         },
       );
     } catch (e) {
       debugPrint('[Ring BLE] fetchHrHistory error: $e');
+      return results;
+    } finally {
+      await sub.cancel();
+    }
+  }
+
+  /// Command 0x56 — Fetch stored HRV / stress / blood pressure history.
+  ///
+  /// Each record is 15 bytes:
+  ///   [0]=0x56 [1]=ID1 [2]=ID2 [3-8]=BCD timestamp
+  ///   [9]=hrv_ms [10]=0x00 [11]=hr_bpm [12]=fatigue [13]=systolic [14]=diastolic
+  Future<List<RingRawHrvRecord>> fetchHrvHistory() async {
+    if (_notifyChar == null) {
+      debugPrint('[Ring BLE] fetchHrvHistory: not connected');
+      return [];
+    }
+    debugPrint('[Ring BLE] fetchHrvHistory: sending 0x56');
+
+    final results = <RingRawHrvRecord>[];
+    final completer = Completer<List<RingRawHrvRecord>>();
+    StreamSubscription<List<int>>? sub;
+
+    sub = _notifyChar!.onValueReceived.listen((data) {
+      if (data.isEmpty || data[0] != 0x56) return;
+
+      // End-of-data marker: 0x56 0xFF
+      if (data.length >= 2 && data[1] == 0xFF) {
+        debugPrint(
+          '[Ring BLE] HRV history end marker — ${results.length} record(s)',
+        );
+        if (!completer.isCompleted) completer.complete(results);
+        return;
+      }
+
+      if (data.length < 15) return;
+      // byte[10] is always 0x00 per spec — use as a sanity check
+      if (data[10] != 0x00) return;
+
+      final timestamp = _parseRingTimestamp(data, 3);
+      if (timestamp == null) return;
+
+      final hrv = data[9];
+      final hr = data[11];
+      final fatigue = data[12];
+      final systolic = data[13];
+      final diastolic = data[14];
+
+      // Skip zero-value records (ring placeholder / uninitialized slot)
+      if (hrv == 0 && hr == 0 && systolic == 0) return;
+
+      results.add(
+        RingRawHrvRecord(
+          timestamp: timestamp,
+          hrvMs: hrv,
+          heartRateBpm: hr,
+          fatigue: fatigue,
+          systolicMmhg: systolic,
+          diastolicMmhg: diastolic,
+        ),
+      );
+    });
+
+    try {
+      final payload = List<int>.filled(15, 0);
+      payload[0] = 0x56;
+      payload[1] = 0x00;
+      await _writeCommand(payload);
+      return await completer.future.timeout(
+        const Duration(seconds: 5),
+        onTimeout: () {
+          debugPrint(
+            '[Ring BLE] HRV history timeout, got ${results.length} records',
+          );
+          return results;
+        },
+      );
+    } catch (e) {
+      debugPrint('[Ring BLE] fetchHrvHistory error: $e');
+      return results;
+    } finally {
+      await sub.cancel();
+    }
+  }
+
+  /// Command 0x54 — Fetch detailed HR history (15 readings per record at 5-second intervals).
+  ///
+  /// Each record is 24 bytes:
+  ///   [0]=0x54 [1]=ID1 [2]=ID2 [3-8]=BCD timestamp [9-23]=15 bpm readings
+  /// Expands into individual HrDataPoint entries spaced 5 seconds apart.
+  Future<List<HrDataPoint>> fetchHrDetails() async {
+    if (_notifyChar == null) {
+      debugPrint('[Ring BLE] fetchHrDetails: not connected');
+      return [];
+    }
+    debugPrint('[Ring BLE] fetchHrDetails: sending 0x54');
+
+    final results = <HrDataPoint>[];
+    final completer = Completer<List<HrDataPoint>>();
+    StreamSubscription<List<int>>? sub;
+
+    sub = _notifyChar!.onValueReceived.listen((data) {
+      if (data.isEmpty || data[0] != 0x54) return;
+
+      if (data.length >= 2 && data[1] == 0xFF) {
+        debugPrint(
+          '[Ring BLE] HR details end marker — ${results.length} point(s)',
+        );
+        if (!completer.isCompleted) completer.complete(results);
+        return;
+      }
+
+      if (data.length < 24) return;
+
+      final startTime = _parseRingTimestamp(data, 3);
+      if (startTime == null) return;
+
+      for (int j = 0; j < 15; j++) {
+        final bpm = data[9 + j];
+        if (bpm == 0 || bpm >= 250) continue;
+        results.add(
+          HrDataPoint(
+            time: startTime.add(Duration(seconds: j * 5)),
+            bpm: bpm,
+          ),
+        );
+      }
+    });
+
+    try {
+      final payload = List<int>.filled(15, 0);
+      payload[0] = 0x54;
+      payload[1] = 0x00;
+      await _writeCommand(payload);
+      return await completer.future.timeout(
+        const Duration(seconds: 5),
+        onTimeout: () {
+          debugPrint(
+            '[Ring BLE] HR details timeout, got ${results.length} points',
+          );
+          return results;
+        },
+      );
+    } catch (e) {
+      debugPrint('[Ring BLE] fetchHrDetails error: $e');
+      return results;
+    } finally {
+      await sub.cancel();
+    }
+  }
+
+  /// Command 0x62 — Fetch temperature history from the ring.
+  ///
+  /// Each record is 15 bytes:
+  ///   [0]=0x62 [1]=ID1 [2]=ID2 [3-8]=BCD timestamp
+  ///   [9-10]=temp1 LE16 [11-12]=temp2 LE16 [13-14]=temp3 LE16 (divide by 10 for °C)
+  Future<List<RingRawTemperatureRecord>> fetchTemperatureHistory() async {
+    if (_notifyChar == null) {
+      debugPrint('[Ring BLE] fetchTemperatureHistory: not connected');
+      return [];
+    }
+    debugPrint('[Ring BLE] fetchTemperatureHistory: sending 0x62');
+
+    final results = <RingRawTemperatureRecord>[];
+    final completer = Completer<List<RingRawTemperatureRecord>>();
+    StreamSubscription<List<int>>? sub;
+
+    sub = _notifyChar!.onValueReceived.listen((data) {
+      if (data.isEmpty || data[0] != 0x62) return;
+
+      if (data.length >= 2 && data[1] == 0xFF) {
+        debugPrint(
+          '[Ring BLE] Temperature end marker — ${results.length} record(s)',
+        );
+        if (!completer.isCompleted) completer.complete(results);
+        return;
+      }
+
+      if (data.length < 15) return;
+
+      final timestamp = _parseRingTimestamp(data, 3);
+      if (timestamp == null) return;
+
+      final temp1 = ((data[10] << 8) | data[9]) / 10.0;
+      final temp2 = ((data[12] << 8) | data[11]) / 10.0;
+      final temp3 = ((data[14] << 8) | data[13]) / 10.0;
+
+      // Skip zero-value records
+      if (temp1 == 0.0 && temp2 == 0.0 && temp3 == 0.0) return;
+
+      results.add(
+        RingRawTemperatureRecord(
+          timestamp: timestamp,
+          temp1C: temp1,
+          temp2C: temp2,
+          temp3C: temp3,
+        ),
+      );
+    });
+
+    try {
+      final payload = List<int>.filled(15, 0);
+      payload[0] = 0x62;
+      payload[1] = 0x00;
+      await _writeCommand(payload);
+      return await completer.future.timeout(
+        const Duration(seconds: 5),
+        onTimeout: () {
+          debugPrint(
+            '[Ring BLE] Temperature timeout, got ${results.length} records',
+          );
+          return results;
+        },
+      );
+    } catch (e) {
+      debugPrint('[Ring BLE] fetchTemperatureHistory error: $e');
+      return results;
+    } finally {
+      await sub.cancel();
+    }
+  }
+
+  /// Command 0x66 — Fetch SpO2 (blood oxygen) history from the ring.
+  ///
+  /// Each record is 10 bytes:
+  ///   [0]=0x66 [1]=ID1 [2]=ID2 [3-8]=BCD timestamp [9]=spo2_percent
+  Future<List<RingRawSpo2Record>> fetchSpo2History() async {
+    if (_notifyChar == null) {
+      debugPrint('[Ring BLE] fetchSpo2History: not connected');
+      return [];
+    }
+    debugPrint('[Ring BLE] fetchSpo2History: sending 0x66');
+
+    final results = <RingRawSpo2Record>[];
+    final completer = Completer<List<RingRawSpo2Record>>();
+    StreamSubscription<List<int>>? sub;
+
+    sub = _notifyChar!.onValueReceived.listen((data) {
+      if (data.isEmpty || data[0] != 0x66) return;
+
+      if (data.length >= 2 && data[1] == 0xFF) {
+        debugPrint('[Ring BLE] SpO2 end marker — ${results.length} record(s)');
+        if (!completer.isCompleted) completer.complete(results);
+        return;
+      }
+
+      if (data.length < 10) return;
+
+      final timestamp = _parseRingTimestamp(data, 3);
+      if (timestamp == null) return;
+
+      final spo2 = data[9];
+      if (spo2 == 0 || spo2 > 100) return;
+
+      results.add(RingRawSpo2Record(timestamp: timestamp, spo2Percent: spo2));
+    });
+
+    try {
+      final payload = List<int>.filled(15, 0);
+      payload[0] = 0x66;
+      payload[1] = 0x00;
+      await _writeCommand(payload);
+      return await completer.future.timeout(
+        const Duration(seconds: 5),
+        onTimeout: () {
+          debugPrint('[Ring BLE] SpO2 timeout, got ${results.length} records');
+          return results;
+        },
+      );
+    } catch (e) {
+      debugPrint('[Ring BLE] fetchSpo2History error: $e');
       return results;
     } finally {
       await sub.cancel();
@@ -409,7 +705,7 @@ class RingBleService {
     final notifyChar = _notifyChar!;
 
     _hrStreamSub?.cancel();
-    _hrStreamSub = notifyChar.lastValueStream.listen((data) {
+    _hrStreamSub = notifyChar.onValueReceived.listen((data) {
       if (data.isEmpty || data[0] != 0x09) return;
 
       int hr = 0;
@@ -420,7 +716,9 @@ class RingBleService {
       }
 
       if (hr > 0 && hr < 250 && _hrStreamController?.isClosed == false) {
-        debugPrint('[Ring BLE] HR reading: $hr BPM (packet len=${data.length})');
+        debugPrint(
+          '[Ring BLE] HR reading: $hr BPM (packet len=${data.length})',
+        );
         _hrStreamController!.add(hr);
       }
     });
@@ -430,7 +728,7 @@ class RingBleService {
     measurePayload[0] = 0x28;
     measurePayload[1] = 0x02; // HR mode
     measurePayload[2] = 0x01; // start
-    measurePayload[5] = 60;   // duration_lo
+    measurePayload[5] = 60; // duration_lo
     measurePayload[6] = 0x00; // duration_hi
     _writeCommand(measurePayload).catchError((e) {
       debugPrint('[Ring BLE] 0x28 write error: $e');
@@ -481,92 +779,177 @@ class RingBleService {
 
   /// Command 0x53 — Fetch stored sleep sessions from the ring.
   ///
-  /// Returns `(records, isComplete)` where `isComplete` is true only when the
-  /// ring sent the end-of-data marker (0x53 0xFF).  A timeout means the ring
-  /// stopped sending before the marker; the records collected so far are still
-  /// returned so they can be synced, but callers should surface a "sync
-  /// incomplete" indicator instead of silently showing stale data.
+  /// Matches the validated parsing from the smart_ring_ble_lib test app:
+  /// - Deduplicates records by (index, page, timestamp) key — ring sometimes
+  ///   sends the same segment twice.
+  /// - Tries 130-byte fixed frame first (some firmware always pads to 130),
+  ///   then falls back to variable-length (10 + N bytes).
+  /// - Uses a 8-second inactivity timer (like the test app) rather than
+  ///   waiting for an end marker that the ring sometimes never sends.
+  /// - `isComplete` is true when the end marker `0x53 0xFF` arrived before
+  ///   the timeout.
   Future<({List<RingRawSleepRecord> records, bool isComplete})>
-      fetchSleepHistory() async {
+  fetchSleepHistory() async {
     if (_notifyChar == null) {
       debugPrint('[Ring BLE] fetchSleepHistory: not connected');
       return (records: <RingRawSleepRecord>[], isComplete: false);
     }
-    debugPrint('[Ring BLE] fetchSleepHistory: sending 0x53 AA=0x00');
+    debugPrint('[Ring BLE] fetchSleepHistory: sending 0x53');
 
-    final records = <RingRawSleepRecord>[];
-    final endMarker = Completer<void>();
+    // Dedup map: key = "id1-id2-timestamp"
+    final Map<String, RingRawSleepRecord> dedup = {};
+    bool isComplete = false;
+    final completer = Completer<void>();
     StreamSubscription<List<int>>? sub;
+    Timer? inactivityTimer;
 
-    sub = _notifyChar!.lastValueStream.listen((data) {
+    void finish() {
+      if (!completer.isCompleted) completer.complete();
+    }
+
+    void resetTimer() {
+      inactivityTimer?.cancel();
+      inactivityTimer = Timer(const Duration(seconds: 8), finish);
+    }
+
+    sub = _notifyChar!.onValueReceived.listen((data) {
       if (data.isEmpty || data[0] != 0x53) return;
 
-      // End-of-data marker: 0x53 0xFF
+      // End-of-data marker
       if (data.length >= 2 && data[1] == 0xFF) {
-        debugPrint('[Ring BLE] Sleep history end marker — ${records.length} record(s)');
-        if (!endMarker.isCompleted) endMarker.complete();
+        debugPrint('[Ring BLE] Sleep end marker received');
+        isComplete = true;
+        finish();
         return;
       }
 
-      // Need at least header (10 bytes) + N stage bytes
-      if (data.length < 10) return;
+      resetTimer();
 
-      final n = data[9]; // valid stage count (1–120 minutes)
-      if (n < 1 || n > 120) return;
-      if (data.length < 10 + n) return;
+      // Try to parse one or more records from this notification
+      final parsed = _parseSleepNotification(data);
+      for (final rec in parsed) {
+        final key =
+            '${rec.id1}-${rec.id2}-${rec.sessionStart.toIso8601String()}';
+        final existing = dedup[key];
+        if (existing == null ||
+            rec.totalSleepMinutes > existing.totalSleepMinutes) {
+          dedup[key] = rec;
+        }
+      }
+    });
 
-      final sessionStart = _parseRingTimestamp(data, 3);
-      if (sessionStart == null) return;
-      final sessionEnd = sessionStart.add(Duration(minutes: n));
+    try {
+      final payload = List<int>.filled(15, 0);
+      payload[0] = 0x53;
+      payload[1] = 0x00;
+      await _writeCommand(payload);
+      resetTimer(); // start inactivity timer after command sent
 
-      int deep = 0, light = 0, rem = 0, awake = 0;
-      for (var i = 0; i < n; i++) {
-        final stage = data[10 + i];
-        if (stage == 0x01) {
-          deep++;
-        } else if (stage == 0x02) {
-          light++;
-        } else if (stage == 0x03) {
-          rem++;
-        } else {
-          awake++;
+      await completer.future;
+      final records = dedup.values.toList()
+        ..sort((a, b) => a.sessionStart.compareTo(b.sessionStart));
+      debugPrint(
+        '[Ring BLE] fetchSleepHistory done — ${records.length} segment(s), complete=$isComplete',
+      );
+      return (records: records, isComplete: isComplete);
+    } catch (e) {
+      debugPrint('[Ring BLE] fetchSleepHistory error: $e');
+      final records = dedup.values.toList()
+        ..sort((a, b) => a.sessionStart.compareTo(b.sessionStart));
+      return (records: records, isComplete: false);
+    } finally {
+      inactivityTimer?.cancel();
+      await sub.cancel();
+    }
+  }
+
+  /// Parse one BLE notification from the 0x53 command.
+  /// Tries 130-byte fixed frame first (firmware pads to 130), then variable-length.
+  List<RingRawSleepRecord> _parseSleepNotification(List<int> data) {
+    final List<RingRawSleepRecord> out = [];
+    int i = 0;
+    while (i + 10 <= data.length) {
+      if (data[i] != 0x53) {
+        i++;
+        continue;
+      }
+
+      RingRawSleepRecord? rec;
+
+      // Try fixed 130-byte frame first
+      if (i + 130 <= data.length) {
+        rec = _tryParseSleepFrame(data, i, 130);
+        if (rec != null) {
+          out.add(rec);
+          i += 130;
+          continue;
         }
       }
 
-      debugPrint(
-        '[Ring BLE] Sleep record: $sessionStart  N=$n  '
-        'light=${light}m deep=${deep}m rem=${rem}m awake=${awake}m',
-      );
+      // Variable-length: 10 + N bytes
+      final n = data[i + 9];
+      final size = 10 + n;
+      if (n >= 1 && n <= 120 && i + size <= data.length) {
+        rec = _tryParseSleepFrame(data, i, size);
+        if (rec != null) {
+          out.add(rec);
+          i += size;
+          continue;
+        }
+      }
 
-      records.add(RingRawSleepRecord(
+      // Fallback: try from here to end of buffer
+      rec = _tryParseSleepFrame(data, i, data.length - i);
+      if (rec != null) out.add(rec);
+      break;
+    }
+    return out;
+  }
+
+  RingRawSleepRecord? _tryParseSleepFrame(
+    List<int> data,
+    int offset,
+    int frameLen,
+  ) {
+    if (offset + frameLen > data.length || frameLen < 10) return null;
+    if (data[offset] != 0x53) return null;
+    try {
+      final id1 = data[offset + 1];
+      final id2 = data[offset + 2];
+      final sessionStart = _parseRingTimestamp(data, offset + 3);
+      if (sessionStart == null) return null;
+      final n = data[offset + 9];
+      if (n < 1 || n > 120) return null;
+      final end = (offset + 10 + n).clamp(0, offset + frameLen);
+      int deep = 0, light = 0, rem = 0, awake = 0;
+      for (var j = offset + 10; j < end; j++) {
+        final stage = data[j];
+        if (stage == 0x01)
+          deep++;
+        else if (stage == 0x02)
+          light++;
+        else if (stage == 0x03)
+          rem++;
+        else
+          awake++;
+      }
+      final sessionEnd = sessionStart.add(Duration(minutes: n));
+      debugPrint(
+        '[Ring BLE] Sleep segment: $sessionStart N=$n '
+        'deep=${deep}m light=${light}m rem=${rem}m awake=${awake}m',
+      );
+      return RingRawSleepRecord(
         sessionStart: sessionStart,
         sessionEnd: sessionEnd,
         lightMinutes: light,
         deepMinutes: deep,
         remMinutes: rem,
         awakeMinutes: awake,
-      ));
-    });
-
-    try {
-      final payload = List<int>.filled(15, 0);
-      payload[0] = 0x53;
-      payload[1] = 0x00; // read all stored sessions
-      await _writeCommand(payload);
-
-      bool isComplete = true;
-      try {
-        await endMarker.future.timeout(const Duration(seconds: 10));
-      } on TimeoutException {
-        debugPrint('[Ring BLE] fetchSleepHistory timeout — ${records.length} record(s), incomplete');
-        isComplete = false;
-      }
-      return (records: records, isComplete: isComplete);
-    } catch (e) {
-      debugPrint('[Ring BLE] fetchSleepHistory error: $e');
-      return (records: records, isComplete: false);
-    } finally {
-      await sub.cancel();
+        id1: id1,
+        id2: id2,
+      );
+    } catch (_) {
+      return null;
     }
   }
 
@@ -591,7 +974,7 @@ class RingBleService {
     final endMarker = Completer<void>();
     StreamSubscription<List<int>>? sub;
 
-    sub = _notifyChar!.lastValueStream.listen((data) {
+    sub = _notifyChar!.onValueReceived.listen((data) {
       if (data.isEmpty || data[0] != 0x51) return;
 
       // Scan for end-of-data marker 0x51 0xFF within this notification
@@ -614,7 +997,9 @@ class RingBleService {
       try {
         await endMarker.future.timeout(const Duration(seconds: 8));
       } on TimeoutException {
-        debugPrint('[Ring BLE] fetchStepHistory timeout, parsing buffered bytes');
+        debugPrint(
+          '[Ring BLE] fetchStepHistory timeout, parsing buffered bytes',
+        );
       }
     } catch (e) {
       debugPrint('[Ring BLE] fetchStepHistory error: $e');
@@ -633,15 +1018,17 @@ class RingBleService {
       }
       final date = _parseStepDate(buffer, offset + 2);
       if (date != null) {
-        final steps        = _leInt32(buffer, offset + 5);
+        final steps = _leInt32(buffer, offset + 5);
         final exerciseSecs = _leInt32(buffer, offset + 9);
-        final distRaw      = _leInt32(buffer, offset + 13);
-        records.add(RingRawDailySteps(
-          date: date,
-          steps: steps,
-          exerciseTimeSeconds: exerciseSecs,
-          distanceKm: distRaw / 100.0,
-        ));
+        final distRaw = _leInt32(buffer, offset + 13);
+        records.add(
+          RingRawDailySteps(
+            date: date,
+            steps: steps,
+            exerciseTimeSeconds: exerciseSecs,
+            distanceKm: distRaw / 100.0,
+          ),
+        );
         debugPrint(
           '[Ring BLE] Step record: $date  steps=$steps  '
           'exercise=${exerciseSecs}s  dist=${distRaw / 100.0}km',
@@ -650,6 +1037,553 @@ class RingBleService {
       offset += 27;
     }
     debugPrint('[Ring BLE] fetchStepHistory: ${records.length} day(s)');
+    return records;
+  }
+
+  // ─── Live measurements ────────────────────────────────────────────────────
+
+  /// Command 0x14 — Read live ring temperature.
+  ///
+  /// Response is 11 bytes:
+  ///   [0]=0x14 [1-2]=highestTemp LE16/10 [3]=decimalTemp BCD
+  ///   [4-5]=ntc1 LE16/10 [6-7]=ntc2 LE16/10 [8-9]=ntc3 LE16/10 [10]=CRC
+  Future<RingLiveTemperature?> fetchRingTemperatureLive() async {
+    try {
+      final response = await _sendCommandWithResponse(0x14);
+      if (response == null || response.length < 10) return null;
+      final highest = ((response[2] << 8) | response[1]) / 10.0;
+      final ntc1 = ((response[5] << 8) | response[4]) / 10.0;
+      final ntc2 = ((response[7] << 8) | response[6]) / 10.0;
+      final ntc3 = ((response[9] << 8) | response[8]) / 10.0;
+      if (highest == 0.0 && ntc1 == 0.0) return null;
+      debugPrint(
+        '[Ring BLE] Live temp: highest=${highest}°C ntc1=${ntc1} ntc2=${ntc2} ntc3=${ntc3}',
+      );
+      return RingLiveTemperature(
+        highestTempC: highest,
+        ntc1C: ntc1,
+        ntc2C: ntc2,
+        ntc3C: ntc3,
+      );
+    } catch (e) {
+      debugPrint('[Ring BLE] fetchRingTemperatureLive error: $e');
+      return null;
+    }
+  }
+
+  /// Command 0x28 — Live HR measurement for [durationSeconds] seconds.
+  ///
+  /// Starts HR mode (0x28 mode=0x02), collects 0x09 stream readings for the
+  /// requested duration, then stops.  Returns avg/min/max + raw readings.
+  Future<RingHrMeasurementResult?> measureHeartRate({
+    int durationSeconds = 10,
+  }) async {
+    if (_notifyChar == null) {
+      debugPrint('[Ring BLE] measureHeartRate: not connected');
+      return null;
+    }
+    final protocolDurationSeconds = durationSeconds < 30 ? 30 : durationSeconds;
+    debugPrint(
+      '[Ring BLE] measureHeartRate: starting ${durationSeconds}s measurement '
+      '(protocol duration ${protocolDurationSeconds}s)',
+    );
+
+    final readings = <int>[];
+    StreamSubscription<List<int>>? sub;
+
+    sub = _notifyChar!.onValueReceived.listen((data) {
+      if (data.isEmpty) return;
+      // Log every packet during measurement so we can see what the ring sends
+      if (data[0] == 0x09 || data[0] == 0x28 || data[0] == 0xA8) {
+        print(
+          '[Ring BLE] measureHeartRate RX: cmd=0x${data[0].toRadixString(16)} len=${data.length} data=${_hexDump(data)}',
+        );
+      }
+      if (data[0] != 0x09) return;
+      int hr = 0;
+      if (data.length == 16) {
+        hr = data[13];
+      } else if (data.length >= 26) {
+        hr = data[21];
+      }
+      if (hr > 0 && hr < 250) {
+        print('[Ring BLE] measureHeartRate: reading $hr bpm');
+        readings.add(hr);
+      }
+    });
+
+    try {
+      // Start HR measurement. Protocol requires a minimum duration of 30 s.
+      final measurePayload = List<int>.filled(15, 0);
+      measurePayload[0] = 0x28;
+      measurePayload[1] = 0x02; // HR mode
+      measurePayload[2] = 0x01; // start
+      measurePayload[5] = protocolDurationSeconds & 0xFF;
+      measurePayload[6] = (protocolDurationSeconds >> 8) & 0xFF;
+      print('[Ring BLE] measureHeartRate: sending 0x28 start');
+      await _writeCommand(measurePayload);
+
+      // Wait a moment for ring to start streaming
+      await Future.delayed(const Duration(seconds: 1));
+
+      // Explicitly enable realtime streaming; relying on 0x28 alone is flaky.
+      final streamPayload = List<int>.filled(15, 0);
+      streamPayload[0] = 0x09;
+      streamPayload[1] = 0x01; // start
+      streamPayload[2] = 0x01; // enable stream payloads
+      print('[Ring BLE] measureHeartRate: sending 0x09 start');
+      await _writeCommand(streamPayload);
+
+      // Collect for the requested duration
+      print('[Ring BLE] measureHeartRate: collecting for ${durationSeconds}s');
+      await Future.delayed(Duration(seconds: durationSeconds));
+
+      // Stop HR measurement
+      final stopMeasure = List<int>.filled(15, 0);
+      stopMeasure[0] = 0x28;
+      stopMeasure[1] = 0x02;
+      stopMeasure[2] = 0x00; // stop
+      print('[Ring BLE] measureHeartRate: sending 0x28 stop');
+      await _writeCommand(stopMeasure);
+
+      final stopStream = List<int>.filled(15, 0);
+      stopStream[0] = 0x09;
+      stopStream[1] = 0x00; // stop
+      print('[Ring BLE] measureHeartRate: sending 0x09 stop');
+      await _writeCommand(stopStream);
+
+      if (readings.isEmpty) {
+        debugPrint('[Ring BLE] measureHeartRate: no readings received');
+        return null;
+      }
+
+      readings.sort();
+      final avg = (readings.reduce((a, b) => a + b) / readings.length).round();
+      debugPrint(
+        '[Ring BLE] measureHeartRate done: avg=$avg min=${readings.first} max=${readings.last} (${readings.length} readings)',
+      );
+      return RingHrMeasurementResult(
+        avgBpm: avg,
+        minBpm: readings.first,
+        maxBpm: readings.last,
+        durationSeconds: durationSeconds,
+        readings: List.unmodifiable(readings),
+      );
+    } catch (e) {
+      debugPrint('[Ring BLE] measureHeartRate error: $e');
+      return null;
+    } finally {
+      await sub.cancel();
+    }
+  }
+
+  // ─── Ring info ────────────────────────────────────────────────────────────
+
+  /// Command 0x41 — Get current ring time and MTU.
+  ///
+  /// Response is 16 bytes:
+  ///   [0]=0x41 [1-6]=BCD timestamp [7]=weekday [8-9]=maxMtu LE16 …
+  Future<RingTimeInfo?> fetchRingTime() async {
+    try {
+      final response = await _sendCommandWithResponse(0x41);
+      if (response == null || response.length < 10) return null;
+      final time = _parseRingTimestamp(response, 1);
+      if (time == null) return null;
+      final weekday = response[7];
+      final maxMtu = response[8] | (response[9] << 8);
+      return RingTimeInfo(ringTime: time, weekday: weekday, maxMtu: maxMtu);
+    } catch (e) {
+      debugPrint('[Ring BLE] fetchRingTime error: $e');
+      return null;
+    }
+  }
+
+  /// Command 0x42 — Get user info stored on ring.
+  ///
+  /// Response is 12 bytes:
+  ///   [0]=0x42 [1]=gender [2]=age [3]=heightCm [4]=weightKg
+  ///   [5]=stepLenCm [6-11]=ringId ASCII
+  Future<RingUserInfo?> fetchUserInfo() async {
+    try {
+      final response = await _sendCommandWithResponse(0x42);
+      if (response == null || response.length < 12) return null;
+      final ringId = String.fromCharCodes(response.sublist(6, 12));
+      return RingUserInfo(
+        gender: response[1],
+        age: response[2],
+        heightCm: response[3],
+        weightKg: response[4],
+        stepLengthCm: response[5],
+        ringId: ringId,
+      );
+    } catch (e) {
+      debugPrint('[Ring BLE] fetchUserInfo error: $e');
+      return null;
+    }
+  }
+
+  // ─── Exercise ─────────────────────────────────────────────────────────────
+
+  /// Command 0x19 subcommand 0x05 — Get current exercise status.
+  ///
+  /// Response is 9 bytes:
+  ///   [0]=0x19 [1]=status (0=idle,1=active) [2-7]=BCD start timestamp [8]=CRC
+  Future<({int status, DateTime? startTime})> getExerciseStatus() async {
+    try {
+      final payload = List<int>.filled(15, 0);
+      payload[0] = 0x19;
+      payload[1] = 0x05;
+      final completer = Completer<List<int>>();
+      StreamSubscription<List<int>>? sub;
+      sub = _notifyChar!.onValueReceived.listen((data) {
+        if (data.isNotEmpty && data[0] == 0x19 && !completer.isCompleted) {
+          completer.complete(data);
+        }
+      });
+      try {
+        await _writeCommand(payload);
+        final response = await completer.future.timeout(_responseTimeout);
+        final status = response.length > 1 ? response[1] : 0;
+        final startTime = response.length >= 8
+            ? _parseRingTimestamp(response, 2)
+            : null;
+        return (status: status, startTime: startTime);
+      } finally {
+        await sub.cancel();
+      }
+    } catch (e) {
+      debugPrint('[Ring BLE] getExerciseStatus error: $e');
+      return (status: 0, startTime: null);
+    }
+  }
+
+  /// Command 0x19 subcommand 0x01 — Start an exercise session.
+  Future<bool> startExercise(int exerciseType) async {
+    try {
+      final payload = List<int>.filled(15, 0);
+      payload[0] = 0x19;
+      payload[1] = 0x01;
+      payload[2] = exerciseType;
+      await _writeCommand(payload);
+      debugPrint('[Ring BLE] startExercise: type=$exerciseType');
+      return true;
+    } catch (e) {
+      debugPrint('[Ring BLE] startExercise error: $e');
+      return false;
+    }
+  }
+
+  /// Command 0x19 subcommand 0x06 — Stop the active exercise session.
+  Future<bool> stopExercise() async {
+    try {
+      final payload = List<int>.filled(15, 0);
+      payload[0] = 0x19;
+      payload[1] = 0x06;
+      await _writeCommand(payload);
+      debugPrint('[Ring BLE] stopExercise');
+      return true;
+    } catch (e) {
+      debugPrint('[Ring BLE] stopExercise error: $e');
+      return false;
+    }
+  }
+
+  /// Command 0x5C subcommand 0x00 — Fetch stored exercise records.
+  ///
+  /// Each record is 27 bytes with CRC:
+  ///   [0]=0x5C [1]=0x00 [2]=ID [3-8]=BCD start time [9]=type [10]=avgHR
+  ///   [11-12]=durationSec LE16 [13-14]=steps LE16 [15-16]=pace BCD (min:sec/km)
+  ///   [17-20]=calories IEEE754 [21-24]=distKm IEEE754 [25-26]=CRC/pad
+  Future<List<RingExerciseRecord>> fetchExerciseData() async {
+    if (_notifyChar == null) {
+      debugPrint('[Ring BLE] fetchExerciseData: not connected');
+      return [];
+    }
+    debugPrint('[Ring BLE] fetchExerciseData: sending 0x5C 0x00');
+
+    final buffer = <int>[];
+    final endMarker = Completer<void>();
+    StreamSubscription<List<int>>? sub;
+
+    sub = _notifyChar!.onValueReceived.listen((data) {
+      if (data.isEmpty || data[0] != 0x5C) return;
+      if (data.length >= 2 && data[1] == 0xFF) {
+        if (!endMarker.isCompleted) endMarker.complete();
+        return;
+      }
+      buffer.addAll(data);
+    });
+
+    try {
+      final payload = List<int>.filled(15, 0);
+      payload[0] = 0x5C;
+      payload[1] = 0x00;
+      await _writeCommand(payload);
+      try {
+        await endMarker.future.timeout(const Duration(seconds: 10));
+      } on TimeoutException {
+        debugPrint(
+          '[Ring BLE] fetchExerciseData timeout, parsing buffered bytes',
+        );
+      }
+    } catch (e) {
+      debugPrint('[Ring BLE] fetchExerciseData error: $e');
+      return [];
+    } finally {
+      await sub.cancel();
+    }
+
+    final records = <RingExerciseRecord>[];
+    var offset = 0;
+    while (offset + 27 <= buffer.length) {
+      if (buffer[offset] != 0x5C) {
+        offset++;
+        continue;
+      }
+      try {
+        final startTime = _parseRingTimestamp(buffer, offset + 3);
+        if (startTime == null) {
+          offset += 27;
+          continue;
+        }
+        final exerciseType = buffer[offset + 9];
+        final avgHr = buffer[offset + 10];
+        final durationSec = buffer[offset + 11] | (buffer[offset + 12] << 8);
+        final steps = buffer[offset + 13] | (buffer[offset + 14] << 8);
+        final paceMin = _bcdToDecimal(buffer[offset + 15]);
+        final paceSec = _bcdToDecimal(buffer[offset + 16]);
+        final paceMinPerKm = paceMin + paceSec / 60.0;
+        final calories = _parseFloat32Le(buffer, offset + 17);
+        final distKm = _parseFloat32Le(buffer, offset + 21);
+        if (avgHr > 0 || durationSec > 0) {
+          records.add(
+            RingExerciseRecord(
+              startTime: startTime,
+              exerciseType: exerciseType,
+              avgHeartRate: avgHr,
+              durationSeconds: durationSec,
+              steps: steps,
+              paceMinPerKm: paceMinPerKm,
+              calories: calories,
+              distanceKm: distKm,
+            ),
+          );
+        }
+      } catch (_) {}
+      offset += 27;
+    }
+    debugPrint('[Ring BLE] fetchExerciseData: ${records.length} record(s)');
+    return records;
+  }
+
+  /// Command 0x5C subcommand 0x02 — Continue fetching exercise data (next page).
+  Future<void> continueExerciseData() async {
+    try {
+      final payload = List<int>.filled(15, 0);
+      payload[0] = 0x5C;
+      payload[1] = 0x02;
+      await _writeCommand(payload);
+    } catch (e) {
+      debugPrint('[Ring BLE] continueExerciseData error: $e');
+    }
+  }
+
+  /// Command 0x5C subcommand 0x99 — Delete all exercise data from ring.
+  Future<void> deleteExerciseData() async {
+    try {
+      final payload = List<int>.filled(15, 0);
+      payload[0] = 0x5C;
+      payload[1] = 0x99;
+      await _writeCommand(payload);
+      debugPrint('[Ring BLE] deleteExerciseData: sent');
+    } catch (e) {
+      debugPrint('[Ring BLE] deleteExerciseData error: $e');
+    }
+  }
+
+  // ─── Measurement intervals ────────────────────────────────────────────────
+
+  /// Command 0x2B — Get automatic measurement interval for [measureType].
+  ///
+  /// measureType: 1=HR, 2=SpO2, 3=Temperature, 4=HRV/BP
+  ///
+  /// Response is 10 bytes:
+  ///   [0]=0x2B [1]=mode [2-3]=BCD startTime (HH:MM) [4-5]=BCD endTime
+  ///   [6]=weekdayBits [7-8]=intervalMinutes BE16 [9]=measureType
+  Future<RingMeasurementInterval?> getMeasurementInterval(
+    int measureType,
+  ) async {
+    if (_notifyChar == null) return null;
+    try {
+      final payload = List<int>.filled(15, 0);
+      payload[0] = 0x2B;
+      payload[1] = measureType;
+      final completer = Completer<List<int>>();
+      StreamSubscription<List<int>>? sub;
+      sub = _notifyChar!.onValueReceived.listen((data) {
+        if (data.isNotEmpty && data[0] == 0x2B && !completer.isCompleted) {
+          completer.complete(data);
+        }
+      });
+      try {
+        await _writeCommand(payload);
+        final response = await completer.future.timeout(_responseTimeout);
+        if (response.length < 10) return null;
+        final mode = response[1];
+        final startH = _bcdToDecimal(response[2]);
+        final startM = _bcdToDecimal(response[3]);
+        final endH = _bcdToDecimal(response[4]);
+        final endM = _bcdToDecimal(response[5]);
+        final weekdayBits = response[6];
+        final intervalMin = (response[7] << 8) | response[8];
+        return RingMeasurementInterval(
+          measureType: response[9],
+          mode: mode,
+          intervalMinutes: intervalMin,
+          weekdayBits: weekdayBits,
+          startTime:
+              '${startH.toString().padLeft(2, '0')}:${startM.toString().padLeft(2, '0')}',
+          endTime:
+              '${endH.toString().padLeft(2, '0')}:${endM.toString().padLeft(2, '0')}',
+        );
+      } finally {
+        await sub.cancel();
+      }
+    } catch (e) {
+      debugPrint('[Ring BLE] getMeasurementInterval error: $e');
+      return null;
+    }
+  }
+
+  /// Command 0x2A — Set automatic measurement interval.
+  ///
+  /// [measureType]: 1=HR, 2=SpO2, 3=Temperature, 4=HRV/BP
+  /// [mode]: 0=off, 1=manual, 2=auto
+  /// [intervalMinutes]: auto-measurement interval
+  /// [weekdayBits]: bitmask bit0=Mon … bit6=Sun (0x7F = every day)
+  Future<void> setMeasurementInterval({
+    required int measureType,
+    required int mode,
+    required int intervalMinutes,
+    int weekdayBits = 0x7F,
+    String startTime = '00:00',
+    String endTime = '23:59',
+  }) async {
+    try {
+      final startParts = startTime.split(':');
+      final endParts = endTime.split(':');
+      final startH = int.tryParse(startParts[0]) ?? 0;
+      final startM = startParts.length > 1
+          ? (int.tryParse(startParts[1]) ?? 0)
+          : 0;
+      final endH = int.tryParse(endParts[0]) ?? 23;
+      final endM = endParts.length > 1 ? (int.tryParse(endParts[1]) ?? 59) : 59;
+
+      final payload = List<int>.filled(15, 0);
+      payload[0] = 0x2A;
+      payload[1] = mode;
+      payload[2] = _decimalToBcd(startH);
+      payload[3] = _decimalToBcd(startM);
+      payload[4] = _decimalToBcd(endH);
+      payload[5] = _decimalToBcd(endM);
+      payload[6] = weekdayBits;
+      payload[7] = (intervalMinutes >> 8) & 0xFF; // BE16
+      payload[8] = intervalMinutes & 0xFF;
+      payload[9] = measureType;
+      await _writeCommand(payload);
+      debugPrint(
+        '[Ring BLE] setMeasurementInterval: type=$measureType mode=$mode interval=${intervalMinutes}min',
+      );
+    } catch (e) {
+      debugPrint('[Ring BLE] setMeasurementInterval error: $e');
+    }
+  }
+
+  // ─── Detailed steps ───────────────────────────────────────────────────────
+
+  /// Command 0x52 — Fetch detailed per-minute step records.
+  ///
+  /// Each record is 25 bytes:
+  ///   [0]=0x52 [1]=ID1 [2]=ID2 [3-5]=BCD date(YY MM DD) [6-7]=BCD time(HH MM)
+  ///   [8-9]=steps LE16 [10-11]=calories LE16 [12-13]=distanceCm LE16
+  ///   [14-23]=10 per-minute step counts
+  Future<List<RingDetailedStepRecord>> fetchDetailedSteps() async {
+    if (_notifyChar == null) {
+      debugPrint('[Ring BLE] fetchDetailedSteps: not connected');
+      return [];
+    }
+    debugPrint('[Ring BLE] fetchDetailedSteps: sending 0x52');
+
+    final buffer = <int>[];
+    final endMarker = Completer<void>();
+    StreamSubscription<List<int>>? sub;
+
+    sub = _notifyChar!.onValueReceived.listen((data) {
+      if (data.isEmpty || data[0] != 0x52) return;
+      if (data.length >= 2 && data[1] == 0xFF) {
+        if (!endMarker.isCompleted) endMarker.complete();
+        return;
+      }
+      buffer.addAll(data);
+    });
+
+    try {
+      final payload = List<int>.filled(15, 0);
+      payload[0] = 0x52;
+      payload[1] = 0x00;
+      await _writeCommand(payload);
+      try {
+        await endMarker.future.timeout(const Duration(seconds: 8));
+      } on TimeoutException {
+        debugPrint(
+          '[Ring BLE] fetchDetailedSteps timeout, parsing buffered bytes',
+        );
+      }
+    } catch (e) {
+      debugPrint('[Ring BLE] fetchDetailedSteps error: $e');
+      return [];
+    } finally {
+      await sub.cancel();
+    }
+
+    final records = <RingDetailedStepRecord>[];
+    var offset = 0;
+    while (offset + 25 <= buffer.length) {
+      if (buffer[offset] != 0x52) {
+        offset++;
+        continue;
+      }
+      try {
+        final yy = _bcdToDecimal(buffer[offset + 3]);
+        final mm = _bcdToDecimal(buffer[offset + 4]);
+        final dd = _bcdToDecimal(buffer[offset + 5]);
+        final hh = _bcdToDecimal(buffer[offset + 6]);
+        final min = _bcdToDecimal(buffer[offset + 7]);
+        if (mm < 1 || mm > 12 || dd < 1 || dd > 31) {
+          offset += 25;
+          continue;
+        }
+        final ts = DateTime(2000 + yy, mm, dd, hh, min);
+        final steps = buffer[offset + 8] | (buffer[offset + 9] << 8);
+        final calories = buffer[offset + 10] | (buffer[offset + 11] << 8);
+        final distCm = buffer[offset + 12] | (buffer[offset + 13] << 8);
+        final perMinute = List<int>.generate(
+          10,
+          (i) => buffer[offset + 14 + i],
+        );
+        records.add(
+          RingDetailedStepRecord(
+            timestamp: ts,
+            steps: steps,
+            calories: calories,
+            distanceKm: distCm / 100000.0,
+            perMinuteSteps: perMinute,
+          ),
+        );
+      } catch (_) {}
+      offset += 25;
+    }
+    debugPrint('[Ring BLE] fetchDetailedSteps: ${records.length} record(s)');
     return records;
   }
 
@@ -682,7 +1616,7 @@ class RingBleService {
 
       final completer = Completer<bool>();
       StreamSubscription<List<int>>? sub;
-      sub = _notifyChar!.lastValueStream.listen((data) {
+      sub = _notifyChar!.onValueReceived.listen((data) {
         if (data.isNotEmpty && (data[0] == 0x01 || data[0] == 0x81)) {
           if (!completer.isCompleted) completer.complete(data[0] == 0x01);
         }
@@ -691,11 +1625,14 @@ class RingBleService {
       try {
         await _writeCommand(payload);
         final success = await completer.future.timeout(_responseTimeout);
-        if (!success) debugPrint('[Ring BLE] _setTime: ring returned failure (0x81)');
+        if (!success)
+          debugPrint('[Ring BLE] _setTime: ring returned failure (0x81)');
         return success;
       } on TimeoutException {
         // Ring accepted the write but sent no ACK — treat as non-fatal.
-        debugPrint('[Ring BLE] _setTime: no ACK within timeout, assuming success');
+        debugPrint(
+          '[Ring BLE] _setTime: no ACK within timeout, assuming success',
+        );
         return true;
       } finally {
         await sub.cancel();
@@ -733,7 +1670,8 @@ class RingBleService {
       final response = await _sendCommandWithResponse(0x22);
       if (response == null || response.length < 7) return null;
       if (response[0] == 0xA2) return null;
-      final mac = response.sublist(1, 7)
+      final mac = response
+          .sublist(1, 7)
           .map((b) => b.toRadixString(16).padLeft(2, '0').toUpperCase())
           .join(':');
       return mac;
@@ -783,15 +1721,20 @@ class RingBleService {
   /// time via 0x01 SetTime), so the returned DateTime is local.
   DateTime? _parseRingTimestamp(List<int> data, int offset) {
     try {
-      final yy  = _bcdToDecimal(data[offset]);
-      final mm  = _bcdToDecimal(data[offset + 1]);
-      final dd  = _bcdToDecimal(data[offset + 2]);
-      final hh  = _bcdToDecimal(data[offset + 3]);
+      final yy = _bcdToDecimal(data[offset]);
+      final mm = _bcdToDecimal(data[offset + 1]);
+      final dd = _bcdToDecimal(data[offset + 2]);
+      final hh = _bcdToDecimal(data[offset + 3]);
       final min = _bcdToDecimal(data[offset + 4]);
-      final ss  = _bcdToDecimal(data[offset + 5]);
+      final ss = _bcdToDecimal(data[offset + 5]);
 
-      if (mm < 1 || mm > 12 || dd < 1 || dd > 31 ||
-          hh > 23 || min > 59 || ss > 59) {
+      if (mm < 1 ||
+          mm > 12 ||
+          dd < 1 ||
+          dd > 31 ||
+          hh > 23 ||
+          min > 59 ||
+          ss > 59) {
         debugPrint(
           '[Ring BLE] Invalid timestamp at offset $offset: '
           'yy=$yy mm=$mm dd=$dd hh=$hh min=$min ss=$ss',
@@ -825,7 +1768,7 @@ class RingBleService {
     final completer = Completer<List<int>>();
     StreamSubscription<List<int>>? sub;
 
-    sub = _notifyChar!.lastValueStream.listen((data) {
+    sub = _notifyChar!.onValueReceived.listen((data) {
       if (data.isNotEmpty && (data[0] == cmd || data[0] == (cmd | 0x80))) {
         if (!completer.isCompleted) {
           completer.complete(data);
@@ -839,7 +1782,9 @@ class RingBleService {
       await _writeCommand(payload);
       return await completer.future.timeout(_responseTimeout);
     } on TimeoutException {
-      debugPrint('[Ring BLE] Timeout waiting for response to cmd 0x${cmd.toRadixString(16).padLeft(2, '0')}');
+      debugPrint(
+        '[Ring BLE] Timeout waiting for response to cmd 0x${cmd.toRadixString(16).padLeft(2, '0')}',
+      );
       return null;
     } finally {
       await sub.cancel();
@@ -848,15 +1793,16 @@ class RingBleService {
 
   void _subscribeRawNotifyLog() {
     _notifySubscription?.cancel();
-    _notifySubscription = _notifyChar!.lastValueStream.listen((data) {
+    _notifySubscription = _notifyChar!.onValueReceived.listen((data) {
       if (data.isNotEmpty) {
         debugPrint('[Ring RX] ${_hexDump(data)}');
       }
     });
   }
 
-  String _hexDump(List<int> bytes) =>
-      bytes.map((b) => b.toRadixString(16).padLeft(2, '0').toUpperCase()).join(' ');
+  String _hexDump(List<int> bytes) => bytes
+      .map((b) => b.toRadixString(16).padLeft(2, '0').toUpperCase())
+      .join(' ');
 
   int _computeCrc(List<int> bytes) {
     int sum = 0;
@@ -894,6 +1840,16 @@ class RingBleService {
         (data[offset + 1] << 8) |
         (data[offset + 2] << 16) |
         (data[offset + 3] << 24);
+  }
+
+  /// Decode a 4-byte little-endian IEEE 754 float from [data] at [offset].
+  double _parseFloat32Le(List<int> data, int offset) {
+    final bytes = Uint8List(4);
+    bytes[0] = data[offset];
+    bytes[1] = data[offset + 1];
+    bytes[2] = data[offset + 2];
+    bytes[3] = data[offset + 3];
+    return bytes.buffer.asByteData().getFloat32(0, Endian.little);
   }
 
   int _estimateStepLength(int heightCm) {

@@ -20,6 +20,43 @@ class AuthService {
   AuthResponse? get currentUser => _currentUser;
   bool get isAuthenticated => _token != null && _token!.isNotEmpty;
 
+  String _extractErrorMessage(
+    http.Response response, {
+    required String fallbackMessage,
+  }) {
+    final contentType = response.headers['content-type'] ?? '';
+    final body = response.body.trim();
+
+    if (body.isEmpty) {
+      return fallbackMessage;
+    }
+
+    if (contentType.contains('application/json')) {
+      try {
+        final decoded = json.decode(body);
+        if (decoded is Map<String, dynamic>) {
+          final detail = decoded['detail'];
+          if (detail is String && detail.trim().isNotEmpty) {
+            return detail.trim();
+          }
+
+          final message = decoded['message'];
+          if (message is String && message.trim().isNotEmpty) {
+            return message.trim();
+          }
+        }
+      } catch (_) {
+        // Fall through to non-JSON handling below.
+      }
+    }
+
+    if (body.startsWith('<!DOCTYPE html') || body.startsWith('<html')) {
+      return '$fallbackMessage (server returned HTML instead of JSON)';
+    }
+
+    return body.length > 200 ? '${body.substring(0, 200)}...' : body;
+  }
+
   /// Initialize auth state from local storage
   Future<void> init() async {
     final prefs = await SharedPreferences.getInstance();
@@ -56,24 +93,27 @@ class AuthService {
     required AccountRole role,
   }) async {
     try {
-      final response = await http.post(
-        Uri.parse('${ApiConstants.baseUrl}/auth/signup'),
-        headers: {'Content-Type': 'application/json'},
-        body: json.encode({
-          'email': email,
-          'password': password,
-          'confirm_password': confirmPassword,
-          'role': role.name,
-        }),
-      ).timeout(const Duration(seconds: 15));
+      final response = await http
+          .post(
+            Uri.parse('${ApiConstants.baseUrl}/auth/signup'),
+            headers: {'Content-Type': 'application/json'},
+            body: json.encode({
+              'email': email,
+              'password': password,
+              'confirm_password': confirmPassword,
+              'role': role.name,
+            }),
+          )
+          .timeout(const Duration(seconds: 15));
 
       if (response.statusCode == 200) {
         final authResponse = AuthResponse.fromJson(json.decode(response.body));
         await _saveAuthState(authResponse);
         return authResponse;
       } else {
-        final error = json.decode(response.body);
-        throw Exception(error['detail'] ?? 'Sign up failed');
+        throw Exception(
+          _extractErrorMessage(response, fallbackMessage: 'Sign up failed'),
+        );
       }
     } catch (e) {
       print('⚠️ Sign up error: ${e.toString()}');
@@ -109,22 +149,22 @@ class AuthService {
     required String password,
   }) async {
     try {
-      final response = await http.post(
-        Uri.parse('${ApiConstants.baseUrl}/auth/login'),
-        headers: {'Content-Type': 'application/json'},
-        body: json.encode({
-          'email': email,
-          'password': password,
-        }),
-      ).timeout(const Duration(seconds: 15));
+      final response = await http
+          .post(
+            Uri.parse('${ApiConstants.baseUrl}/auth/login'),
+            headers: {'Content-Type': 'application/json'},
+            body: json.encode({'email': email, 'password': password}),
+          )
+          .timeout(const Duration(seconds: 15));
 
       if (response.statusCode == 200) {
         final authResponse = AuthResponse.fromJson(json.decode(response.body));
         await _saveAuthState(authResponse);
         return authResponse;
       } else {
-        final error = json.decode(response.body);
-        throw Exception(error['detail'] ?? 'Login failed');
+        throw Exception(
+          _extractErrorMessage(response, fallbackMessage: 'Login failed'),
+        );
       }
     } catch (e) {
       print('⚠️ Login error: ${e.toString()}');
@@ -155,22 +195,28 @@ class AuthService {
     if (_token == null) throw Exception('Not authenticated');
 
     try {
-      final response = await http.post(
-        Uri.parse('${ApiConstants.baseUrl}/auth/account-type'),
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': 'Bearer $_token',
-        },
-        body: json.encode({'role': role.name}),
-      ).timeout(const Duration(seconds: 15));
+      final response = await http
+          .post(
+            Uri.parse('${ApiConstants.baseUrl}/auth/account-type'),
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': 'Bearer $_token',
+            },
+            body: json.encode({'role': role.name}),
+          )
+          .timeout(const Duration(seconds: 15));
 
       if (response.statusCode == 200) {
         final authResponse = AuthResponse.fromJson(json.decode(response.body));
         await _saveAuthState(authResponse);
         return authResponse;
       } else {
-        final error = json.decode(response.body);
-        throw Exception(error['detail'] ?? 'Failed to select account type');
+        throw Exception(
+          _extractErrorMessage(
+            response,
+            fallbackMessage: 'Failed to select account type',
+          ),
+        );
       }
     } catch (e) {
       print('⚠️ Select account type error: ${e.toString()}');

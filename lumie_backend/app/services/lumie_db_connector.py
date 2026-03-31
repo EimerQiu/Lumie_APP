@@ -10,6 +10,7 @@ import io
 import json
 import logging
 import traceback
+import uuid
 from contextlib import redirect_stdout, redirect_stderr
 from datetime import datetime
 from typing import Any, Optional
@@ -24,6 +25,8 @@ logger = logging.getLogger(__name__)
 ALLOWED_COLLECTIONS = {
     "profiles", "activities", "walk_tests", "tasks", "task_templates",
     "teams", "team_members", "sleep_sessions", "execution_jobs",
+    "ring_command_requests", "notification_queue",
+    "hr_readings", "daily_steps", "hrv_readings", "temperature_readings", "spo2_readings",
 }
 
 # Fields that must never be returned
@@ -33,7 +36,7 @@ SENSITIVE_FIELDS = {
 }
 
 # Collections where writes are allowed (constrained)
-WRITABLE_COLLECTIONS = {"tasks", "task_templates"}
+WRITABLE_COLLECTIONS = {"tasks", "task_templates", "ring_command_requests", "notification_queue"}
 
 # Forbidden AST node types (security)
 FORBIDDEN_AST_NODES = {
@@ -263,9 +266,11 @@ async def _execute_script(
     stderr_buf = io.StringIO()
 
     # Build the execution namespace
+    import asyncio as _asyncio
     from datetime import timedelta, timezone
     from zoneinfo import ZoneInfo
     namespace = {
+        "asyncio": _asyncio,
         "db": db_instance,
         "request_user_id": request_user_id,
         "target_user_id": target_user_id or request_user_id,
@@ -274,6 +279,7 @@ async def _execute_script(
         "user_timezone": user_timezone,
         "_result": None,
         "json": json,
+        "uuid": uuid,
         "datetime": datetime,
         "timedelta": timedelta,
         "timezone": timezone,

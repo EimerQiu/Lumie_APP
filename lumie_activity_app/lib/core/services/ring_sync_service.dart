@@ -62,16 +62,28 @@ class RingSyncService extends ChangeNotifier {
   /// Trigger a background sync from the ring.
   ///
   /// Callbacks avoid a circular import with RingProvider.
-  /// [fetchSteps] is optional — pass it to include step data in the sync.
+  /// [fetchSteps] and [fetchHrv] are optional.
   /// Returns immediately — sync runs asynchronously.
   void triggerSync({
     required Future<({List<RingRawSleepRecord> records, bool isComplete})>
         Function() fetchSleep,
     required Future<List<HrDataPoint>> Function() fetchHr,
     Future<List<RingRawDailySteps>> Function()? fetchSteps,
+    Future<List<RingRawHrvRecord>> Function()? fetchHrv,
+    Future<List<HrDataPoint>> Function()? fetchHrDetails,
+    Future<List<RingRawTemperatureRecord>> Function()? fetchTemperature,
+    Future<List<RingRawSpo2Record>> Function()? fetchSpo2,
   }) {
     if (_syncing) return;
-    _runSync(fetchSleep: fetchSleep, fetchHr: fetchHr, fetchSteps: fetchSteps);
+    _runSync(
+      fetchSleep: fetchSleep,
+      fetchHr: fetchHr,
+      fetchSteps: fetchSteps,
+      fetchHrv: fetchHrv,
+      fetchHrDetails: fetchHrDetails,
+      fetchTemperature: fetchTemperature,
+      fetchSpo2: fetchSpo2,
+    );
   }
 
   Future<void> _runSync({
@@ -79,6 +91,10 @@ class RingSyncService extends ChangeNotifier {
         Function() fetchSleep,
     required Future<List<HrDataPoint>> Function() fetchHr,
     Future<List<RingRawDailySteps>> Function()? fetchSteps,
+    Future<List<RingRawHrvRecord>> Function()? fetchHrv,
+    Future<List<HrDataPoint>> Function()? fetchHrDetails,
+    Future<List<RingRawTemperatureRecord>> Function()? fetchTemperature,
+    Future<List<RingRawSpo2Record>> Function()? fetchSpo2,
   }) async {
     _syncing = true;
     _status = RingSyncStatus(
@@ -94,24 +110,26 @@ class RingSyncService extends ChangeNotifier {
     bool anyIncomplete = false;
 
     try {
-      // ── Sleep ──────────────────────────────────────────────────────────────
+      // ── Sleep + HR (fetched together so HR can be passed to sleep for resting HR) ──
       final (:records, :isComplete) = await fetchSleep();
       if (!isComplete) anyIncomplete = true;
       final sleepToSync = cutoff == null
           ? records
           : records.where((r) => r.sessionStart.isAfter(cutoff)).toList();
-      if (sleepToSync.isNotEmpty) {
-        await SleepService().syncFromRingRecords(
-          sleepToSync,
-          isComplete: isComplete,
-        );
-      }
 
-      // ── Heart Rate ─────────────────────────────────────────────────────────
       final hrPoints = await fetchHr();
       final hrToSync = cutoff == null
           ? hrPoints
           : hrPoints.where((p) => p.time.isAfter(cutoff)).toList();
+
+      if (sleepToSync.isNotEmpty) {
+        await SleepService().syncFromRingRecords(
+          sleepToSync,
+          isComplete: isComplete,
+          hrHistory: hrPoints,
+        );
+      }
+
       if (hrToSync.isNotEmpty) {
         await _uploadHrReadings(hrToSync);
       }
@@ -121,6 +139,50 @@ class RingSyncService extends ChangeNotifier {
         final stepRecords = await fetchSteps();
         if (stepRecords.isNotEmpty) {
           await StepsService().syncFromRingRecords(stepRecords);
+        }
+      }
+
+      // ── HRV / Stress / Blood Pressure ──────────────────────────────────────
+      if (fetchHrv != null) {
+        final hrvRecords = await fetchHrv();
+        final hrvToSync = cutoff == null
+            ? hrvRecords
+            : hrvRecords.where((r) => r.timestamp.isAfter(cutoff)).toList();
+        if (hrvToSync.isNotEmpty) {
+          await _uploadHrvReadings(hrvToSync);
+        }
+      }
+
+      // ── HR Details (0x54) ─────────────────────────────────────────────────
+      if (fetchHrDetails != null) {
+        final hrDetailPoints = await fetchHrDetails();
+        final hrDetailToSync = cutoff == null
+            ? hrDetailPoints
+            : hrDetailPoints.where((p) => p.time.isAfter(cutoff)).toList();
+        if (hrDetailToSync.isNotEmpty) {
+          await _uploadHrReadings(hrDetailToSync);
+        }
+      }
+
+      // ── Temperature (0x62) ────────────────────────────────────────────────
+      if (fetchTemperature != null) {
+        final tempRecords = await fetchTemperature();
+        final tempToSync = cutoff == null
+            ? tempRecords
+            : tempRecords.where((r) => r.timestamp.isAfter(cutoff)).toList();
+        if (tempToSync.isNotEmpty) {
+          await _uploadTemperatureReadings(tempToSync);
+        }
+      }
+
+      // ── SpO2 (0x66) ───────────────────────────────────────────────────────
+      if (fetchSpo2 != null) {
+        final spo2Records = await fetchSpo2();
+        final spo2ToSync = cutoff == null
+            ? spo2Records
+            : spo2Records.where((r) => r.timestamp.isAfter(cutoff)).toList();
+        if (spo2ToSync.isNotEmpty) {
+          await _uploadSpo2Readings(spo2ToSync);
         }
       }
 
@@ -165,6 +227,87 @@ class RingSyncService extends ChangeNotifier {
     await http
         .post(
           Uri.parse('${ApiConstants.baseUrl}/hr/sync'),
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': 'Bearer $token',
+          },
+          body: json.encode(payload),
+        )
+        .timeout(ApiConstants.receiveTimeout);
+  }
+
+  Future<void> _uploadHrvReadings(List<RingRawHrvRecord> records) async {
+    final token = AuthService().token;
+    if (token == null) return;
+
+    final payload = {
+      'readings': records
+          .map((r) => {
+                'timestamp': r.timestamp.toUtc().toIso8601String(),
+                'hrv_ms': r.hrvMs,
+                'heart_rate_bpm': r.heartRateBpm,
+                'fatigue': r.fatigue,
+                'systolic_mmhg': r.systolicMmhg,
+                'diastolic_mmhg': r.diastolicMmhg,
+              })
+          .toList(),
+    };
+
+    await http
+        .post(
+          Uri.parse('${ApiConstants.baseUrl}/hrv/sync'),
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': 'Bearer $token',
+          },
+          body: json.encode(payload),
+        )
+        .timeout(ApiConstants.receiveTimeout);
+  }
+
+  Future<void> _uploadTemperatureReadings(List<RingRawTemperatureRecord> records) async {
+    final token = AuthService().token;
+    if (token == null) return;
+
+    final payload = {
+      'readings': records
+          .map((r) => {
+                'timestamp': r.timestamp.toUtc().toIso8601String(),
+                'temp1_c': r.temp1C,
+                'temp2_c': r.temp2C,
+                'temp3_c': r.temp3C,
+              })
+          .toList(),
+    };
+
+    await http
+        .post(
+          Uri.parse('${ApiConstants.baseUrl}/temperature/sync'),
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': 'Bearer $token',
+          },
+          body: json.encode(payload),
+        )
+        .timeout(ApiConstants.receiveTimeout);
+  }
+
+  Future<void> _uploadSpo2Readings(List<RingRawSpo2Record> records) async {
+    final token = AuthService().token;
+    if (token == null) return;
+
+    final payload = {
+      'readings': records
+          .map((r) => {
+                'timestamp': r.timestamp.toUtc().toIso8601String(),
+                'spo2_percent': r.spo2Percent,
+              })
+          .toList(),
+    };
+
+    await http
+        .post(
+          Uri.parse('${ApiConstants.baseUrl}/spo2/sync'),
           headers: {
             'Content-Type': 'application/json',
             'Authorization': 'Bearer $token',

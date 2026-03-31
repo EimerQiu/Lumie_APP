@@ -10,7 +10,8 @@
       "Bash(find /Users/ciline/Documents/development/projects/swing -type f \\\\\\(-name *.dart -o -name *.py -o -name *.java -o -name *.swift \\\\\\))",
       "Bash(find /Users/ciline/Documents/development/projects/swing/golf_swing_recorder -type f -name *.task -o -name *pose* -o -name *landmarker*)",
       "Bash(python -c \":*)",
-      "Bash(python3 -c \":*)"
+      "Bash(python3 -c \":*)",
+      "Bash(head -10 grep -rn \"hr_readings\\\\|heart_rate\\\\|db\\\\.hr\" /Users/ciline/Documents/development/projects/Lumie_APP/lumie_backend/app/services/)"
     ],
     "additionalDirectories": [
       "/Users/ciline/.claude"

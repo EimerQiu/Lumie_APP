@@ -2,11 +2,12 @@
 // Handles BLE scanning, connection, pairing, and persistent ring info
 
 import 'dart:async';
-import 'package:flutter/foundation.dart';
+import 'package:flutter/widgets.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import '../../../core/services/ring_ble_service.dart';
 import '../../../core/services/ring_service.dart';
-import '../../../core/services/sleep_service.dart';
+import '../../../core/services/ring_sync_service.dart';
+import '../../../core/services/ring_command_service.dart';
 import '../../../shared/models/ring_models.dart';
 import '../../../shared/models/heart_rate_models.dart';
 
@@ -16,13 +17,13 @@ enum RingProviderState {
   scanning,
   connecting,
   paired,
-  disconnected,  // paired ring exists but BLE is not currently connected
-  reconnecting,  // actively attempting background reconnect (direct or scan)
+  disconnected, // paired ring exists but BLE is not currently connected
+  reconnecting, // actively attempting background reconnect (direct or scan)
   unpaired,
   error,
 }
 
-class RingProvider extends ChangeNotifier {
+class RingProvider extends ChangeNotifier with WidgetsBindingObserver {
   final RingBleService _bleService = RingBleService();
   final RingService _ringService = RingService();
 
@@ -35,7 +36,8 @@ class RingProvider extends ChangeNotifier {
 
   RingProviderState get state => _state;
   RingInfo? get ringInfo => _ringInfo;
-  List<DiscoveredRing> get discoveredRings => List.unmodifiable(_discoveredRings);
+  List<DiscoveredRing> get discoveredRings =>
+      List.unmodifiable(_discoveredRings);
   String? get errorMessage => _errorMessage;
   bool get isBluetoothOn => _isBluetoothOn;
   bool get isPaired => _ringInfo?.isPaired ?? false;
@@ -47,6 +49,8 @@ class RingProvider extends ChangeNotifier {
   // ─── Initialization ───────────────────────────────────────────────────────
 
   Future<void> init() async {
+    WidgetsBinding.instance.addObserver(this);
+
     // Load cached ring info
     _ringInfo = await _ringService.loadLocalRingInfo();
 
@@ -74,7 +78,9 @@ class RingProvider extends ChangeNotifier {
   void _handleDisconnected() {
     if (_ringInfo?.isPaired == true) {
       debugPrint('[Ring] Disconnected — scheduling auto-reconnect');
-      _ringInfo = _ringInfo?.copyWith(connectionStatus: RingConnectionStatus.disconnected);
+      _ringInfo = _ringInfo?.copyWith(
+        connectionStatus: RingConnectionStatus.disconnected,
+      );
       _state = RingProviderState.disconnected;
       notifyListeners();
       // Auto-reconnect with retry after a short delay
@@ -109,7 +115,9 @@ class RingProvider extends ChangeNotifier {
       } catch (directError) {
         // Slow path: scan for X6B rings and connect to the one that matches.
         // Required on iOS cold-start where CoreBluetooth needs to re-discover.
-        debugPrint('[Ring] Direct reconnect failed ($directError) — trying scan fallback');
+        debugPrint(
+          '[Ring] Direct reconnect failed ($directError) — trying scan fallback',
+        );
         await _bleService.scanAndReconnect(deviceId);
       }
       final battery = await _bleService.fetchBatteryLevel();
@@ -123,7 +131,9 @@ class RingProvider extends ChangeNotifier {
       _syncSleepInBackground();
     } catch (e) {
       debugPrint('[Ring] Reconnect failed: $e');
-      _ringInfo = _ringInfo?.copyWith(connectionStatus: RingConnectionStatus.disconnected);
+      _ringInfo = _ringInfo?.copyWith(
+        connectionStatus: RingConnectionStatus.disconnected,
+      );
       _state = RingProviderState.disconnected;
       notifyListeners();
     }
@@ -144,7 +154,9 @@ class RingProvider extends ChangeNotifier {
       if (_bleService.isConnected) return; // Already reconnected
 
       final delay = attempt == 1 ? firstDelay : retryInterval;
-      debugPrint('[Ring] Auto-reconnect attempt $attempt/$maxAttempts in ${delay.inSeconds}s');
+      debugPrint(
+        '[Ring] Auto-reconnect attempt $attempt/$maxAttempts in ${delay.inSeconds}s',
+      );
       await Future.delayed(delay);
 
       // Re-check after delay
@@ -154,7 +166,9 @@ class RingProvider extends ChangeNotifier {
         try {
           await _bleService.reconnect(deviceId);
         } catch (directError) {
-          debugPrint('[Ring] Auto-reconnect direct failed ($directError) — trying scan');
+          debugPrint(
+            '[Ring] Auto-reconnect direct failed ($directError) — trying scan',
+          );
           await _bleService.scanAndReconnect(deviceId);
         }
         final battery = await _bleService.fetchBatteryLevel();
@@ -171,7 +185,9 @@ class RingProvider extends ChangeNotifier {
         debugPrint('[Ring] Auto-reconnect attempt $attempt failed: $e');
         if (attempt == maxAttempts) {
           debugPrint('[Ring] All reconnect attempts exhausted after 5 min');
-          _ringInfo = _ringInfo?.copyWith(connectionStatus: RingConnectionStatus.disconnected);
+          _ringInfo = _ringInfo?.copyWith(
+            connectionStatus: RingConnectionStatus.disconnected,
+          );
           _state = RingProviderState.disconnected;
           notifyListeners();
         }
@@ -187,59 +203,43 @@ class RingProvider extends ChangeNotifier {
   /// attempt times out before the end-of-data marker is received.
   /// All errors are caught — this must never disrupt the connection flow.
   void _syncSleepInBackground() {
-    _runSleepSync().ignore();
+    if (!isConnected) return;
+    RingSyncService().triggerSync(
+      fetchSleep: () => _bleService.fetchSleepHistory(),
+      fetchHr: () => _bleService.fetchHrHistory(),
+      fetchSteps: () => _bleService.fetchStepHistory(),
+      fetchHrv: () => _bleService.fetchHrvHistory(),
+      fetchHrDetails: () => _bleService.fetchHrDetails(),
+      fetchTemperature: () => _bleService.fetchTemperatureHistory(),
+      fetchSpo2: () => _bleService.fetchSpo2History(),
+    );
+    RingCommandService().checkAndExecute(_bleService);
   }
 
-  Future<void> _runSleepSync() async {
-    if (!isConnected) return;
-    debugPrint('[Ring] Background sleep sync: starting');
+  /// Handle a remote ring command notification while the app is already open.
+  /// If we are connected, execute immediately. If paired but disconnected,
+  /// reconnect first; successful reconnect will poll pending commands.
+  Future<void> handleRemoteRingCommand() async {
+    if (isConnected) {
+      _syncSleepInBackground();
+      return;
+    }
 
-    try {
-      var (:records, :isComplete) = await _bleService.fetchSleepHistory();
-      debugPrint('[Ring] Sleep fetch: ${records.length} record(s), '
-          'complete=$isComplete');
+    if (isPaired) {
+      await _tryReconnect();
+    }
+  }
 
-      // Retry once if the ring timed out before sending the end marker
-      if (!isComplete && records.isNotEmpty) {
-        debugPrint('[Ring] Sleep fetch incomplete — retrying in 3 s');
-        await Future.delayed(const Duration(seconds: 3));
-        if (!isConnected) return;
-        final retry = await _bleService.fetchSleepHistory();
-        if (retry.records.isNotEmpty) {
-          records = retry.records;
-          isComplete = retry.isComplete;
-          debugPrint('[Ring] Retry: ${records.length} record(s), '
-              'complete=$isComplete');
-        }
-      }
-
-      if (records.isEmpty) {
-        debugPrint('[Ring] Sleep sync: no records returned');
-        return;
-      }
-
-      // Fetch HR history for resting-HR computation (non-critical)
-      List<HrDataPoint> hrHistory = [];
-      try {
-        hrHistory = await _bleService.fetchHrHistory();
-        debugPrint('[Ring] HR history: ${hrHistory.length} point(s)');
-      } catch (e) {
-        debugPrint('[Ring] HR history fetch failed (non-critical): $e');
-      }
-
-      await SleepService().syncFromRingRecords(
-        records,
-        isComplete: isComplete,
-        hrHistory: hrHistory,
-      );
-      debugPrint('[Ring] Background sleep sync: complete');
-    } catch (e) {
-      debugPrint('[Ring] Background sleep sync error: $e');
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _syncSleepInBackground();
     }
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _btStateSubscription?.cancel();
     _bleService.disconnect();
     super.dispose();
@@ -359,9 +359,9 @@ class RingProvider extends ChangeNotifier {
   // ─── Sleep BLE delegation ─────────────────────────────────────────────────
 
   Future<({List<RingRawSleepRecord> records, bool isComplete})>
-      fetchSleepHistory() => isPaired
-          ? _bleService.fetchSleepHistory()
-          : Future.value((records: <RingRawSleepRecord>[], isComplete: false));
+  fetchSleepHistory() => isPaired
+      ? _bleService.fetchSleepHistory()
+      : Future.value((records: <RingRawSleepRecord>[], isComplete: false));
 
   // ─── Step BLE delegation ──────────────────────────────────────────────────
 

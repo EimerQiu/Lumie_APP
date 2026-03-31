@@ -106,6 +106,11 @@ async def send_apns(
     task_id: str,
     *,
     extra_payload: Optional[dict] = None,
+    include_alert: bool = True,
+    include_sound: bool = True,
+    content_available: bool = False,
+    push_type: str = "alert",
+    priority: str = "10",
 ) -> bool:
     """Send a single push notification via APNs HTTP/2."""
     try:
@@ -115,11 +120,16 @@ async def send_apns(
         return False
 
     url = f"{_apns_base_url()}/3/device/{device_token}"
+    aps: dict = {}
+    if include_alert:
+        aps["alert"] = {"title": title, "body": body}
+    if include_sound:
+        aps["sound"] = "default"
+    if content_available:
+        aps["content-available"] = 1
+
     payload = {
-        "aps": {
-            "alert": {"title": title, "body": body},
-            "sound": "default",
-        },
+        "aps": aps,
         "task_id": task_id,
     }
     if extra_payload:
@@ -127,8 +137,8 @@ async def send_apns(
     headers = {
         "authorization": f"bearer {token}",
         "apns-topic": APNS_TOPIC,
-        "apns-push-type": "alert",
-        "apns-priority": "10",
+        "apns-push-type": push_type,
+        "apns-priority": priority,
     }
     try:
         resp = await client.post(url, json=payload, headers=headers)
@@ -407,6 +417,8 @@ async def process_notification_queue(db, client: httpx.AsyncClient) -> None:
         title = doc.get("title", "Lumie")
         body = doc.get("body", "")
         extra_data = doc.get("data", {})
+        notification_type = doc.get("type")
+        is_ring_command = notification_type == "ring_command"
 
         sent = await send_apns(
             client,
@@ -414,6 +426,12 @@ async def process_notification_queue(db, client: httpx.AsyncClient) -> None:
             title,
             body,
             task_id=extra_data.get("job_id", nid),  # reuse task_id payload field
+            extra_payload=extra_data,
+            include_alert=not is_ring_command,
+            include_sound=not is_ring_command,
+            content_available=is_ring_command,
+            push_type="background" if is_ring_command else "alert",
+            priority="5" if is_ring_command else "10",
         )
 
         new_status = "sent" if sent else "failed"

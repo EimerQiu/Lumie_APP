@@ -92,11 +92,12 @@ Write a Python async script that:
 
 ## Script Rules
 
-- You can use: `db`, `target_user_id`, `request_user_id`, `user_timezone`, `datetime`, `timedelta`, `timezone`, `ZoneInfo`, `json`, `print`, `str`, `int`, `float`, `len`, `list`, `dict`, `bool`, `isinstance`, `range`, `enumerate`, `sorted`, `min`, `max`, `sum`, `round`, `abs`, `any`, `all`, `zip`, `map`, `filter`, `set`, `tuple`, `type`
+- You can use: `db`, `target_user_id`, `request_user_id`, `user_timezone`, `datetime`, `timedelta`, `timezone`, `ZoneInfo`, `asyncio`, `json`, `uuid`, `print`, `str`, `int`, `float`, `len`, `list`, `dict`, `bool`, `isinstance`, `range`, `enumerate`, `sorted`, `min`, `max`, `sum`, `round`, `abs`, `any`, `all`, `zip`, `map`, `filter`, `set`, `tuple`, `type`
 - `user_timezone` is a pre-set string variable (e.g. "America/Los_Angeles") — use it directly: `local_tz = ZoneInfo(user_timezone)`
 - `timezone` is the `datetime.timezone` module — use `timezone.utc` for UTC-aware datetimes
+- `uuid` is pre-loaded — use `str(uuid.uuid4())` directly for IDs when needed
 - All DB calls must use `await` (Motor is async)
-- READ ONLY: No insert, update, or delete operations
+- WRITES: Allowed ONLY to `ring_command_requests` and `notification_queue` (for live ring commands) and `tasks` / `task_templates`. All other collections are read-only. No delete operations ever.
 - CRITICAL: Do NOT use `import` or `from ... import` — ALL modules and builtins are already pre-loaded in the namespace. `datetime`, `timedelta`, `json` are all available directly. Using import will cause your script to be rejected.
 - Do NOT use `exec`, `eval`, `open`, `compile`, or `__import__`
 - Do NOT access `users` collection (contains auth secrets)

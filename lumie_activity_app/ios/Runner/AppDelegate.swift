@@ -9,6 +9,26 @@ import UserNotifications
   private var tokenCompletion: ((String?) -> Void)?
   private var notificationChannel: FlutterMethodChannel?
 
+  private func forwardNotification(
+    method: String,
+    userInfo: [AnyHashable: Any],
+    delay: TimeInterval = 0
+  ) {
+    let send: () -> Void = { [weak self] in
+      self?.notificationChannel?.invokeMethod(method, arguments: userInfo)
+    }
+
+    if delay > 0 {
+      DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+        send()
+      }
+    } else {
+      DispatchQueue.main.async {
+        send()
+      }
+    }
+  }
+
   override func application(
     _ application: UIApplication,
     didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
@@ -36,10 +56,11 @@ import UserNotifications
 
     // Check if the app was launched from a notification
     if let notification = launchOptions?[.remoteNotification] as? [String: Any] {
+      let aps = notification["aps"] as? [String: Any]
+      let hasAlert = aps?["alert"] != nil
+      let method = hasAlert ? "onNotificationTap" : "onNotificationReceived"
       // Defer until Flutter is ready — send after a short delay
-      DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
-        self?.notificationChannel?.invokeMethod("onNotificationTap", arguments: notification)
-      }
+      forwardNotification(method: method, userInfo: notification, delay: 1.5)
     }
 
     return super.application(application, didFinishLaunchingWithOptions: launchOptions)
@@ -87,6 +108,15 @@ import UserNotifications
     tokenCompletion = nil
   }
 
+  override func application(
+    _ application: UIApplication,
+    didReceiveRemoteNotification userInfo: [AnyHashable: Any],
+    fetchCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Void
+  ) {
+    forwardNotification(method: "onNotificationReceived", userInfo: userInfo)
+    completionHandler(.newData)
+  }
+
   // MARK: - UNUserNotificationCenterDelegate
 
   /// Called when user taps a notification (app in background or terminated)
@@ -96,7 +126,7 @@ import UserNotifications
     withCompletionHandler completionHandler: @escaping () -> Void
   ) {
     let userInfo = response.notification.request.content.userInfo
-    notificationChannel?.invokeMethod("onNotificationTap", arguments: userInfo)
+    forwardNotification(method: "onNotificationTap", userInfo: userInfo)
     completionHandler()
   }
 
@@ -106,6 +136,8 @@ import UserNotifications
     willPresent notification: UNNotification,
     withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
   ) {
+    let userInfo = notification.request.content.userInfo
+    forwardNotification(method: "onNotificationReceived", userInfo: userInfo)
     if #available(iOS 14.0, *) {
       completionHandler([.banner, .sound])
     } else {

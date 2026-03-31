@@ -15,6 +15,7 @@ import '../constants/api_constants.dart';
 /// Callback type for notification tap navigation.
 /// The [data] map contains the notification payload (e.g. `navigate_to`, `type`).
 typedef NotificationTapCallback = void Function(Map<String, dynamic> data);
+typedef NotificationReceiveCallback = void Function(Map<String, dynamic> data);
 
 class PushNotificationService {
   static final PushNotificationService _instance =
@@ -26,6 +27,7 @@ class PushNotificationService {
 
   String? _token;
   NotificationTapCallback? _onTap;
+  NotificationReceiveCallback? _onReceive;
 
   String? get token => _token;
 
@@ -33,6 +35,11 @@ class PushNotificationService {
   /// The callback receives the notification payload as a Map.
   void setOnNotificationTap(NotificationTapCallback callback) {
     _onTap = callback;
+  }
+
+  /// Register a callback to be invoked when a push arrives while the app is open.
+  void setOnNotificationReceived(NotificationReceiveCallback callback) {
+    _onReceive = callback;
   }
 
   /// Called on every app launch once the user is authenticated.
@@ -60,6 +67,9 @@ class PushNotificationService {
     if (call.method == 'onNotificationTap') {
       final data = Map<String, dynamic>.from(call.arguments as Map);
       _onTap?.call(data);
+    } else if (call.method == 'onNotificationReceived') {
+      final data = Map<String, dynamic>.from(call.arguments as Map);
+      _onReceive?.call(data);
     }
   }
 

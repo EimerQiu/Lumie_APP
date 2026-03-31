@@ -20,6 +20,7 @@ import '../../sleep/providers/sleep_provider.dart';
 import '../../sleep/screens/sleep_screen.dart';
 import '../../tasks/providers/tasks_provider.dart';
 import '../../wellness/screens/wellness_detail_screen.dart';
+import '../../../core/services/ring_sync_service.dart';
 import '../widgets/activity_summary_card.dart';
 import '../widgets/quick_actions_section.dart';
 import '../widgets/adaptive_goal_card.dart';
@@ -459,11 +460,11 @@ class _DashboardScreenState extends State<DashboardScreen>
           onPressed: () => Scaffold.of(ctx).openDrawer(),
         ),
       ),
-      title: const Column(
+      title: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         mainAxisSize: MainAxisSize.min,
         children: [
-          Text(
+          const Text(
             'Good Morning',
             style: TextStyle(
               fontSize: 20,
@@ -471,13 +472,20 @@ class _DashboardScreenState extends State<DashboardScreen>
               color: AppColors.textPrimary,
             ),
           ),
-          Text(
-            'Here\'s your day at a glance',
-            style: TextStyle(
-              fontSize: 11,
-              color: AppColors.textSecondary,
-              fontWeight: FontWeight.normal,
-            ),
+          Consumer<RingSyncService>(
+            builder: (context, sync, _) {
+              final label = sync.status.isSyncing
+                  ? 'Ring data syncing...'
+                  : 'Here\'s your day at a glance';
+              return Text(
+                label,
+                style: const TextStyle(
+                  fontSize: 11,
+                  color: AppColors.textSecondary,
+                  fontWeight: FontWeight.normal,
+                ),
+              );
+            },
           ),
         ],
       ),

@@ -7,7 +7,7 @@ requires_ping: true
 requires_credentials: true
 target_system: lumie_db
 tags: [sleep, activity, exercise, walk test, rest day, heart rate, hrv, steps, health, fitness]
-keywords: [sleep, slept, sleeping, last night, bedtime, wake up, sleep quality, sleep score, sleep hours, deep sleep, rem sleep, light sleep, how did I sleep, sleep data, activity, activities, exercise, steps, workout, how active, calories burned, walk test, 6 minute walk, walking test, heart rate, resting heart rate, hrv, heart rate variability, rest day, rest days, recovery, how many rest days, active days, fitness data, health data, how was my, how am I doing, my health, my activity, my sleep]
+keywords: [sleep, slept, sleeping, last night, bedtime, wake up, sleep quality, sleep score, sleep hours, deep sleep, rem sleep, light sleep, how did I sleep, sleep data, activity, activities, exercise, steps, step count, how many steps, walked, distance, workout, how active, calories burned, walk test, 6 minute walk, walking test, heart rate, resting heart rate, bpm, pulse, continuous heart rate, hrv, heart rate variability, stress, fatigue, blood pressure, systolic, diastolic, temperature, body temperature, fever, temp, spo2, blood oxygen, oxygen saturation, oxygen level, o2, rest day, rest days, recovery, how many rest days, active days, fitness data, health data, how was my, how am I doing, my health, my activity, my sleep]
 summary: Query focused health data for a single domain — sleep sessions, activity records, walk tests, or rest days. Use this for specific health metric questions, not broad multi-domain summaries.
 allowed_connectors: [lumie_db_connector]
 input_schema:
@@ -15,7 +15,7 @@ input_schema:
   properties:
     domain:
       type: string
-      description: "sleep | activity | walk_test | rest_days"
+      description: "sleep | activity | walk_test | rest_days | hrv | heart_rate | steps | temperature | spo2"
     time_reference:
       type: string
       description: "last night | today | yesterday | this week | last 7 days | specific date"
@@ -114,12 +114,87 @@ rest = await db.rest_days.find(
 ).sort("date", -1).to_list(30)
 ```
 
+## Heart Rate (`hr_readings` collection)
+```python
+# Last 24 hours of continuous HR readings from the ring
+readings = await db.hr_readings.find(
+    {"user_id": target_user_id, "timestamp": {"$gte": yesterday_start_utc, "$lt": today_end_utc}}
+).sort("timestamp", 1).to_list(500)
+# Fields: timestamp, bpm
+# Compute resting HR (lowest 10th percentile), peak HR, average
+import statistics
+bpms = [r["bpm"] for r in readings if r.get("bpm", 0) > 0]
+avg_bpm = round(statistics.mean(bpms)) if bpms else None
+resting_bpm = sorted(bpms)[len(bpms) // 10] if len(bpms) >= 10 else (min(bpms) if bpms else None)
+peak_bpm = max(bpms) if bpms else None
+```
+
+## Daily Steps (`daily_steps` collection)
+```python
+# Last 7 days of ring step data
+step_docs = await db.daily_steps.find(
+    {"user_id": target_user_id, "date_str": {"$gte": (datetime.now(local_tz) - timedelta(days=7)).strftime("%Y-%m-%d")}}
+).sort("date_str", -1).to_list(7)
+# Fields: date_str (YYYY-MM-DD), steps, exercise_time_seconds, distance_km
+# Today's steps
+today_str = datetime.now(local_tz).strftime("%Y-%m-%d")
+today_steps = await db.daily_steps.find_one({"user_id": target_user_id, "date_str": today_str})
+```
+
+## Temperature (`temperature_readings` collection)
+```python
+# Latest temperature reading
+latest = await db.temperature_readings.find_one(
+    {"user_id": target_user_id},
+    sort=[("timestamp", -1)]
+)
+# Fields: timestamp, temp1_c, temp2_c, temp3_c (three sensor readings in °C)
+# Last 7 days
+readings = await db.temperature_readings.find(
+    {"user_id": target_user_id, "timestamp": {"$gte": week_start_utc}}
+).sort("timestamp", -1).to_list(200)
+```
+
+## SpO2 / Blood Oxygen (`spo2_readings` collection)
+```python
+# Latest SpO2 reading
+latest = await db.spo2_readings.find_one(
+    {"user_id": target_user_id},
+    sort=[("timestamp", -1)]
+)
+# Fields: timestamp, spo2_percent (oxygen saturation 0–100%)
+# Last 7 days
+readings = await db.spo2_readings.find(
+    {"user_id": target_user_id, "timestamp": {"$gte": week_start_utc}}
+).sort("timestamp", -1).to_list(200)
+```
+
+## HRV / Stress / Blood Pressure (`hrv_readings` collection)
+```python
+# Last 7 days of HRV readings
+readings = await db.hrv_readings.find(
+    {"user_id": target_user_id, "timestamp": {"$gte": week_start_utc, "$lt": week_end_utc}}
+).sort("timestamp", -1).to_list(200)
+# Fields: timestamp, hrv_ms, heart_rate_bpm, fatigue (0-100 stress/fatigue score),
+#         systolic_mmhg, diastolic_mmhg
+# For a single most-recent reading:
+latest = await db.hrv_readings.find_one(
+    {"user_id": target_user_id},
+    sort=[("timestamp", -1)]
+)
+```
+
 # Output Guidance
 
 ## Summary — write for the user directly
 - Sleep: "You slept **7h 20min** last night with a quality score of **82/100**. You got 28% deep sleep, which is great for recovery."
 - Activity: "You were active **4 days** this week with a total of **3h 15min** of exercise. Your most intense session was a **45-min run** on Wednesday."
 - Walk test: "Your most recent 6-minute walk test was on **Mar 15** — you covered **480 meters**, which is a good result for your condition."
+- Heart rate: "Your resting heart rate over the last 24 hours was **58 bpm**, with a peak of **142 bpm**. Average was **74 bpm**."
+- Temperature: "Your latest body temperature reading was **36.8°C** (sensor 1), taken at 7:42 AM."
+- SpO2: "Your blood oxygen level was **98%** at your most recent reading — that's a healthy range."
+- Steps: "You've taken **6,840 steps** today (**3.2 km**), with **47 minutes** of active movement."
+- HRV: "Your latest HRV reading (**42ms**) is within your normal range. Your stress/fatigue score was **35/100** and blood pressure was **118/76 mmHg**."
 - No data: "No [domain] data found for that period."
 
 Rules:
@@ -152,6 +227,21 @@ send a nudge, not responding to a user message), use the following criteria to f
 - **Nudge** if: the most recent walk test distance has declined more than 10% vs. the previous
   test — this may indicate a change in the user's cardiopulmonary condition
 - **Do not nudge** if: no new test has been completed (absence of data is not a concern here)
+
+## HRV / Stress
+- **Nudge** if: fatigue score > 70 consistently across the last 3+ readings (sustained high stress)
+- **Nudge** if: HRV has dropped more than 20% vs. the user's 7-day average (sign of poor recovery)
+- **Do not nudge** for: a single elevated stress reading — only patterns matter
+
+## SpO2 / Blood Oxygen
+- **Nudge** if: any reading is below 95% (clinically significant, especially for teens with cardiac or respiratory conditions)
+- **Nudge** if: readings are consistently 95–97% over multiple days (borderline, worth flagging)
+- **Do not nudge** for: isolated single readings — SpO2 can fluctuate during movement
+
+## Temperature
+- **Nudge** if: any sensor reading is above 38.0°C (potential fever)
+- **Nudge** if: temperature has been trending upward over the last 3+ readings
+- **Do not nudge** for: minor fluctuations within 36.0–37.5°C range
 
 ## Rest Days
 - **Do not nudge** about rest days — they are intentional and user-configured

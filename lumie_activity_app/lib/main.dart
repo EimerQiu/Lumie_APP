@@ -54,6 +54,7 @@ import 'features/sleep/providers/sleep_provider.dart';
 import 'features/settings/providers/activity_goal_provider.dart';
 import 'features/settings/screens/activity_goal_screen.dart';
 import 'features/activity/providers/today_steps_provider.dart';
+import 'core/services/ring_sync_service.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -89,6 +90,7 @@ class LumieActivityApp extends StatelessWidget {
         ChangeNotifierProvider(create: (_) => WellnessProvider()),
         ChangeNotifierProvider(create: (_) => SleepProvider()),
         ChangeNotifierProvider(create: (_) => ActivityGoalProvider()),
+        ChangeNotifierProvider(create: (_) => RingSyncService()..init()),
         ChangeNotifierProxyProvider<RingProvider, TodayStepsProvider>(
           create: (_) => TodayStepsProvider(),
           update: (_, ring, steps) => steps!..updateRingProvider(ring),
@@ -294,6 +296,19 @@ class MainNavigationScreen extends StatefulWidget {
 class _MainNavigationScreenState extends State<MainNavigationScreen> {
   int _currentIndex = 0;
 
+  void _handlePushPayload(Map<String, dynamic> data) {
+    final navigateTo = data['navigate_to'] as String?;
+    final type = data['type'] as String?;
+
+    if (type == 'ring_command') {
+      context.read<RingProvider>().handleRemoteRingCommand();
+    }
+
+    if (navigateTo == 'advisor' && mounted) {
+      setState(() => _currentIndex = 1);
+    }
+  }
+
   @override
   void initState() {
     super.initState();
@@ -321,12 +336,8 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
     });
 
     // Listen for notification taps to deep-link to the right screen
-    PushNotificationService().setOnNotificationTap((data) {
-      final navigateTo = data['navigate_to'] as String?;
-      if (navigateTo == 'advisor' && mounted) {
-        setState(() => _currentIndex = 1); // Switch to Advisor tab
-      }
-    });
+    PushNotificationService().setOnNotificationTap(_handlePushPayload);
+    PushNotificationService().setOnNotificationReceived(_handlePushPayload);
   }
 
   @override
@@ -395,7 +406,8 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
   }
 
   void _showWorkoutPicker() {
-    final tier = context.read<AuthProvider>().user?.subscriptionTier ??
+    final tier =
+        context.read<AuthProvider>().user?.subscriptionTier ??
         SubscriptionTier.free;
     final isPro = tier != SubscriptionTier.free;
 
@@ -407,23 +419,25 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
         isPro: isPro,
         onSelected: (type) {
           Navigator.of(ctx).pop();
-          Navigator.of(context).push(MaterialPageRoute(
-            builder: (_) => WorkoutRecordingScreen(activityType: type),
-            fullscreenDialog: true,
-          ));
+          Navigator.of(context).push(
+            MaterialPageRoute(
+              builder: (_) => WorkoutRecordingScreen(activityType: type),
+              fullscreenDialog: true,
+            ),
+          );
         },
         onWorkoutSelected: (plan) {
           Navigator.of(ctx).pop();
-          Navigator.of(context).push(MaterialPageRoute(
-            builder: (_) => WorkoutSessionScreen(workoutPlan: plan),
-            fullscreenDialog: true,
-          ));
+          Navigator.of(context).push(
+            MaterialPageRoute(
+              builder: (_) => WorkoutSessionScreen(workoutPlan: plan),
+              fullscreenDialog: true,
+            ),
+          );
         },
         onUpgradeTapped: () {
           Navigator.of(ctx).pop();
-          Navigator.of(context)
-              .pushNamed('/subscription/upgrade')
-              .then((_) {
+          Navigator.of(context).pushNamed('/subscription/upgrade').then((_) {
             if (mounted) _showWorkoutPicker();
           });
         },
@@ -481,8 +495,9 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
                           shape: BoxShape.circle,
                           boxShadow: [
                             BoxShadow(
-                              color: AppColors.primaryLemonDark
-                                  .withValues(alpha: 0.45),
+                              color: AppColors.primaryLemonDark.withValues(
+                                alpha: 0.45,
+                              ),
                               blurRadius: 14,
                               offset: const Offset(0, 4),
                             ),
@@ -789,7 +804,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
     await _checkinService.updatePreferences(frequency: freq);
   }
 
-
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -1022,61 +1036,81 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             ),
                             const SizedBox(height: 8),
                             Row(
-                          children: [
-                            {'label': 'High', 'sub': '30 min', 'value': 'high'},
-                            {'label': 'Normal', 'sub': '1 hour', 'value': 'normal'},
-                            {'label': 'Lazy', 'sub': '6 hours', 'value': 'lazy'},
-                          ].map((item) {
-                            final selected = _checkinFreq == item['value'];
-                            return Padding(
-                              padding: const EdgeInsets.only(right: 8),
-                              child: GestureDetector(
-                                onTap: () => _setFreq(item['value']!),
-                                child: AnimatedContainer(
-                                  duration: const Duration(milliseconds: 180),
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: 14,
-                                    vertical: 6,
-                                  ),
-                                  decoration: BoxDecoration(
-                                    color: selected
-                                        ? AppColors.primaryLemonDark
-                                        : AppColors.backgroundPaper,
-                                    borderRadius: BorderRadius.circular(20),
-                                    border: Border.all(
-                                      color: selected
-                                          ? AppColors.primaryLemonDark
-                                          : AppColors.surfaceLight,
-                                    ),
-                                  ),
-                                  child: Column(
-                                    mainAxisSize: MainAxisSize.min,
-                                    children: [
-                                      Text(
-                                        item['label']!,
-                                        style: TextStyle(
-                                          fontSize: 13,
-                                          fontWeight: FontWeight.w600,
-                                          color: selected
-                                              ? Colors.white
-                                              : AppColors.textPrimary,
+                              children:
+                                  [
+                                    {
+                                      'label': 'High',
+                                      'sub': '30 min',
+                                      'value': 'high',
+                                    },
+                                    {
+                                      'label': 'Normal',
+                                      'sub': '1 hour',
+                                      'value': 'normal',
+                                    },
+                                    {
+                                      'label': 'Lazy',
+                                      'sub': '6 hours',
+                                      'value': 'lazy',
+                                    },
+                                  ].map((item) {
+                                    final selected =
+                                        _checkinFreq == item['value'];
+                                    return Padding(
+                                      padding: const EdgeInsets.only(right: 8),
+                                      child: GestureDetector(
+                                        onTap: () => _setFreq(item['value']!),
+                                        child: AnimatedContainer(
+                                          duration: const Duration(
+                                            milliseconds: 180,
+                                          ),
+                                          padding: const EdgeInsets.symmetric(
+                                            horizontal: 14,
+                                            vertical: 6,
+                                          ),
+                                          decoration: BoxDecoration(
+                                            color: selected
+                                                ? AppColors.primaryLemonDark
+                                                : AppColors.backgroundPaper,
+                                            borderRadius: BorderRadius.circular(
+                                              20,
+                                            ),
+                                            border: Border.all(
+                                              color: selected
+                                                  ? AppColors.primaryLemonDark
+                                                  : AppColors.surfaceLight,
+                                            ),
+                                          ),
+                                          child: Column(
+                                            mainAxisSize: MainAxisSize.min,
+                                            children: [
+                                              Text(
+                                                item['label']!,
+                                                style: TextStyle(
+                                                  fontSize: 13,
+                                                  fontWeight: FontWeight.w600,
+                                                  color: selected
+                                                      ? Colors.white
+                                                      : AppColors.textPrimary,
+                                                ),
+                                              ),
+                                              Text(
+                                                item['sub']!,
+                                                style: TextStyle(
+                                                  fontSize: 11,
+                                                  color: selected
+                                                      ? Colors.white.withValues(
+                                                          alpha: 0.85,
+                                                        )
+                                                      : AppColors.textSecondary,
+                                                ),
+                                              ),
+                                            ],
+                                          ),
                                         ),
                                       ),
-                                      Text(
-                                        item['sub']!,
-                                        style: TextStyle(
-                                          fontSize: 11,
-                                          color: selected
-                                              ? Colors.white.withValues(alpha: 0.85)
-                                              : AppColors.textSecondary,
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                              ),
-                            );
-                          }).toList(),
+                                    );
+                                  }).toList(),
                             ),
                           ],
                         ),

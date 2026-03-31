@@ -136,6 +136,8 @@ class RingRawSleepRecord {
   final int deepMinutes;
   final int remMinutes;
   final int awakeMinutes;
+  final int id1;   // ring record index byte — used for deduplication
+  final int id2;   // ring page byte — used for deduplication
 
   const RingRawSleepRecord({
     required this.sessionStart,
@@ -144,6 +146,8 @@ class RingRawSleepRecord {
     required this.deepMinutes,
     required this.remMinutes,
     required this.awakeMinutes,
+    this.id1 = 0,
+    this.id2 = 0,
   });
 
   int get totalSleepMinutes => lightMinutes + deepMinutes + remMinutes;
@@ -164,6 +168,179 @@ class RingRawDailySteps {
     required this.steps,
     required this.exerciseTimeSeconds,
     required this.distanceKm,
+  });
+}
+
+/// Raw HRV / stress / blood pressure record from ring command 0x56.
+/// One record = one measurement snapshot (ring takes these periodically).
+class RingRawHrvRecord {
+  final DateTime timestamp;   // BCD timestamp from ring
+  final int hrvMs;            // Heart rate variability in milliseconds
+  final int heartRateBpm;     // Heart rate at time of measurement
+  final int fatigue;          // Stress / fatigue level (0–100)
+  final int systolicMmhg;     // Systolic blood pressure
+  final int diastolicMmhg;    // Diastolic blood pressure
+
+  const RingRawHrvRecord({
+    required this.timestamp,
+    required this.hrvMs,
+    required this.heartRateBpm,
+    required this.fatigue,
+    required this.systolicMmhg,
+    required this.diastolicMmhg,
+  });
+}
+
+/// Temperature record from ring command 0x62.
+/// One record = one snapshot with 3 sensor readings.
+class RingRawTemperatureRecord {
+  final DateTime timestamp;
+  final double temp1C;
+  final double temp2C;
+  final double temp3C;
+
+  const RingRawTemperatureRecord({
+    required this.timestamp,
+    required this.temp1C,
+    required this.temp2C,
+    required this.temp3C,
+  });
+}
+
+/// SpO2 (blood oxygen) record from ring command 0x66.
+/// One record = one measurement snapshot.
+class RingRawSpo2Record {
+  final DateTime timestamp;
+  final int spo2Percent;   // Oxygen saturation 0–100%
+
+  const RingRawSpo2Record({
+    required this.timestamp,
+    required this.spo2Percent,
+  });
+}
+
+/// Live temperature reading from ring command 0x14.
+/// One snapshot with highest temp + three NTC sensor values.
+class RingLiveTemperature {
+  final double highestTempC;   // Highest of the three sensors
+  final double ntc1C;
+  final double ntc2C;
+  final double ntc3C;
+
+  const RingLiveTemperature({
+    required this.highestTempC,
+    required this.ntc1C,
+    required this.ntc2C,
+    required this.ntc3C,
+  });
+}
+
+/// Ring clock info from command 0x41.
+class RingTimeInfo {
+  final DateTime ringTime;   // Current time as stored on the ring
+  final int weekday;         // 1=Mon … 7=Sun
+  final int maxMtu;
+
+  const RingTimeInfo({
+    required this.ringTime,
+    required this.weekday,
+    required this.maxMtu,
+  });
+}
+
+/// User info stored on the ring from command 0x42.
+class RingUserInfo {
+  final int gender;      // 0=female, 1=male
+  final int age;
+  final int heightCm;
+  final int weightKg;
+  final int stepLengthCm;
+  final String ringId;   // 6-char ASCII ring identifier
+
+  const RingUserInfo({
+    required this.gender,
+    required this.age,
+    required this.heightCm,
+    required this.weightKg,
+    required this.stepLengthCm,
+    required this.ringId,
+  });
+}
+
+/// Detailed per-minute step record from ring command 0x52.
+/// One record = one time slot with 10 per-minute step readings.
+class RingDetailedStepRecord {
+  final DateTime timestamp;
+  final int steps;
+  final int calories;
+  final double distanceKm;
+  final List<int> perMinuteSteps;   // 10 one-minute buckets
+
+  const RingDetailedStepRecord({
+    required this.timestamp,
+    required this.steps,
+    required this.calories,
+    required this.distanceKm,
+    required this.perMinuteSteps,
+  });
+}
+
+/// Exercise session record from ring command 0x5C.
+class RingExerciseRecord {
+  final DateTime startTime;
+  final int exerciseType;       // Ring exercise type code
+  final int avgHeartRate;
+  final int durationSeconds;
+  final int steps;
+  final double paceMinPerKm;
+  final double calories;
+  final double distanceKm;
+
+  const RingExerciseRecord({
+    required this.startTime,
+    required this.exerciseType,
+    required this.avgHeartRate,
+    required this.durationSeconds,
+    required this.steps,
+    required this.paceMinPerKm,
+    required this.calories,
+    required this.distanceKm,
+  });
+}
+
+/// Measurement interval config from ring command 0x2B.
+class RingMeasurementInterval {
+  final int measureType;      // 1=HR, 2=SpO2, 3=Temperature, 4=HRV/BP
+  final int mode;             // 0=off, 1=manual, 2=auto
+  final int intervalMinutes;  // Auto-measurement interval
+  final int weekdayBits;      // Bitmask: bit0=Mon … bit6=Sun
+  final String startTime;     // "HH:mm"
+  final String endTime;       // "HH:mm"
+
+  const RingMeasurementInterval({
+    required this.measureType,
+    required this.mode,
+    required this.intervalMinutes,
+    required this.weekdayBits,
+    required this.startTime,
+    required this.endTime,
+  });
+}
+
+/// Result of a live HR measurement (command 0x28 + 0x09 for N seconds).
+class RingHrMeasurementResult {
+  final int avgBpm;
+  final int minBpm;
+  final int maxBpm;
+  final int durationSeconds;
+  final List<int> readings;   // Individual readings during measurement
+
+  const RingHrMeasurementResult({
+    required this.avgBpm,
+    required this.minBpm,
+    required this.maxBpm,
+    required this.durationSeconds,
+    required this.readings,
   });
 }
 

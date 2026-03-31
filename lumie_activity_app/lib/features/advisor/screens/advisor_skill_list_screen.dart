@@ -32,9 +32,9 @@ class _AdvisorSkillListScreenState extends State<AdvisorSkillListScreen> {
     } catch (e) {
       setState(() => _loading = false);
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to load skills: $e')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Failed to load skills: $e')));
       }
     }
   }
@@ -61,9 +61,9 @@ class _AdvisorSkillListScreenState extends State<AdvisorSkillListScreen> {
                 }
               } catch (e) {
                 if (mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(content: Text('Reindex failed: $e')),
-                  );
+                  ScaffoldMessenger.of(
+                    context,
+                  ).showSnackBar(SnackBar(content: Text('Reindex failed: $e')));
                 }
               }
             },
@@ -73,36 +73,37 @@ class _AdvisorSkillListScreenState extends State<AdvisorSkillListScreen> {
       body: _loading
           ? const Center(child: CircularProgressIndicator())
           : _skills.isEmpty
-              ? const Center(child: Text('No skills available'))
-              : RefreshIndicator(
-                  onRefresh: _loadSkills,
-                  child: ListView.builder(
-                    padding: const EdgeInsets.all(16),
-                    itemCount: _skills.length,
-                    itemBuilder: (context, index) {
-                      final skill = _skills[index];
-                      return _SkillCard(
-                        skill: skill,
-                        allSkills: _skills,
-                        onTap: () async {
-                          // Credential screen title: use credentialDisplayName if set
-                          final credTitle = skill.credentialDisplayName ?? skill.title;
-                          await Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (_) => AdvisorCredentialScreen(
-                                skillId: skill.skillId,
-                                skillTitle: credTitle,
-                                isLumieInternal: skill.isLumieInternal,
-                              ),
-                            ),
-                          );
-                          _loadSkills();
-                        },
+          ? const Center(child: Text('No skills available'))
+          : RefreshIndicator(
+              onRefresh: _loadSkills,
+              child: ListView.builder(
+                padding: const EdgeInsets.all(16),
+                itemCount: _skills.length,
+                itemBuilder: (context, index) {
+                  final skill = _skills[index];
+                  return _SkillCard(
+                    skill: skill,
+                    allSkills: _skills,
+                    onTap: () async {
+                      // Credential screen title: use credentialDisplayName if set
+                      final credTitle =
+                          skill.credentialDisplayName ?? skill.title;
+                      await Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (_) => AdvisorCredentialScreen(
+                            skillId: skill.skillId,
+                            skillTitle: credTitle,
+                            isLumieInternal: skill.isLumieInternal,
+                          ),
+                        ),
                       );
+                      _loadSkills();
                     },
-                  ),
-                ),
+                  );
+                },
+              ),
+            ),
     );
   }
 }
@@ -112,7 +113,11 @@ class _SkillCard extends StatelessWidget {
   final List<AdvisorSkill> allSkills;
   final VoidCallback onTap;
 
-  const _SkillCard({required this.skill, required this.allSkills, required this.onTap});
+  const _SkillCard({
+    required this.skill,
+    required this.allSkills,
+    required this.onTap,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -149,6 +154,11 @@ class _SkillCard extends StatelessWidget {
               skill.summary,
               maxLines: 2,
               overflow: TextOverflow.ellipsis,
+              style: theme.textTheme.bodySmall?.copyWith(
+                fontSize: 13,
+                fontWeight: FontWeight.w400,
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
             ),
             if (credLabel != null)
               Padding(
@@ -169,7 +179,9 @@ class _SkillCard extends StatelessWidget {
               Icon(
                 skill.hasSharedCredential ? Icons.link : Icons.key,
                 size: 16,
-                color: skill.hasSharedCredential ? theme.colorScheme.primary : Colors.amber,
+                color: skill.hasSharedCredential
+                    ? theme.colorScheme.primary
+                    : Colors.amber,
               ),
             const SizedBox(width: 4),
             Icon(Icons.circle, size: 8, color: statusColor),
