@@ -16,6 +16,9 @@ import 'features/auth/screens/teen_profile_setup_screen.dart';
 import 'features/auth/screens/parent_profile_setup_screen.dart';
 import 'features/dashboard/screens/dashboard_screen.dart';
 import 'features/activity/screens/activity_history_screen.dart';
+import 'features/activity/screens/workout_recording_screen.dart';
+import 'features/activity/screens/workout_session_screen.dart';
+import 'features/activity/widgets/activity_picker_sheet.dart';
 import 'features/manual_entry/screens/manual_entry_screen.dart';
 import 'features/walk_test/screens/walk_test_screen.dart';
 import 'features/sleep/screens/sleep_screen.dart';
@@ -46,6 +49,11 @@ import 'shared/models/activity_models.dart';
 import 'shared/models/user_models.dart';
 import 'core/services/push_notification_service.dart';
 import 'core/services/checkin_service.dart';
+import 'features/wellness/providers/wellness_provider.dart';
+import 'features/sleep/providers/sleep_provider.dart';
+import 'features/settings/providers/activity_goal_provider.dart';
+import 'features/settings/screens/activity_goal_screen.dart';
+import 'features/activity/providers/today_steps_provider.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -78,6 +86,13 @@ class LumieActivityApp extends StatelessWidget {
           create: (_) => HeartRateProvider(),
           update: (_, ring, hr) => hr!..updateRingProvider(ring),
         ),
+        ChangeNotifierProvider(create: (_) => WellnessProvider()),
+        ChangeNotifierProvider(create: (_) => SleepProvider()),
+        ChangeNotifierProvider(create: (_) => ActivityGoalProvider()),
+        ChangeNotifierProxyProvider<RingProvider, TodayStepsProvider>(
+          create: (_) => TodayStepsProvider(),
+          update: (_, ring, steps) => steps!..updateRingProvider(ring),
+        ),
       ],
       child: MaterialApp(
         title: 'Lumie Activity',
@@ -103,6 +118,7 @@ class LumieActivityApp extends StatelessWidget {
           '/tasks/admin': (context) => const AdminDashboardScreen(),
           '/tasks/reward-calc': (context) => const RewardCalcScreen(),
           '/ring/manage': (context) => const RingManagementScreen(),
+          '/settings/activity-goal': (context) => const ActivityGoalScreen(),
           '/heart-rate': (context) => const HeartRateScreen(),
         },
         onGenerateRoute: (settings) {
@@ -328,6 +344,95 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
     );
   }
 
+  // ── Record Workout — nav-bar entry point ──────────────────────────────────
+
+  void _handleRecordWorkout() {
+    final ring = context.read<RingProvider>();
+    if (!ring.isPaired || !ring.isBluetoothOn) {
+      _showRingRequiredDialog(ring);
+      return;
+    }
+    _showWorkoutPicker();
+  }
+
+  void _showRingRequiredDialog(RingProvider ring) {
+    final bool bluetoothOff = ring.isPaired && !ring.isBluetoothOn;
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Row(
+          children: [
+            Icon(Icons.bluetooth_disabled, color: AppColors.error),
+            SizedBox(width: 8),
+            Text('Ring Not Connected'),
+          ],
+        ),
+        content: Text(
+          bluetoothOff
+              ? 'Turn on Bluetooth to connect your Lumie Ring for heart rate tracking.'
+              : 'Your Lumie Ring is not connected.\n\nIf your ring is in the charger, remove it and make sure it\'s nearby.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('OK'),
+          ),
+          if (!ring.isPaired)
+            ElevatedButton(
+              onPressed: () {
+                Navigator.of(ctx).pop();
+                Navigator.of(context).pushNamed('/ring/manage');
+              },
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.primaryLemonDark,
+                foregroundColor: const Color(0xFF78350F),
+              ),
+              child: const Text('Connect Ring'),
+            ),
+        ],
+      ),
+    );
+  }
+
+  void _showWorkoutPicker() {
+    final tier = context.read<AuthProvider>().user?.subscriptionTier ??
+        SubscriptionTier.free;
+    final isPro = tier != SubscriptionTier.free;
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) => ActivityPickerSheet(
+        isPro: isPro,
+        onSelected: (type) {
+          Navigator.of(ctx).pop();
+          Navigator.of(context).push(MaterialPageRoute(
+            builder: (_) => WorkoutRecordingScreen(activityType: type),
+            fullscreenDialog: true,
+          ));
+        },
+        onWorkoutSelected: (plan) {
+          Navigator.of(ctx).pop();
+          Navigator.of(context).push(MaterialPageRoute(
+            builder: (_) => WorkoutSessionScreen(workoutPlan: plan),
+            fullscreenDialog: true,
+          ));
+        },
+        onUpgradeTapped: () {
+          Navigator.of(ctx).pop();
+          Navigator.of(context)
+              .pushNamed('/subscription/upgrade')
+              .then((_) {
+            if (mounted) _showWorkoutPicker();
+          });
+        },
+      ),
+    );
+  }
+
+  // ── Bottom nav bar ─────────────────────────────────────────────────────────
+
   Widget _buildBottomNavBar() {
     return Container(
       decoration: BoxDecoration(
@@ -359,6 +464,48 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
                 label: 'Advisor',
                 isSelected: _currentIndex == 1,
                 onTap: () => setState(() => _currentIndex = 1),
+              ),
+              // ── Centre "Record Workout" button ──────────────────────────
+              GestureDetector(
+                onTap: _handleRecordWorkout,
+                child: Transform.translate(
+                  offset: const Offset(0, -10),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Container(
+                        width: 54,
+                        height: 54,
+                        decoration: BoxDecoration(
+                          color: AppColors.primaryLemonDark,
+                          shape: BoxShape.circle,
+                          boxShadow: [
+                            BoxShadow(
+                              color: AppColors.primaryLemonDark
+                                  .withValues(alpha: 0.45),
+                              blurRadius: 14,
+                              offset: const Offset(0, 4),
+                            ),
+                          ],
+                        ),
+                        child: const Icon(
+                          Icons.play_arrow_rounded,
+                          color: Color(0xFF78350F),
+                          size: 30,
+                        ),
+                      ),
+                      const SizedBox(height: 3),
+                      Text(
+                        'Record',
+                        style: TextStyle(
+                          fontSize: 10,
+                          fontWeight: FontWeight.w600,
+                          color: AppColors.textSecondary,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
               ),
               _NavBarItem(
                 icon: Icons.insights_outlined,
@@ -1018,6 +1165,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
               Navigator.of(context).pop();
               // Clear all cached data from providers
               context.read<RingProvider>().clearOnLogout();
+              context.read<TodayStepsProvider>().clearOnLogout();
               context.read<TasksProvider>().reset();
               context.read<TeamsProvider>().reset();
               context.read<AuthProvider>().logout();

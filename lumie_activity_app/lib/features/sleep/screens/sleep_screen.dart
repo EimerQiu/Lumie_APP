@@ -1,10 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../../core/theme/app_colors.dart';
-import '../../../core/services/sleep_service.dart';
 import '../../../shared/models/sleep_models.dart';
 import '../../../shared/widgets/gradient_card.dart';
 import '../../ring/providers/ring_provider.dart';
+import '../providers/sleep_provider.dart';
 import '../widgets/sleep_stage_chart.dart';
 import '../widgets/sleep_metric_card.dart';
 
@@ -16,34 +16,27 @@ class SleepScreen extends StatefulWidget {
 }
 
 class _SleepScreenState extends State<SleepScreen> {
-  final SleepService _sleepService = SleepService();
-
-  SleepSession? _latestSleep;
-  SleepTarget? _sleepTarget;
-  bool _isLoading = true;
-  String? _errorMessage;
-  String _syncMessage = 'Loading…';
-  // true if the last ring BLE fetch timed out before the end-of-data marker
-  bool _syncWasIncomplete = false;
-  DateTime? _lastSyncedAt;
   bool _lastConnected = false;
   RingProvider? _ringProvider;
 
   @override
   void initState() {
     super.initState();
-    _loadSleepData();
+    // Trigger a fresh backend read on mount (SleepProvider debounces concurrent calls).
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) context.read<SleepProvider>().load();
+    });
   }
 
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    final ringProvider = Provider.of<RingProvider>(context, listen: false);
-    if (_ringProvider != ringProvider) {
+    final rp = Provider.of<RingProvider>(context, listen: false);
+    if (_ringProvider != rp) {
       _ringProvider?.removeListener(_onRingStateChanged);
-      _ringProvider = ringProvider;
-      _lastConnected = ringProvider.isConnected;
-      ringProvider.addListener(_onRingStateChanged);
+      _ringProvider = rp;
+      _lastConnected = rp.isConnected;
+      rp.addListener(_onRingStateChanged);
     }
   }
 
@@ -51,9 +44,19 @@ class _SleepScreenState extends State<SleepScreen> {
     if (!mounted) return;
     final connected = _ringProvider?.isConnected ?? false;
     if (connected && !_lastConnected) {
-      _loadSleepData();
+      // RingProvider already started a background sleep sync (0x53 + 0x55).
+      // Wait for it to finish uploading, then reload from the backend.
+      _reloadAfterRingSync();
     }
     _lastConnected = connected;
+  }
+
+  Future<void> _reloadAfterRingSync() async {
+    if (!mounted) return;
+    // Give the background sync in RingProvider up to 10 s to complete.
+    await Future.delayed(const Duration(seconds: 10));
+    if (!mounted) return;
+    context.read<SleepProvider>().load();
   }
 
   @override
@@ -62,168 +65,61 @@ class _SleepScreenState extends State<SleepScreen> {
     super.dispose();
   }
 
-  Future<void> _loadSleepData() async {
-    setState(() {
-      _isLoading = true;
-      _errorMessage = null;
-      _syncMessage = 'Loading…';
-    });
-
-    try {
-      final ringProvider = Provider.of<RingProvider>(context, listen: false);
-      if (ringProvider.isConnected) {
-        setState(() => _syncMessage = 'Syncing from ring…');
-        final (:records, :isComplete) = await ringProvider.fetchSleepHistory();
-        if (records.isNotEmpty) {
-          setState(() => _syncMessage = 'Saving sleep data…');
-          await _sleepService.syncFromRingRecords(records, isComplete: isComplete);
-        }
-      }
-
-      setState(() => _syncMessage = 'Loading sleep data…');
-      final results = await Future.wait([
-        _sleepService.getLatestSleep(),
-        _sleepService.getSleepTarget(),
-      ]);
-
-      final session = results[0] as SleepSession?;
-      // Only display sessions that came from actual ring sensor readings and
-      // have a non-zero sleep duration. Discard anything that looks synthetic.
-      final isRealRingData = session != null &&
-          session.source == 'ring' &&
-          session.totalSleepTime.inMinutes > 0;
-
-      setState(() {
-        _latestSleep = isRealRingData ? session : null;
-        _sleepTarget = results[1] as SleepTarget;
-        _syncWasIncomplete = !_sleepService.lastSyncWasComplete;
-        _lastSyncedAt = _sleepService.lastSyncedAt;
-        _isLoading = false;
-      });
-    } catch (e) {
-      setState(() {
-        _errorMessage = e.toString();
-        _isLoading = false;
-      });
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: AppColors.backgroundWhite,
-      body: SafeArea(
-        child: CustomScrollView(
-          slivers: [
-            _buildHeader(),
-            if (_isLoading)
-              SliverFillRemaining(
-                child: Center(
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      const CircularProgressIndicator(),
-                      const SizedBox(height: 16),
-                      Text(
-                        _syncMessage,
-                        style: TextStyle(
-                          fontSize: 14,
-                          color: AppColors.textSecondary,
-                        ),
-                      ),
-                    ],
+    return Consumer<SleepProvider>(
+      builder: (context, sleep, _) {
+        return Scaffold(
+          backgroundColor: AppColors.backgroundWhite,
+          body: SafeArea(
+            child: CustomScrollView(
+              slivers: [
+                _buildHeader(sleep),
+                if (sleep.isLoading)
+                  const SliverFillRemaining(
+                    child: Center(child: CircularProgressIndicator()),
+                  )
+                else if (sleep.latestSleep == null)
+                  _buildNoData()
+                else
+                  SliverPadding(
+                    padding: const EdgeInsets.all(24),
+                    sliver: SliverList(
+                      delegate: SliverChildListDelegate([
+                        _buildSleepSummaryCard(sleep),
+                        const SizedBox(height: 16),
+                        _buildSleepStagesCard(sleep.latestSleep!),
+                        const SizedBox(height: 16),
+                        _buildMetricsGrid(sleep.latestSleep!),
+                        const SizedBox(height: 16),
+                        _buildViewHistoryButton(),
+                        const SizedBox(height: 24),
+                      ]),
+                    ),
                   ),
-                ),
-              )
-            else if (_errorMessage != null)
-              SliverFillRemaining(
-                child: Center(
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      const Icon(
-                        Icons.error_outline,
-                        size: 64,
-                        color: AppColors.error,
-                      ),
-                      const SizedBox(height: 16),
-                      Text(
-                        'Failed to load sleep data',
-                        style: TextStyle(
-                          fontSize: 16,
-                          color: AppColors.textSecondary,
-                        ),
-                      ),
-                      const SizedBox(height: 24),
-                      ElevatedButton(
-                        onPressed: _loadSleepData,
-                        child: const Text('Retry'),
-                      ),
-                    ],
-                  ),
-                ),
-              )
-            else if (_latestSleep == null)
-              SliverFillRemaining(
-                child: Center(
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Icon(
-                        Icons.bedtime_outlined,
-                        size: 80,
-                        color: AppColors.textLight,
-                      ),
-                      const SizedBox(height: 16),
-                      Text(
-                        'No sleep data yet',
-                        style: TextStyle(
-                          fontSize: 18,
-                          fontWeight: FontWeight.w600,
-                          color: AppColors.textSecondary,
-                        ),
-                      ),
-                      const SizedBox(height: 8),
-                      Text(
-                        'Wear your Lumie Ring to track sleep',
-                        style: TextStyle(
-                          fontSize: 14,
-                          color: AppColors.textLight,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              )
-            else
-              SliverPadding(
-                padding: const EdgeInsets.all(24),
-                sliver: SliverList(
-                  delegate: SliverChildListDelegate([
-                    _buildSleepSummaryCard(),
-                    const SizedBox(height: 16),
-                    _buildSleepStagesCard(),
-                    const SizedBox(height: 16),
-                    _buildMetricsGrid(),
-                    const SizedBox(height: 16),
-                    _buildViewHistoryButton(),
-                    const SizedBox(height: 24),
-                  ]),
-                ),
-              ),
-          ],
-        ),
-      ),
+              ],
+            ),
+          ),
+        );
+      },
     );
   }
 
-  Widget _buildHeader() {
+  Widget _buildHeader(SleepProvider sleep) {
+    final syncedAt = sleep.lastSyncedAt;
+    String? syncLabel;
+    bool incomplete = false;
+    if (syncedAt != null) {
+      incomplete = !sleep.lastSyncWasComplete;
+      final mins = DateTime.now().difference(syncedAt).inMinutes;
+      final ago = mins < 1 ? 'just now' : '${mins}m ago';
+      syncLabel = incomplete ? 'Sync incomplete · $ago' : 'Synced $ago';
+    }
+
     return SliverToBoxAdapter(
       child: Container(
         padding: const EdgeInsets.all(24),
-        decoration: const BoxDecoration(
-          gradient: AppColors.primaryGradient,
-        ),
+        decoration: const BoxDecoration(gradient: AppColors.primaryGradient),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -261,25 +157,25 @@ class _SleepScreenState extends State<SleepScreen> {
                           color: AppColors.textSecondary,
                         ),
                       ),
-                      if (_syncStatusLabel() != null) ...[
+                      if (syncLabel != null) ...[
                         const SizedBox(height: 4),
                         Row(
                           children: [
                             Icon(
-                              _syncWasIncomplete
+                              incomplete
                                   ? Icons.warning_amber_rounded
                                   : Icons.check_circle_outline,
                               size: 12,
-                              color: _syncWasIncomplete
+                              color: incomplete
                                   ? AppColors.warning
                                   : AppColors.success,
                             ),
                             const SizedBox(width: 4),
                             Text(
-                              _syncStatusLabel()!,
+                              syncLabel,
                               style: TextStyle(
                                 fontSize: 11,
-                                color: _syncWasIncomplete
+                                color: incomplete
                                     ? AppColors.warning
                                     : AppColors.textLight,
                               ),
@@ -298,22 +194,40 @@ class _SleepScreenState extends State<SleepScreen> {
     );
   }
 
-  String? _syncStatusLabel() {
-    if (_lastSyncedAt == null) return null;
-    final mins = DateTime.now().difference(_lastSyncedAt!).inMinutes;
-    final timeAgo = mins < 1 ? 'just now' : '${mins}m ago';
-    return _syncWasIncomplete
-        ? 'Sync incomplete · $timeAgo'
-        : 'Synced $timeAgo';
+  Widget _buildNoData() {
+    return SliverFillRemaining(
+      child: Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.bedtime_outlined, size: 80, color: AppColors.textLight),
+            const SizedBox(height: 16),
+            const Text(
+              'No sleep data recorded',
+              style: TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.w600,
+                color: AppColors.textSecondary,
+              ),
+            ),
+            const SizedBox(height: 8),
+            const Text(
+              'Wear your Lumie Ring to track sleep',
+              style: TextStyle(fontSize: 14, color: AppColors.textLight),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
-  Widget _buildSleepSummaryCard() {
-    if (_latestSleep == null) return const SizedBox();
-
-    final hours = _latestSleep!.totalSleepTime.inHours;
-    final minutes = _latestSleep!.totalSleepTime.inMinutes % 60;
-    final targetHours = _sleepTarget?.targetDuration.inHours ?? 8;
-    final targetMinutes = (_sleepTarget?.targetDuration.inMinutes ?? 480) % 60;
+  Widget _buildSleepSummaryCard(SleepProvider sleep) {
+    final session = sleep.latestSleep!;
+    final hours = session.totalSleepTime.inHours;
+    final minutes = session.totalSleepTime.inMinutes % 60;
+    final targetHours = sleep.sleepTarget?.targetDuration.inHours ?? 8;
+    final targetMinutes =
+        (sleep.sleepTarget?.targetDuration.inMinutes ?? 480) % 60;
 
     return GradientCard(
       gradient: AppColors.coolGradient,
@@ -332,7 +246,7 @@ class _SleepScreenState extends State<SleepScreen> {
               ),
               const Spacer(),
               Text(
-                _formatDateTime(_latestSleep!.wakeTime),
+                _formatDateTime(session.wakeTime),
                 style: TextStyle(
                   fontSize: 12,
                   color: AppColors.textOnYellow.withValues(alpha: 0.8),
@@ -376,7 +290,7 @@ class _SleepScreenState extends State<SleepScreen> {
               ),
               const SizedBox(width: 8),
               Text(
-                '${_formatTime(_latestSleep!.bedtime)} - ${_formatTime(_latestSleep!.wakeTime)}',
+                '${_formatTime(session.bedtime)} – ${_formatTime(session.wakeTime)}',
                 style: TextStyle(
                   fontSize: 14,
                   color: AppColors.textOnYellow.withValues(alpha: 0.8),
@@ -389,9 +303,7 @@ class _SleepScreenState extends State<SleepScreen> {
     );
   }
 
-  Widget _buildSleepStagesCard() {
-    if (_latestSleep == null) return const SizedBox();
-
+  Widget _buildSleepStagesCard(SleepSession session) {
     return Container(
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
@@ -417,37 +329,27 @@ class _SleepScreenState extends State<SleepScreen> {
             ),
           ),
           const SizedBox(height: 16),
-          SleepStageChart(session: _latestSleep!),
+          SleepStageChart(session: session),
           const SizedBox(height: 16),
-          _buildStageBreakdown(),
+          _buildStageRow(
+            'Light Sleep',
+            session.getStagePercentage(SleepStage.light),
+            AppColors.primaryLemon,
+          ),
+          const SizedBox(height: 8),
+          _buildStageRow(
+            'Deep Sleep',
+            session.getStagePercentage(SleepStage.deep),
+            AppColors.accentMint,
+          ),
+          const SizedBox(height: 8),
+          _buildStageRow(
+            'REM Sleep',
+            session.getStagePercentage(SleepStage.rem),
+            AppColors.accentLavender,
+          ),
         ],
       ),
-    );
-  }
-
-  Widget _buildStageBreakdown() {
-    if (_latestSleep == null) return const SizedBox();
-
-    return Column(
-      children: [
-        _buildStageRow(
-          'Light Sleep',
-          _latestSleep!.getStagePercentage(SleepStage.light),
-          AppColors.primaryLemon,
-        ),
-        const SizedBox(height: 8),
-        _buildStageRow(
-          'Deep Sleep',
-          _latestSleep!.getStagePercentage(SleepStage.deep),
-          AppColors.accentMint,
-        ),
-        const SizedBox(height: 8),
-        _buildStageRow(
-          'REM Sleep',
-          _latestSleep!.getStagePercentage(SleepStage.rem),
-          AppColors.accentLavender,
-        ),
-      ],
     );
   }
 
@@ -457,19 +359,13 @@ class _SleepScreenState extends State<SleepScreen> {
         Container(
           width: 12,
           height: 12,
-          decoration: BoxDecoration(
-            color: color,
-            shape: BoxShape.circle,
-          ),
+          decoration: BoxDecoration(color: color, shape: BoxShape.circle),
         ),
         const SizedBox(width: 12),
         Expanded(
           child: Text(
             label,
-            style: const TextStyle(
-              fontSize: 14,
-              color: AppColors.textPrimary,
-            ),
+            style: const TextStyle(fontSize: 14, color: AppColors.textPrimary),
           ),
         ),
         Text(
@@ -484,17 +380,15 @@ class _SleepScreenState extends State<SleepScreen> {
     );
   }
 
-  Widget _buildMetricsGrid() {
-    if (_latestSleep == null) return const SizedBox();
-
-    final hasRestingHr = _latestSleep!.restingHeartRate > 0;
+  Widget _buildMetricsGrid(SleepSession session) {
+    final hasRhr = session.restingHeartRate > 0;
     return Row(
       children: [
-        if (hasRestingHr) ...[
+        if (hasRhr) ...[
           Expanded(
             child: SleepMetricCard(
               title: 'Resting HR',
-              value: '${_latestSleep!.restingHeartRate}',
+              value: '${session.restingHeartRate}',
               unit: 'bpm',
               icon: Icons.favorite_outline,
               gradient: AppColors.warmGradient,
@@ -505,7 +399,7 @@ class _SleepScreenState extends State<SleepScreen> {
         Expanded(
           child: SleepMetricCard(
             title: 'Sleep Quality',
-            value: _latestSleep!.sleepQualityScore.toStringAsFixed(0),
+            value: session.sleepQualityScore.toStringAsFixed(0),
             unit: '%',
             icon: Icons.star_outline,
             gradient: AppColors.mintGradient,
@@ -519,10 +413,7 @@ class _SleepScreenState extends State<SleepScreen> {
     return SizedBox(
       width: double.infinity,
       child: OutlinedButton.icon(
-        onPressed: () {
-          // Navigate to sleep history
-          Navigator.pushNamed(context, '/sleep/history');
-        },
+        onPressed: () => Navigator.pushNamed(context, '/sleep/history'),
         icon: const Icon(Icons.history),
         label: const Text('View Sleep History'),
         style: OutlinedButton.styleFrom(
@@ -532,24 +423,20 @@ class _SleepScreenState extends State<SleepScreen> {
     );
   }
 
-  String _formatDateTime(DateTime dateTime) {
+  String _formatDateTime(DateTime dt) {
     final now = DateTime.now();
     final today = DateTime(now.year, now.month, now.day);
-    final date = DateTime(dateTime.year, dateTime.month, dateTime.day);
-
-    if (date == today) {
-      return 'Today';
-    } else if (date == today.subtract(const Duration(days: 1))) {
-      return 'Yesterday';
-    } else {
-      return '${dateTime.month}/${dateTime.day}';
-    }
+    final date = DateTime(dt.year, dt.month, dt.day);
+    if (date == today) return 'Today';
+    if (date == today.subtract(const Duration(days: 1))) return 'Yesterday';
+    return '${dt.month}/${dt.day}';
   }
 
-  String _formatTime(DateTime dateTime) {
-    final hour = dateTime.hour > 12 ? dateTime.hour - 12 : (dateTime.hour == 0 ? 12 : dateTime.hour);
-    final period = dateTime.hour >= 12 ? 'PM' : 'AM';
-    final minute = dateTime.minute.toString().padLeft(2, '0');
+  String _formatTime(DateTime dt) {
+    final hour =
+        dt.hour > 12 ? dt.hour - 12 : (dt.hour == 0 ? 12 : dt.hour);
+    final period = dt.hour >= 12 ? 'PM' : 'AM';
+    final minute = dt.minute.toString().padLeft(2, '0');
     return '$hour:$minute $period';
   }
 }

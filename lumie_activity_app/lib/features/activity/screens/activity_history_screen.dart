@@ -3,13 +3,13 @@ import 'package:provider/provider.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/services/rest_days_service.dart';
 import '../../../core/services/steps_service.dart';
-import '../../../shared/models/activity_models.dart';
 import '../../../shared/models/user_models.dart';
-import '../../../shared/models/workout_plan_models.dart';
+import '../../settings/providers/activity_goal_provider.dart';
+import '../providers/today_steps_provider.dart';
 import '../../../shared/widgets/gradient_card.dart';
 import '../../auth/providers/auth_provider.dart';
 import '../../ring/providers/ring_provider.dart';
-import '../../teams/widgets/upgrade_prompt_sheet.dart';
+import '../widgets/activity_picker_sheet.dart';
 import 'workout_recording_screen.dart';
 import 'workout_session_screen.dart';
 
@@ -20,6 +20,7 @@ class _DayData {
   final int steps;
   final int activeMinutes; // from ring exercise_time_seconds
   final int goalMinutes;
+  final int goalSteps;
   final String goalReason;
   final bool goalIsReduced;
 
@@ -28,13 +29,21 @@ class _DayData {
     required this.steps,
     required this.activeMinutes,
     required this.goalMinutes,
+    required this.goalSteps,
     required this.goalReason,
     required this.goalIsReduced,
   });
 
-  bool get goalMet => activeMinutes >= goalMinutes;
-  double get goalProgress =>
-      goalMinutes > 0 ? (activeMinutes / goalMinutes).clamp(0.0, 1.5) : 0.0;
+  bool goalMet(ActivityGoalType type) => type == ActivityGoalType.steps
+      ? steps >= goalSteps
+      : activeMinutes >= goalMinutes;
+
+  double goalProgress(ActivityGoalType type) {
+    if (type == ActivityGoalType.steps) {
+      return goalSteps > 0 ? (steps / goalSteps).clamp(0.0, 1.5) : 0.0;
+    }
+    return goalMinutes > 0 ? (activeMinutes / goalMinutes).clamp(0.0, 1.5) : 0.0;
+  }
 }
 
 // ─── Screen ───────────────────────────────────────────────────────────────────
@@ -55,6 +64,8 @@ class _ActivityHistoryScreenState extends State<ActivityHistoryScreen> {
   RingProvider? _ringProvider;
   bool _lastConnected = false;
 
+  TodayStepsProvider? _stepsProvider;
+
   @override
   void initState() {
     super.initState();
@@ -66,6 +77,8 @@ class _ActivityHistoryScreenState extends State<ActivityHistoryScreen> {
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
+
+    // Wire ring provider — reload backend history when ring (re)connects.
     final ringProvider = Provider.of<RingProvider>(context, listen: false);
     if (_ringProvider != ringProvider) {
       _ringProvider?.removeListener(_onRingStateChanged);
@@ -74,21 +87,50 @@ class _ActivityHistoryScreenState extends State<ActivityHistoryScreen> {
       ringProvider.addListener(_onRingStateChanged);
       _loadData();
     }
+
+    // Wire TodayStepsProvider — update today's slot when ring data arrives.
+    final stepsProvider =
+        Provider.of<TodayStepsProvider>(context, listen: false);
+    if (_stepsProvider != stepsProvider) {
+      _stepsProvider?.removeListener(_onTodayStepsChanged);
+      _stepsProvider = stepsProvider;
+      stepsProvider.addListener(_onTodayStepsChanged);
+    }
   }
 
   void _onRingStateChanged() {
     if (!mounted) return;
     final connected = _ringProvider?.isConnected ?? false;
     if (connected && !_lastConnected) {
-      // Ring just connected — re-sync and reload
+      // Ring just connected — refresh backend history (sync handled by TodayStepsProvider).
       _loadData();
     }
     _lastConnected = connected;
   }
 
+  /// Called whenever [TodayStepsProvider] finishes a ring sync + backend fetch.
+  /// Patches today's slot in [_weekData] so both screens always show the same count.
+  void _onTodayStepsChanged() {
+    if (!mounted || _weekData.isEmpty) return;
+    final today = _stepsProvider?.today;
+    if (today == null) return;
+    setState(() {
+      _weekData[0] = _DayData(
+        date: _weekData[0].date,
+        steps: today.steps,
+        activeMinutes: today.activeMinutes,
+        goalMinutes: _weekData[0].goalMinutes,
+        goalSteps: _weekData[0].goalSteps,
+        goalReason: _weekData[0].goalReason,
+        goalIsReduced: _weekData[0].goalIsReduced,
+      );
+    });
+  }
+
   @override
   void dispose() {
     _ringProvider?.removeListener(_onRingStateChanged);
+    _stepsProvider?.removeListener(_onTodayStepsChanged);
     super.dispose();
   }
 
@@ -97,17 +139,8 @@ class _ActivityHistoryScreenState extends State<ActivityHistoryScreen> {
   Future<void> _loadData() async {
     setState(() => _isLoading = true);
 
-    final ringProvider = Provider.of<RingProvider>(context, listen: false);
-
-    // 1. If ring is connected, pull step data via BLE and sync to backend.
-    if (ringProvider.isConnected) {
-      final steps = await ringProvider.fetchStepHistory();
-      if (steps.isNotEmpty) {
-        await StepsService().syncFromRingRecords(steps);
-      }
-    }
-
-    // 2. Fetch 7-day history + today's goal from backend.
+    // Ring BLE sync is owned by TodayStepsProvider — no duplicate sync here.
+    // Fetch 7-day history + today's goal from backend.
     final now = DateTime.now();
     final startDate = DateTime(
       now.year,
@@ -133,29 +166,38 @@ class _ActivityHistoryScreenState extends State<ActivityHistoryScreen> {
       final record = matches.isEmpty ? null : matches.first;
 
       int goalMinutes;
+      int goalSteps;
       String goalReason;
       bool goalIsReduced;
       if (i == 0 && todayGoal != null) {
         goalMinutes = todayGoal.goalMinutes;
+        goalSteps = todayGoal.goalSteps;
         goalReason = todayGoal.reason;
         goalIsReduced = todayGoal.isReduced;
       } else if (record != null) {
         goalMinutes = record.goalMinutes;
+        goalSteps = record.goalSteps;
         goalReason = record.goalReason;
         goalIsReduced = record.goalIsReduced;
       } else {
         // No data for this day — use simple weekday/weekend baseline.
         goalMinutes = day.weekday >= 6 ? 45 : 60;
+        goalSteps = day.weekday >= 6 ? 6000 : 8000;
         goalReason = '';
         goalIsReduced = false;
       }
 
+      // For today (i == 0), prefer TodayStepsProvider data — it reflects the
+      // latest ring sync and is the same source used by the dashboard.
+      final providerToday = (i == 0) ? _stepsProvider?.today : null;
       weekData.add(
         _DayData(
           date: day,
-          steps: record?.steps ?? 0,
-          activeMinutes: record?.activeMinutes ?? 0,
+          steps: providerToday?.steps ?? record?.steps ?? 0,
+          activeMinutes:
+              providerToday?.activeMinutes ?? record?.activeMinutes ?? 0,
           goalMinutes: goalMinutes,
+          goalSteps: goalSteps,
           goalReason: goalReason,
           goalIsReduced: goalIsReduced,
         ),
@@ -233,7 +275,7 @@ class _ActivityHistoryScreenState extends State<ActivityHistoryScreen> {
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      builder: (ctx) => _ActivityPickerSheet(
+      builder: (ctx) => ActivityPickerSheet(
         isPro: isPro,
         onSelected: (type) {
           Navigator.of(ctx).pop();
@@ -268,6 +310,7 @@ class _ActivityHistoryScreenState extends State<ActivityHistoryScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final goalType = context.watch<ActivityGoalProvider>().goalType;
     return Scaffold(
       floatingActionButton: FloatingActionButton.extended(
         onPressed: _onRecordWorkout,
@@ -290,16 +333,16 @@ class _ActivityHistoryScreenState extends State<ActivityHistoryScreen> {
                   child: Center(child: CircularProgressIndicator()),
                 )
               else ...[
-                _buildWeekSelector(),
+                _buildWeekSelector(goalType),
                 Expanded(
                   child: SingleChildScrollView(
                     padding: const EdgeInsets.only(bottom: 100),
                     child: Column(
                       children: [
                         const SizedBox(height: 16),
-                        _buildSelectedDaySummary(),
+                        _buildSelectedDaySummary(goalType),
                         const SizedBox(height: 16),
-                        _buildWeeklyOverview(),
+                        _buildWeeklyOverview(goalType),
                         const SizedBox(height: 16),
                         _buildActivityList(),
                       ],
@@ -340,7 +383,7 @@ class _ActivityHistoryScreenState extends State<ActivityHistoryScreen> {
     );
   }
 
-  Widget _buildWeekSelector() {
+  Widget _buildWeekSelector(ActivityGoalType goalType) {
     const days = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 16),
@@ -402,7 +445,7 @@ class _ActivityHistoryScreenState extends State<ActivityHistoryScreen> {
                     height: 8,
                     decoration: BoxDecoration(
                       shape: BoxShape.circle,
-                      color: dayData.goalMet
+                      color: dayData.goalMet(goalType)
                           ? AppColors.success
                           : AppColors.surfaceLight,
                     ),
@@ -416,7 +459,7 @@ class _ActivityHistoryScreenState extends State<ActivityHistoryScreen> {
     );
   }
 
-  Widget _buildSelectedDaySummary() {
+  Widget _buildSelectedDaySummary(ActivityGoalType goalType) {
     final selected = _weekData[_selectedDayIndex];
     final isViewingTodayOnRestDay = _selectedDayIndex == 0 && _isTodayRestDay;
 
@@ -471,7 +514,7 @@ class _ActivityHistoryScreenState extends State<ActivityHistoryScreen> {
                   color: AppColors.textPrimary,
                 ),
               ),
-              if (selected.goalMet)
+              if (selected.goalMet(goalType))
                 Container(
                   padding: const EdgeInsets.symmetric(
                     horizontal: 8,
@@ -494,7 +537,7 @@ class _ActivityHistoryScreenState extends State<ActivityHistoryScreen> {
           ),
           const SizedBox(height: 16),
 
-          // Steps (hero) + active time side by side
+          // Primary metric (hero) + secondary side by side — swaps with goal type
           Row(
             children: [
               Expanded(
@@ -505,7 +548,9 @@ class _ActivityHistoryScreenState extends State<ActivityHistoryScreen> {
                       crossAxisAlignment: CrossAxisAlignment.end,
                       children: [
                         Text(
-                          _fmtSteps(selected.steps),
+                          goalType == ActivityGoalType.steps
+                              ? _fmtSteps(selected.steps)
+                              : '${selected.activeMinutes}',
                           style: const TextStyle(
                             fontSize: 36,
                             fontWeight: FontWeight.bold,
@@ -514,11 +559,11 @@ class _ActivityHistoryScreenState extends State<ActivityHistoryScreen> {
                           ),
                         ),
                         const SizedBox(width: 4),
-                        const Padding(
-                          padding: EdgeInsets.only(bottom: 4),
+                        Padding(
+                          padding: const EdgeInsets.only(bottom: 4),
                           child: Text(
-                            'steps',
-                            style: TextStyle(
+                            goalType == ActivityGoalType.steps ? 'steps' : 'min',
+                            style: const TextStyle(
                               fontSize: 13,
                               color: AppColors.textSecondary,
                             ),
@@ -529,14 +574,18 @@ class _ActivityHistoryScreenState extends State<ActivityHistoryScreen> {
                     const SizedBox(height: 4),
                     Row(
                       children: [
-                        const Icon(
-                          Icons.directions_walk,
+                        Icon(
+                          goalType == ActivityGoalType.steps
+                              ? Icons.directions_walk
+                              : Icons.timer_outlined,
                           size: 14,
                           color: AppColors.textLight,
                         ),
                         const SizedBox(width: 4),
                         Text(
-                          'Ring tracked',
+                          goalType == ActivityGoalType.steps
+                              ? 'Ring tracked'
+                              : 'Active time',
                           style: const TextStyle(
                             fontSize: 11,
                             color: AppColors.textLight,
@@ -551,7 +600,9 @@ class _ActivityHistoryScreenState extends State<ActivityHistoryScreen> {
                 crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
                   Text(
-                    '${selected.activeMinutes}',
+                    goalType == ActivityGoalType.steps
+                        ? '${selected.activeMinutes}'
+                        : _fmtSteps(selected.steps),
                     style: const TextStyle(
                       fontSize: 28,
                       fontWeight: FontWeight.bold,
@@ -560,7 +611,7 @@ class _ActivityHistoryScreenState extends State<ActivityHistoryScreen> {
                     ),
                   ),
                   Text(
-                    'min active',
+                    goalType == ActivityGoalType.steps ? 'min active' : 'steps',
                     style: const TextStyle(
                       fontSize: 12,
                       color: AppColors.textSecondary,
@@ -568,7 +619,9 @@ class _ActivityHistoryScreenState extends State<ActivityHistoryScreen> {
                   ),
                   const SizedBox(height: 2),
                   Text(
-                    'Goal: ${selected.goalMinutes} min',
+                    goalType == ActivityGoalType.steps
+                        ? 'Goal: ${_fmtSteps(selected.goalSteps)} steps'
+                        : 'Goal: ${selected.goalMinutes} min',
                     style: const TextStyle(
                       fontSize: 11,
                       color: AppColors.textLight,
@@ -584,11 +637,11 @@ class _ActivityHistoryScreenState extends State<ActivityHistoryScreen> {
           ClipRRect(
             borderRadius: BorderRadius.circular(8),
             child: LinearProgressIndicator(
-              value: selected.goalProgress,
+              value: selected.goalProgress(goalType),
               minHeight: 12,
               backgroundColor: AppColors.surfaceLight,
               valueColor: AlwaysStoppedAnimation<Color>(
-                selected.goalMet
+                selected.goalMet(goalType)
                     ? AppColors.success
                     : AppColors.primaryLemonDark,
               ),
@@ -617,13 +670,13 @@ class _ActivityHistoryScreenState extends State<ActivityHistoryScreen> {
     );
   }
 
-  Widget _buildWeeklyOverview() {
+  Widget _buildWeeklyOverview(ActivityGoalType goalType) {
     final totalSteps = _weekData.fold<int>(0, (sum, d) => sum + d.steps);
     final totalActive = _weekData.fold<int>(
       0,
       (sum, d) => sum + d.activeMinutes,
     );
-    final goalsMet = _weekData.where((d) => d.goalMet).length;
+    final goalsMet = _weekData.where((d) => d.goalMet(goalType)).length;
 
     return GradientCard(
       gradient: AppColors.mintGradient,
@@ -755,362 +808,6 @@ class _ActivityHistoryScreenState extends State<ActivityHistoryScreen> {
     return '$steps';
   }
 }
-
-// ── Activity Picker Bottom Sheet ──────────────────────────────────────────────
-
-class _ActivityPickerSheet extends StatelessWidget {
-  final void Function(ActivityType) onSelected;
-  final void Function(WorkoutPlan) onWorkoutSelected;
-  final bool isPro;
-  final VoidCallback onUpgradeTapped;
-
-  const _ActivityPickerSheet({
-    required this.onSelected,
-    required this.onWorkoutSelected,
-    required this.isPro,
-    required this.onUpgradeTapped,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final screenHeight = MediaQuery.of(context).size.height;
-    return ConstrainedBox(
-      constraints: BoxConstraints(maxHeight: screenHeight * 0.87),
-      child: Container(
-        decoration: const BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // ── Handle + title ──────────────────────────────────────────
-            Center(
-              child: Column(
-                children: [
-                  const SizedBox(height: 12),
-                  Container(
-                    width: 40,
-                    height: 4,
-                    decoration: BoxDecoration(
-                      color: AppColors.surfaceLight,
-                      borderRadius: BorderRadius.circular(2),
-                    ),
-                  ),
-                  const SizedBox(height: 16),
-                  const Text(
-                    'Choose Activity',
-                    style: TextStyle(
-                      fontSize: 18,
-                      fontWeight: FontWeight.w600,
-                      color: AppColors.textPrimary,
-                    ),
-                  ),
-                  const SizedBox(height: 20),
-                ],
-              ),
-            ),
-            // ── My Workouts ─────────────────────────────────────────────
-            const Padding(
-              padding: EdgeInsets.fromLTRB(16, 0, 16, 10),
-              child: Text(
-                'My Workouts',
-                style: TextStyle(
-                  fontSize: 15,
-                  fontWeight: FontWeight.w600,
-                  color: AppColors.textPrimary,
-                ),
-              ),
-            ),
-            Builder(
-              builder: (context) {
-                // Free users see only the free-default plan.
-                // Subscribed users see all plans.
-                final visiblePlans = isPro
-                    ? WorkoutPlan.samplePlans
-                    : WorkoutPlan.samplePlans
-                          .where((p) => p.isFreeDefault)
-                          .toList();
-                // +1 for the "Create / locked-Create" card at the end.
-                final itemCount = visiblePlans.length + 1;
-
-                return SizedBox(
-                  height: 110,
-                  child: ListView.separated(
-                    scrollDirection: Axis.horizontal,
-                    padding: const EdgeInsets.fromLTRB(16, 0, 16, 0),
-                    itemCount: itemCount,
-                    separatorBuilder: (_, _) => const SizedBox(width: 12),
-                    itemBuilder: (ctx, i) {
-                      // ── Plan card ──────────────────────────────────────
-                      if (i < visiblePlans.length) {
-                        final plan = visiblePlans[i];
-                        return GestureDetector(
-                          onTap: () => onWorkoutSelected(plan),
-                          child: Container(
-                            width: 130,
-                            decoration: BoxDecoration(
-                              gradient: AppColors.warmGradient,
-                              borderRadius: BorderRadius.circular(16),
-                            ),
-                            padding: const EdgeInsets.all(12),
-                            child: Stack(
-                              children: [
-                                Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  mainAxisAlignment:
-                                      MainAxisAlignment.spaceBetween,
-                                  children: [
-                                    Text(
-                                      plan.emoji,
-                                      style: const TextStyle(fontSize: 28),
-                                    ),
-                                    Column(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.start,
-                                      children: [
-                                        Text(
-                                          plan.name,
-                                          maxLines: 1,
-                                          overflow: TextOverflow.ellipsis,
-                                          style: const TextStyle(
-                                            fontSize: 13,
-                                            fontWeight: FontWeight.bold,
-                                            color: AppColors.textOnYellow,
-                                          ),
-                                        ),
-                                        Text(
-                                          '${plan.exercises.length} exercises',
-                                          style: TextStyle(
-                                            fontSize: 11,
-                                            color: AppColors.textOnYellow
-                                                .withValues(alpha: 0.7),
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                  ],
-                                ),
-                                // "FREE" badge on the default plan
-                                if (plan.isFreeDefault)
-                                  Positioned(
-                                    top: 0,
-                                    right: 0,
-                                    child: Container(
-                                      padding: const EdgeInsets.symmetric(
-                                        horizontal: 6,
-                                        vertical: 2,
-                                      ),
-                                      decoration: BoxDecoration(
-                                        color: AppColors.primaryLemonDark,
-                                        borderRadius: BorderRadius.circular(6),
-                                      ),
-                                      child: const Text(
-                                        'FREE',
-                                        style: TextStyle(
-                                          fontSize: 9,
-                                          fontWeight: FontWeight.w800,
-                                          color: Color(0xFF78350F),
-                                          letterSpacing: 0.5,
-                                        ),
-                                      ),
-                                    ),
-                                  ),
-                              ],
-                            ),
-                          ),
-                        );
-                      }
-
-                      // ── Create / locked-create card ────────────────────
-                      if (isPro) {
-                        // Subscribed: active "New Workout" card
-                        return GestureDetector(
-                          onTap: () {
-                            // TODO: navigate to workout creation screen
-                            ScaffoldMessenger.of(ctx).showSnackBar(
-                              const SnackBar(
-                                content: Text('Workout builder coming soon'),
-                                duration: Duration(seconds: 2),
-                              ),
-                            );
-                          },
-                          child: Container(
-                            width: 110,
-                            decoration: BoxDecoration(
-                              border: Border.all(
-                                color: AppColors.surfaceLight,
-                                width: 2,
-                              ),
-                              borderRadius: BorderRadius.circular(16),
-                            ),
-                            child: const Column(
-                              mainAxisAlignment: MainAxisAlignment.center,
-                              children: [
-                                Icon(
-                                  Icons.add_circle_outline,
-                                  size: 28,
-                                  color: AppColors.textSecondary,
-                                ),
-                                SizedBox(height: 6),
-                                Text(
-                                  'New\nWorkout',
-                                  textAlign: TextAlign.center,
-                                  style: TextStyle(
-                                    fontSize: 11,
-                                    fontWeight: FontWeight.w600,
-                                    color: AppColors.textSecondary,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        );
-                      } else {
-                        // Free user: locked card → upgrade prompt
-                        return GestureDetector(
-                          onTap: () => UpgradePromptBottomSheet.showCustom(
-                            context: ctx,
-                            title: 'Custom Workouts',
-                            message:
-                                'Create and save personalized workout plans with custom exercises, sets, reps, and rest times.',
-                            detail:
-                                'Available on Monthly and Annual plans. Your free "Full Body Starter" plan is always accessible.',
-                            actionLabel: 'Upgrade to Premium',
-                            onUpgrade: onUpgradeTapped,
-                          ),
-                          child: Container(
-                            width: 110,
-                            decoration: BoxDecoration(
-                              color: AppColors.backgroundLight,
-                              borderRadius: BorderRadius.circular(16),
-                              border: Border.all(
-                                color: AppColors.surfaceLight,
-                                width: 1.5,
-                              ),
-                            ),
-                            child: Column(
-                              mainAxisAlignment: MainAxisAlignment.center,
-                              children: [
-                                Icon(
-                                  Icons.lock_outline,
-                                  size: 24,
-                                  color: AppColors.textLight,
-                                ),
-                                const SizedBox(height: 6),
-                                Text(
-                                  'Create\nWorkout',
-                                  textAlign: TextAlign.center,
-                                  style: TextStyle(
-                                    fontSize: 11,
-                                    fontWeight: FontWeight.w600,
-                                    color: AppColors.textLight,
-                                  ),
-                                ),
-                                const SizedBox(height: 4),
-                                Container(
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: 6,
-                                    vertical: 2,
-                                  ),
-                                  decoration: BoxDecoration(
-                                    color: AppColors.primaryLemon,
-                                    borderRadius: BorderRadius.circular(6),
-                                  ),
-                                  child: const Text(
-                                    'PREMIUM',
-                                    style: TextStyle(
-                                      fontSize: 8,
-                                      fontWeight: FontWeight.w800,
-                                      color: AppColors.textOnYellow,
-                                      letterSpacing: 0.3,
-                                    ),
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        );
-                      }
-                    },
-                  ),
-                );
-              },
-            ),
-            // ── Divider ──────────────────────────────────────────────────
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 20, 16, 0),
-              child: Row(
-                children: [
-                  const Expanded(child: Divider(color: AppColors.surfaceLight)),
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 12),
-                    child: Text(
-                      'All Activities',
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: AppColors.textLight,
-                      ),
-                    ),
-                  ),
-                  const Expanded(child: Divider(color: AppColors.surfaceLight)),
-                ],
-              ),
-            ),
-            const SizedBox(height: 8),
-            // ── Activity type grid ────────────────────────────────────────
-            Flexible(
-              child: GridView.builder(
-                shrinkWrap: true,
-                physics: const ClampingScrollPhysics(),
-                padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
-                gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                  crossAxisCount: 3,
-                  mainAxisSpacing: 12,
-                  crossAxisSpacing: 12,
-                  childAspectRatio: 1,
-                ),
-                itemCount: ActivityType.predefinedTypes.length,
-                itemBuilder: (_, i) {
-                  final type = ActivityType.predefinedTypes[i];
-                  return GestureDetector(
-                    onTap: () => onSelected(type),
-                    child: Container(
-                      decoration: BoxDecoration(
-                        gradient: AppColors.warmGradient,
-                        borderRadius: BorderRadius.circular(16),
-                      ),
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Text(type.icon, style: const TextStyle(fontSize: 28)),
-                          const SizedBox(height: 6),
-                          Text(
-                            type.name,
-                            textAlign: TextAlign.center,
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
-                              fontSize: 11,
-                              fontWeight: FontWeight.w600,
-                              color: AppColors.textOnYellow,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  );
-                },
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
 // ─── Week stat item ───────────────────────────────────────────────────────────
 
 class _WeekStatItem extends StatelessWidget {

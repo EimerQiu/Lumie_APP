@@ -64,54 +64,56 @@ class _SleepHistoryScreenState extends State<SleepHistoryScreen> {
       body: _isLoading
           ? const Center(child: CircularProgressIndicator())
           : _errorMessage != null
-              ? Center(
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      const Icon(
-                        Icons.error_outline,
-                        size: 64,
-                        color: AppColors.error,
-                      ),
-                      const SizedBox(height: 16),
-                      Text(
-                        'Failed to load sleep history',
-                        style: TextStyle(
-                          fontSize: 16,
-                          color: AppColors.textSecondary,
-                        ),
-                      ),
-                      const SizedBox(height: 24),
-                      ElevatedButton(
-                        onPressed: _loadSleepHistory,
-                        child: const Text('Retry'),
-                      ),
-                    ],
+          ? Center(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  const Icon(
+                    Icons.error_outline,
+                    size: 64,
+                    color: AppColors.error,
                   ),
-                )
-              : SingleChildScrollView(
-                  padding: const EdgeInsets.all(24),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      if (_summary != null) _buildWeeklySummary(),
-                      const SizedBox(height: 24),
-                      const Text(
-                        'Last 7 Nights',
-                        style: TextStyle(
-                          fontSize: 18,
-                          fontWeight: FontWeight.bold,
-                          color: AppColors.textPrimary,
-                        ),
-                      ),
-                      const SizedBox(height: 16),
-                      ..._sleepHistory.map((session) => Padding(
-                            padding: const EdgeInsets.only(bottom: 12),
-                            child: _buildSleepSessionCard(session),
-                          )),
-                    ],
+                  const SizedBox(height: 16),
+                  Text(
+                    'Failed to load sleep history',
+                    style: TextStyle(
+                      fontSize: 16,
+                      color: AppColors.textSecondary,
+                    ),
                   ),
-                ),
+                  const SizedBox(height: 24),
+                  ElevatedButton(
+                    onPressed: _loadSleepHistory,
+                    child: const Text('Retry'),
+                  ),
+                ],
+              ),
+            )
+          : SingleChildScrollView(
+              padding: const EdgeInsets.all(24),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  if (_summary != null) _buildWeeklySummary(),
+                  const SizedBox(height: 24),
+                  const Text(
+                    'Last 7 Nights',
+                    style: TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                      color: AppColors.textPrimary,
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  ..._sleepHistory.map(
+                    (session) => Padding(
+                      padding: const EdgeInsets.only(bottom: 12),
+                      child: _buildSleepSessionCard(session),
+                    ),
+                  ),
+                ],
+              ),
+            ),
     );
   }
 
@@ -169,11 +171,7 @@ class _SleepHistoryScreenState extends State<SleepHistoryScreen> {
   Widget _buildSummaryMetric(String label, String value, IconData icon) {
     return Column(
       children: [
-        Icon(
-          icon,
-          size: 24,
-          color: AppColors.textOnYellow,
-        ),
+        Icon(icon, size: 24, color: AppColors.textOnYellow),
         const SizedBox(height: 8),
         Text(
           value,
@@ -300,13 +298,23 @@ class _SleepHistoryScreenState extends State<SleepHistoryScreen> {
     } else if (difference == 1) {
       return 'Yesterday';
     } else {
-      final weekday = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'][dateTime.weekday - 1];
+      final weekday = [
+        'Mon',
+        'Tue',
+        'Wed',
+        'Thu',
+        'Fri',
+        'Sat',
+        'Sun',
+      ][dateTime.weekday - 1];
       return '$weekday, ${dateTime.month}/${dateTime.day}';
     }
   }
 
   String _formatTime(DateTime dateTime) {
-    final hour = dateTime.hour > 12 ? dateTime.hour - 12 : (dateTime.hour == 0 ? 12 : dateTime.hour);
+    final hour = dateTime.hour > 12
+        ? dateTime.hour - 12
+        : (dateTime.hour == 0 ? 12 : dateTime.hour);
     final period = dateTime.hour >= 12 ? 'PM' : 'AM';
     final minute = dateTime.minute.toString().padLeft(2, '0');
     return '$hour:$minute $period';

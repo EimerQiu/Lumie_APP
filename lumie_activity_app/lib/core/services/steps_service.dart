@@ -4,6 +4,7 @@ import '../constants/api_constants.dart';
 import 'auth_service.dart';
 import '../../shared/models/steps_models.dart';
 import '../../shared/models/ring_models.dart';
+export '../../shared/models/steps_models.dart' show ActivityGoalType, ActivityGoalSettings;
 
 /// Syncs ring step data to the backend and reads daily step history.
 class StepsService {
@@ -89,6 +90,45 @@ class StepsService {
 
       if (response.statusCode == 200) {
         return StepGoal.fromJson(json.decode(response.body) as Map<String, dynamic>);
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  // ─── Goal settings ────────────────────────────────────────────────────────
+
+  /// Fetch the user's persisted goal-type preference + condition defaults.
+  Future<ActivityGoalSettings?> getGoalSettings() async {
+    try {
+      final response = await http
+          .get(
+            Uri.parse('${ApiConstants.baseUrl}/steps/goal-settings'),
+            headers: _headers,
+          )
+          .timeout(const Duration(seconds: 5));
+
+      if (response.statusCode == 200) {
+        return ActivityGoalSettings.fromJson(
+            json.decode(response.body) as Map<String, dynamic>);
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  /// Persist the user's goal-type preference and optional manual override.
+  Future<ActivityGoalSettings?> updateGoalSettings(ActivityGoalSettings settings) async {
+    try {
+      final response = await http
+          .put(
+            Uri.parse('${ApiConstants.baseUrl}/steps/goal-settings'),
+            headers: _headers,
+            body: json.encode(settings.toJson()),
+          )
+          .timeout(const Duration(seconds: 10));
+
+      if (response.statusCode == 200) {
+        return ActivityGoalSettings.fromJson(
+            json.decode(response.body) as Map<String, dynamic>);
       }
     } catch (_) {}
     return null;

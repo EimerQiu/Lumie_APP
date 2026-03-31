@@ -2,25 +2,28 @@ import 'package:flutter/material.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../shared/widgets/gradient_card.dart';
 
-/// Card displaying adaptive activity goal with a gamified progress bar
+/// Card displaying adaptive activity goal with a gamified progress bar.
+/// Supports both steps and minutes modes via [goalValue], [currentValue], [unitLabel].
 class AdaptiveGoalCard extends StatelessWidget {
-  final int recommendedMinutes;
-  final int currentMinutes;
+  final int goalValue;
+  final int currentValue;
+  final String unitLabel; // 'min' or 'steps'
   final String reason;
   final bool isReduced;
   final List<String> factors;
 
   const AdaptiveGoalCard({
     super.key,
-    required this.recommendedMinutes,
-    required this.currentMinutes,
+    required this.goalValue,
+    required this.currentValue,
+    required this.unitLabel,
     required this.reason,
     required this.isReduced,
     required this.factors,
   });
 
   double get _progress =>
-      (currentMinutes / recommendedMinutes).clamp(0.0, 1.0);
+      (currentValue / goalValue).clamp(0.0, 1.0);
 
   String get _rankLabel {
     if (_progress >= 1.0) return 'Champion! 🏆';
@@ -94,7 +97,7 @@ class AdaptiveGoalCard extends StatelessWidget {
               ),
               const SizedBox(height: 2),
               Text(
-                '$recommendedMinutes minutes',
+                '$goalValue $unitLabel',
                 style: const TextStyle(
                   fontSize: 24,
                   fontWeight: FontWeight.bold,
@@ -148,7 +151,7 @@ class AdaptiveGoalCard extends StatelessWidget {
               ),
             ),
             Text(
-              '$currentMinutes / $recommendedMinutes min',
+              '$currentValue / $goalValue $unitLabel',
               style: const TextStyle(
                 fontSize: 12,
                 color: AppColors.textSecondary,

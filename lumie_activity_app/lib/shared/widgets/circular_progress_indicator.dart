@@ -110,18 +110,21 @@ class _GradientCircularPainter extends CustomPainter {
   }
 }
 
-/// Activity ring widget similar to fitness apps
+/// Activity ring widget similar to fitness apps.
+/// Supports both steps and minutes modes via [currentValue], [goalValue], [unitLabel].
 class ActivityRing extends StatelessWidget {
   final double progress;
-  final int currentMinutes;
-  final int goalMinutes;
+  final int currentValue;
+  final int goalValue;
+  final String unitLabel; // 'min' or 'steps'
   final double size;
 
   const ActivityRing({
     super.key,
     required this.progress,
-    required this.currentMinutes,
-    required this.goalMinutes,
+    required this.currentValue,
+    required this.goalValue,
+    required this.unitLabel,
     this.size = 200,
   });
 
@@ -150,7 +153,7 @@ class ActivityRing extends StatelessWidget {
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
             Text(
-              '$currentMinutes',
+              '$currentValue',
               style: TextStyle(
                 fontSize: size / 4,
                 fontWeight: FontWeight.bold,
@@ -158,7 +161,7 @@ class ActivityRing extends StatelessWidget {
               ),
             ),
             Text(
-              'of $goalMinutes min',
+              'of $goalValue $unitLabel',
               style: TextStyle(
                 fontSize: size / 12,
                 color: AppColors.textSecondary,

@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
+import 'package:provider/provider.dart';
+import '../../wellness/providers/wellness_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
 import '../../../core/theme/app_colors.dart';
@@ -1242,13 +1244,15 @@ class _AdviceTabState extends State<_AdviceTab> {
           const SizedBox(height: 20),
           _sectionLabel('Check-Ins  ·  $_checkInFreq'),
           const SizedBox(height: 8),
-          _CheckInCard(
-            period: 'Today',
-            metrics: [
-              ('Activity', '42 min', Icons.directions_run),
-              ('Sleep', '7h 12m', Icons.bedtime_outlined),
-              ('Fatigue', '72 / 100', Icons.battery_charging_full),
-            ],
+          Consumer<WellnessProvider>(
+            builder: (context, wellness, _) => _CheckInCard(
+              period: 'Today',
+              metrics: [
+                ('Activity', '42 min', Icons.directions_run),
+                ('Sleep', '7h 12m', Icons.bedtime_outlined),
+                ('Fatigue', wellness.fatigue.fullLabel, Icons.battery_charging_full),
+              ],
+            ),
           ),
           _CheckInCard(
             period: 'This Week',

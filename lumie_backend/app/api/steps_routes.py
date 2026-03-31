@@ -5,7 +5,13 @@ from fastapi import APIRouter, Depends, Query
 
 from ..services.auth_service import get_current_user_id
 from ..services.steps_service import steps_service
-from ..models.steps import StepSyncRequest, DailyStepResponse, StepGoalResponse
+from ..models.steps import (
+    StepSyncRequest,
+    DailyStepResponse,
+    StepGoalResponse,
+    GoalSettingsResponse,
+    GoalSettingsUpdate,
+)
 
 router = APIRouter(prefix="/steps", tags=["steps"])
 
@@ -41,3 +47,22 @@ async def get_step_goal(
     data is found.
     """
     return await steps_service.get_goal(user_id, date or datetime.utcnow())
+
+
+@router.get("/goal-settings", response_model=GoalSettingsResponse)
+async def get_goal_settings(
+    user_id: str = Depends(get_current_user_id),
+):
+    """Return the user's goal-type preference and condition-adjusted defaults."""
+    return await steps_service.get_goal_settings(user_id)
+
+
+@router.put("/goal-settings", response_model=GoalSettingsResponse)
+async def update_goal_settings(
+    body: GoalSettingsUpdate,
+    user_id: str = Depends(get_current_user_id),
+):
+    """Persist the user's goal-type preference and optional manual override."""
+    return await steps_service.update_goal_settings(
+        user_id, body.goal_type, body.custom_goal
+    )

@@ -332,7 +332,11 @@ class RingBleService {
 
   // ─── Heart Rate ───────────────────────────────────────────────────────────
 
-  /// Command 0x55 — Fetch today's stored HR history from the ring.
+  /// Command 0x55 — Fetch stored HR history from the ring.
+  ///
+  /// Returns all valid HR readings from the past 24 hours so that nighttime
+  /// readings (e.g. 11 PM – midnight from last night) are captured alongside
+  /// this morning's readings and can be matched to sleep session windows.
   Future<List<HrDataPoint>> fetchHrHistory() async {
     if (_notifyChar == null) {
       debugPrint('[Ring BLE] fetchHrHistory: not connected');
@@ -340,7 +344,7 @@ class RingBleService {
     }
     debugPrint('[Ring BLE] fetchHrHistory: sending 0x55');
 
-    final today = DateTime.now();
+    final cutoff = DateTime.now().subtract(const Duration(hours: 24));
     final results = <HrDataPoint>[];
     final completer = Completer<List<HrDataPoint>>();
     StreamSubscription<List<int>>? sub;
@@ -349,7 +353,7 @@ class RingBleService {
       if (data.isEmpty || data[0] != 0x55) return;
 
       if (data.length >= 2 && data[1] == 0xFF) {
-        debugPrint('[Ring BLE] HR history end marker received, ${results.length} records today');
+        debugPrint('[Ring BLE] HR history end marker — ${results.length} record(s) in last 24 h');
         if (!completer.isCompleted) completer.complete(results);
         return;
       }
@@ -361,9 +365,9 @@ class RingBleService {
 
       final recordTime = _parseRingTimestamp(data, 3);
       if (recordTime == null) return;
-      if (recordTime.year == today.year &&
-          recordTime.month == today.month &&
-          recordTime.day == today.day) {
+      // Accept all readings within the past 24 hours so nighttime sleep HR
+      // (11 PM – midnight from the previous calendar day) is included.
+      if (recordTime.isAfter(cutoff)) {
         results.add(HrDataPoint(time: recordTime, bpm: hr));
       }
     });

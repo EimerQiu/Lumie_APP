@@ -11,9 +11,15 @@ import '../../../shared/widgets/intensity_badge.dart';
 import '../../../shared/widgets/ring_status_indicator.dart';
 import '../../activity/screens/activity_history_screen.dart';
 import '../../ring/providers/ring_provider.dart';
+import '../../wellness/providers/wellness_provider.dart';
 import '../../heart_rate/providers/heart_rate_provider.dart';
+import '../../../shared/models/steps_models.dart';
+import '../../activity/providers/today_steps_provider.dart';
+import '../../settings/providers/activity_goal_provider.dart';
+import '../../sleep/providers/sleep_provider.dart';
 import '../../sleep/screens/sleep_screen.dart';
 import '../../tasks/providers/tasks_provider.dart';
+import '../../wellness/screens/wellness_detail_screen.dart';
 import '../widgets/activity_summary_card.dart';
 import '../widgets/quick_actions_section.dart';
 import '../widgets/adaptive_goal_card.dart';
@@ -29,18 +35,31 @@ class DashboardScreen extends StatefulWidget {
 
 class _DashboardScreenState extends State<DashboardScreen>
     with WidgetsBindingObserver {
-  // Mock data for demo
-  final int _currentMinutes = 42;
-  final int _goalMinutes = 60;
+  // Rest-day reduced targets (not measurements — goal values only).
   static const int _restDayGoalMinutes = 20;
+  static const int _restDayGoalSteps = 2667; // ~20 min equivalent
+
   final ActivityIntensity _dominantIntensity = ActivityIntensity.moderate;
 
   bool _isRestDay = false;
 
-  /// Activity score relative to whichever goal is active today.
-  int get _activityScore {
-    final goal = _isRestDay ? _restDayGoalMinutes : _goalMinutes;
-    return ((_currentMinutes / goal) * 100).round().clamp(0, 100);
+  /// Activity score: today's real progress vs. the active goal.
+  /// Reads from [TodayStepsProvider] so the same value drives both the
+  /// score card and every other widget on this screen.
+  int _activityScore(
+      ActivityGoalProvider goalProv, TodayStepsProvider stepsProv) {
+    if (goalProv.goalType == ActivityGoalType.steps) {
+      final goal =
+          _isRestDay ? _restDayGoalSteps : goalProv.effectiveGoalSteps;
+      if (goal <= 0) return 0;
+      return ((stepsProv.todaySteps / goal) * 100).round().clamp(0, 100);
+    }
+    final goal =
+        _isRestDay ? _restDayGoalMinutes : goalProv.effectiveGoalMinutes;
+    if (goal <= 0) return 0;
+    return ((stepsProv.todayActiveMinutes / goal) * 100)
+        .round()
+        .clamp(0, 100);
   }
 
   @override
@@ -58,6 +77,10 @@ class _DashboardScreenState extends State<DashboardScreen>
       if (tasksProvider.state == TasksState.initial) {
         tasksProvider.loadTasks();
       }
+      context.read<WellnessProvider>().load();
+      context.read<SleepProvider>().load();
+      context.read<ActivityGoalProvider>().load();
+      context.read<TodayStepsProvider>().load();
     });
   }
 
@@ -109,7 +132,7 @@ class _DashboardScreenState extends State<DashboardScreen>
       }
     } catch (e) {
       // Silently fail - rest day suggestion is not critical
-      print('⚠️ Failed to check rest day suggestion: $e');
+      debugPrint('⚠️ Failed to check rest day suggestion: $e');
     }
   }
 
@@ -145,23 +168,45 @@ class _DashboardScreenState extends State<DashboardScreen>
                 if (!_isRestDay) ...[
                   _buildMainActivityRing(),
                   const SizedBox(height: 24),
-                  _buildTodaysSummary(),
+                  Consumer<TodayStepsProvider>(
+                    builder: (context, stepsProv, _) =>
+                        _buildTodaysSummary(stepsProv),
+                  ),
                   const SizedBox(height: 16),
                 ],
-                AdaptiveGoalCard(
-                  recommendedMinutes: _isRestDay ? 20 : _goalMinutes,
-                  currentMinutes: _currentMinutes,
-                  reason: _isRestDay
-                      ? 'Today is a scheduled rest day. Light movement only — let your body recover!'
-                      : 'Based on your recent rest and activity patterns',
-                  isReduced: _isRestDay,
-                  factors: _isRestDay
-                      ? ['Rest day scheduled', 'Recovery focus', 'Light movement ok']
-                      : [
-                          'Good sleep last night',
-                          'Moderate activity yesterday',
-                          'No fatigue reported',
-                        ],
+                Consumer2<WellnessProvider, ActivityGoalProvider>(
+                  builder: (context, wellness, goalProv, _) {
+                    final stepsProv = context.watch<TodayStepsProvider>();
+                    final fatigueFactor = switch (wellness.fatigue.level) {
+                      _ when !wellness.fatigue.hasData => 'Baseline still learning',
+                      _ => 'Fatigue: ${wellness.fatigue.fullLabel.toLowerCase()}',
+                    };
+                    final isSteps = goalProv.goalType == ActivityGoalType.steps;
+                    final goalValue = _isRestDay
+                        ? (isSteps ? _restDayGoalSteps : _restDayGoalMinutes)
+                        : (isSteps
+                            ? goalProv.effectiveGoalSteps
+                            : goalProv.effectiveGoalMinutes);
+                    final currentValue = isSteps
+                        ? stepsProv.todaySteps
+                        : stepsProv.todayActiveMinutes;
+                    return AdaptiveGoalCard(
+                      goalValue: goalValue,
+                      currentValue: currentValue,
+                      unitLabel: goalProv.goalType.unitLabel,
+                      reason: _isRestDay
+                          ? 'Today is a scheduled rest day. Light movement only — let your body recover!'
+                          : 'Based on your recent rest and activity patterns',
+                      isReduced: _isRestDay,
+                      factors: _isRestDay
+                          ? ['Rest day scheduled', 'Recovery focus', 'Light movement ok']
+                          : [
+                              'Good sleep last night',
+                              'Moderate activity yesterday',
+                              fatigueFactor,
+                            ],
+                    );
+                  },
                 ),
                 const SizedBox(height: 16),
                 _buildRecentActivities(),
@@ -179,87 +224,113 @@ class _DashboardScreenState extends State<DashboardScreen>
   }
 
   Widget _buildScoreRow() {
-    final scores = [
-      _ScoreData(
-        label: 'Fatigue',
-        score: 72,
-        icon: Icons.battery_charging_full,
-        color: const Color(0xFF81C784),
-        onTap: () => Navigator.push(
-          context,
-          MaterialPageRoute(builder: (_) => const SleepScreen()),
-        ),
-      ),
-      _ScoreData(
-        label: 'Sleep',
-        score: 85,
-        icon: Icons.bedtime_outlined,
-        color: const Color(0xFF64B5F6),
-        onTap: () => Navigator.push(
-          context,
-          MaterialPageRoute(builder: (_) => const SleepScreen()),
-        ),
-      ),
-      _ScoreData(
-        label: 'Activity',
-        score: _activityScore,
-        icon: Icons.directions_run,
-        color: const Color(0xFFFFB74D),
-        onTap: () => Navigator.push(
-          context,
-          MaterialPageRoute(builder: (_) => const ActivityHistoryScreen()),
-        ),
-      ),
-      _ScoreData(
-        label: 'Stress',
-        score: 78,
-        icon: Icons.self_improvement,
-        color: const Color(0xFFB39DDB),
-        onTap: () => Navigator.push(
-          context,
-          MaterialPageRoute(builder: (_) => const SleepScreen()),
-        ),
-      ),
-    ];
+    return Consumer2<WellnessProvider, SleepProvider>(
+      builder: (context, wellness, sleep, _) {
+        final goalProv = context.watch<ActivityGoalProvider>();
+        final fatigue = wellness.fatigue;
+        final stress = wellness.stress;
+        final hasSleepData = sleep.latestSleep != null;
+        final sleepScore = hasSleepData ? sleep.sleepScore : 0;
 
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16),
-      child: GradientCard(
-        gradient: AppColors.cardGradient,
-        opacity: 0.70,
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text(
-              'Today\'s Scores',
-              style: TextStyle(
-                fontSize: 13,
-                fontWeight: FontWeight.w600,
-                color: AppColors.textSecondary,
-                letterSpacing: 0.5,
+        final scores = [
+          _ScoreData(
+            label: 'Fatigue',
+            score: 0,
+            centerLabel: fatigue.centerLabel,
+            icon: Icons.battery_charging_full,
+            color: fatigue.color,
+            progress: fatigue.progress,
+            onTap: () => Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (_) => const WellnessDetailScreen(metric: WellnessMetric.fatigue),
               ),
             ),
-            const SizedBox(height: 12),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceAround,
-              children: scores.map((s) => _buildScoreCard(s)).toList(),
+          ),
+          _ScoreData(
+            label: 'Sleep',
+            score: sleepScore,
+            centerLabel: hasSleepData ? null : '—',
+            icon: Icons.bedtime_outlined,
+            color: hasSleepData ? const Color(0xFF64B5F6) : AppColors.textLight,
+            progress: hasSleepData ? null : 0.0,
+            onTap: () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const SleepScreen()),
             ),
-          ],
-        ),
-      ),
+          ),
+          _ScoreData(
+            label: 'Activity',
+            score: _activityScore(goalProv, context.watch<TodayStepsProvider>()),
+            icon: Icons.directions_run,
+            color: const Color(0xFFFFB74D),
+            onTap: () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const ActivityHistoryScreen()),
+            ),
+          ),
+          _ScoreData(
+            label: 'Stress',
+            score: 0,
+            centerLabel: stress.centerLabel,
+            icon: Icons.self_improvement,
+            color: stress.color,
+            progress: stress.progress,
+            onTap: () => Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (_) => const WellnessDetailScreen(metric: WellnessMetric.stress),
+              ),
+            ),
+          ),
+        ];
+
+        return Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16),
+          child: GradientCard(
+            gradient: AppColors.cardGradient,
+            opacity: 0.70,
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Today\'s Scores',
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                    color: AppColors.textSecondary,
+                    letterSpacing: 0.5,
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceAround,
+                  children: scores.map((s) => _buildScoreCard(s)).toList(),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
     );
   }
 
   Widget _buildScoreCard(_ScoreData data) {
+    final bool usesLabel = data.centerLabel != null;
+
     final Color scoreColor;
-    if (data.score >= 80) {
+    if (usesLabel) {
+      scoreColor = data.color;
+    } else if (data.score >= 80) {
       scoreColor = const Color(0xFF81C784);
     } else if (data.score >= 60) {
       scoreColor = const Color(0xFFFFB74D);
     } else {
       scoreColor = const Color(0xFFE57373);
     }
+
+    final double ringProgress = data.progress ?? (data.score / 100);
 
     return GestureDetector(
       onTap: data.onTap,
@@ -272,15 +343,15 @@ class _DashboardScreenState extends State<DashboardScreen>
                 width: 72,
                 height: 72,
                 child: CustomPaint(
-                  painter: _StarPainter(color: scoreColor, strokeWidth: 1.5, progress: data.score / 100),
+                  painter: _StarPainter(color: scoreColor, strokeWidth: 1.5, progress: ringProgress),
                 ),
               ),
               Text(
-                '${data.score}',
-                style: const TextStyle(
-                  fontSize: 15,
+                usesLabel ? data.centerLabel! : '${data.score}',
+                style: TextStyle(
+                  fontSize: usesLabel ? 11 : 15,
                   fontWeight: FontWeight.bold,
-                  color: AppColors.textPrimary,
+                  color: usesLabel ? scoreColor : AppColors.textPrimary,
                 ),
               ),
             ],
@@ -490,6 +561,14 @@ class _DashboardScreenState extends State<DashboardScreen>
                 Navigator.pushNamed(context, '/settings/rest-days');
               },
             ),
+            _DrawerItem(
+              icon: Icons.flag_outlined,
+              label: 'Activity Goal',
+              onTap: () {
+                Navigator.pop(context);
+                Navigator.pushNamed(context, '/settings/activity-goal');
+              },
+            ),
             const Spacer(),
             Padding(
               padding: const EdgeInsets.all(24),
@@ -505,27 +584,38 @@ class _DashboardScreenState extends State<DashboardScreen>
   }
 
   Widget _buildMainActivityRing() {
-    return GradientCard(
-      gradient: AppColors.cardGradient,
-      opacity: 0.70,
-      padding: const EdgeInsets.all(24),
-      child: Column(
-        children: [
-          const Text(
-            'Today\'s Activity',
-            style: TextStyle(
-              fontSize: 28,
-              fontWeight: FontWeight.bold,
-              color: AppColors.textPrimary,
-            ),
-          ),
-          const SizedBox(height: 20),
-          ActivityRing(
-            progress: _currentMinutes / _goalMinutes,
-            currentMinutes: _currentMinutes,
-            goalMinutes: _goalMinutes,
-            size: 180,
-          ),
+    return Consumer<ActivityGoalProvider>(
+      builder: (context, goalProv, _) {
+        final stepsProv = context.watch<TodayStepsProvider>();
+        final isSteps = goalProv.goalType == ActivityGoalType.steps;
+        final currentValue =
+            isSteps ? stepsProv.todaySteps : stepsProv.todayActiveMinutes;
+        final goalValue = isSteps
+            ? goalProv.effectiveGoalSteps
+            : goalProv.effectiveGoalMinutes;
+        final unitLabel = goalProv.goalType.unitLabel;
+        return GradientCard(
+          gradient: AppColors.cardGradient,
+          opacity: 0.70,
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            children: [
+              const Text(
+                'Today\'s Activity',
+                style: TextStyle(
+                  fontSize: 28,
+                  fontWeight: FontWeight.bold,
+                  color: AppColors.textPrimary,
+                ),
+              ),
+              const SizedBox(height: 20),
+              ActivityRing(
+                progress: currentValue / goalValue,
+                currentValue: currentValue,
+                goalValue: goalValue,
+                unitLabel: unitLabel,
+                size: 180,
+              ),
           const SizedBox(height: 20),
           Row(
             mainAxisAlignment: MainAxisAlignment.center,
@@ -543,13 +633,15 @@ class _DashboardScreenState extends State<DashboardScreen>
         ],
       ),
     );
+      },
+    );
   }
 
-  Widget _buildTodaysSummary() {
-    return const ActivitySummaryCard(
-      ringTrackedMinutes: 35,
-      manualMinutes: 7,
-      activitiesCount: 3,
+  Widget _buildTodaysSummary(TodayStepsProvider stepsProv) {
+    return ActivitySummaryCard(
+      ringTrackedMinutes: stepsProv.todayActiveMinutes,
+      manualMinutes: 0,
+      activitiesCount: stepsProv.hasData ? 1 : 0,
     );
   }
 
@@ -795,6 +887,10 @@ class _StarPainter extends CustomPainter {
 class _ScoreData {
   final String label;
   final int score;
+  /// When set, replaces the numeric score in the star ring centre.
+  final String? centerLabel;
+  /// When set, overrides the automatic score-based progress and color.
+  final double? progress;
   final IconData icon;
   final Color color;
   final VoidCallback onTap;
@@ -802,6 +898,8 @@ class _ScoreData {
   const _ScoreData({
     required this.label,
     required this.score,
+    this.centerLabel,
+    this.progress,
     required this.icon,
     required this.color,
     required this.onTap,

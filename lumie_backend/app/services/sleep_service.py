@@ -36,13 +36,13 @@ def _is_nighttime_session(bedtime: datetime, wake_time: datetime) -> bool:
 
     Valid window:
       - Bedtime between 8 PM (20:00) and 6 AM (inclusive)
-      - Wake time before 1 PM (13:00)
+      - Wake time before 12 PM (noon)
 
-    Afternoon and mid-day segments (e.g. 3:46 PM – 4:41 PM) are excluded.
+    Afternoon naps and mid-day segments are excluded.
     Note: timestamps are treated as local time (as stored from the ring).
     """
     bed_hour = bedtime.hour
-    return (bed_hour >= 20 or bed_hour < 6) and wake_time.hour < 13
+    return (bed_hour >= 20 or bed_hour < 6) and wake_time.hour < 12
 
 
 def _passes_quality_filter(total_minutes: int, quality_score: float,
@@ -50,20 +50,25 @@ def _passes_quality_filter(total_minutes: int, quality_score: float,
     """Return False for sessions that look like ring noise rather than real sleep.
 
     Rejected:
-      - Shorter than 30 minutes of actual sleep
-      - Quality score below 5 (2 % quality for a 45-min all-light session is noise)
-      - 100 % light sleep with zero deep/REM and under 60 minutes total
+      - Shorter than 180 minutes (3 continuous hours) of actual sleep
+      - Quality score below 5
+      - Completely all-light with zero deep/REM (ring worn on table, not person)
+      - No stage data at all
     """
-    if total_minutes < 30:
+    if total_minutes < 180:
         return False
     if quality_score < 5.0:
         return False
-    # All-light sessions shorter than an hour are likely motion artefacts
+    # All-light with no deep or REM → ring was not being worn (no body temperature
+    # / PPG signal variation to produce real sleep staging)
     if stages:
         has_deep_or_rem = any(s.get("stage") in ("deep", "rem") and
                               s.get("duration_minutes", 0) > 0 for s in stages)
-        if not has_deep_or_rem and total_minutes < 60:
+        if not has_deep_or_rem:
             return False
+    else:
+        # No stage data at all — discard
+        return False
     return True
 
 

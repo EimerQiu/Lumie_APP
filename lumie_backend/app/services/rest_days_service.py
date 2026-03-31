@@ -1,5 +1,5 @@
 """Service for managing user rest days."""
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
@@ -49,21 +49,59 @@ class RestDaysService:
         return False
 
     async def _get_latest_sleep(self, user_id: str) -> Optional[dict]:
-        """
-        Get the latest sleep session for a user.
+        """Return the most recent *valid* sleep session for rest-day logic.
 
-        Args:
-            user_id: The user's ID
-
-        Returns:
-            Latest sleep session data or None
+        Applies the same validity checks as SleepService.get_latest() so that
+        ring-noise or empty sessions never trigger a rest-day suggestion:
+          - Bedtime within nighttime window (8 PM – 6 AM)
+          - Wake time before noon (12 PM)
+          - At least 180 minutes of actual sleep (3 continuous hours)
+          - Sleep quality score ≥ 5
+          - Session recorded within the last 3 days
+          - At least some non-light stage data (deep or REM > 0)
         """
-        # Query the sleep collection for the most recent sleep session
-        sleep_session = await self.db.sleep_sessions.find_one(
-            {"user_id": user_id},
-            sort=[("wake_time", -1)]  # Sort by wake_time descending
+        three_days_ago = datetime.utcnow() - timedelta(days=3)
+        cursor = self.db.sleep_sessions.find(
+            {"user_id": user_id, "bedtime": {"$gte": three_days_ago}},
+            sort=[("wake_time", -1)],
+            limit=20,
         )
-        return sleep_session
+        docs = [doc async for doc in cursor]
+        for doc in docs:
+            bedtime = doc.get("bedtime")
+            wake_time = doc.get("wake_time")
+            total_minutes = doc.get("total_sleep_minutes", 0)
+            quality = doc.get("sleep_quality_score", 0)
+            stages = doc.get("stages", [])
+
+            if not (bedtime and wake_time):
+                continue
+            # Must be a ring-sourced session (not manually entered)
+            if doc.get("source") != "ring":
+                continue
+            # Nighttime window: bedtime 8 PM–6 AM, wake before noon
+            bed_hour = bedtime.hour
+            if not ((bed_hour >= 20 or bed_hour < 6) and wake_time.hour < 12):
+                continue
+            # Minimum 3 hours (180 minutes)
+            if total_minutes < 180:
+                continue
+            # Quality gate
+            if quality < 5:
+                continue
+            # Must have at least some deep or REM data (ring was actually worn,
+            # not just sitting on a surface producing motion-only light-sleep)
+            has_real_stages = any(
+                s.get("stage") in ("deep", "rem") and s.get("duration_minutes", 0) > 0
+                for s in stages
+            )
+            if not has_real_stages:
+                continue
+            # Resting HR must be non-zero — confirms PPG was active during sleep
+            if doc.get("resting_heart_rate", 0) <= 0:
+                continue
+            return doc
+        return None
 
     async def should_suggest_rest_day(self, user_id: str) -> tuple[bool, dict]:
         """

@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import '../../../core/services/ring_ble_service.dart';
 import '../../../core/services/ring_service.dart';
+import '../../../core/services/sleep_service.dart';
 import '../../../shared/models/ring_models.dart';
 import '../../../shared/models/heart_rate_models.dart';
 
@@ -85,7 +86,14 @@ class RingProvider extends ChangeNotifier {
   Future<void> tryReconnect() => _tryReconnect();
 
   Future<void> _tryReconnect() async {
-    if (_bleService.isConnected) return;
+    if (_bleService.isConnected) {
+      // Already connected at the BLE layer — ensure provider state matches.
+      if (_state != RingProviderState.paired) {
+        _state = RingProviderState.paired;
+        notifyListeners();
+      }
+      return;
+    }
     final deviceId = _ringInfo?.ringDeviceId;
     if (deviceId == null) return;
     debugPrint('[Ring] tryReconnect: $deviceId');
@@ -112,6 +120,7 @@ class RingProvider extends ChangeNotifier {
       _state = RingProviderState.paired;
       debugPrint('[Ring] Reconnect succeeded');
       notifyListeners();
+      _syncSleepInBackground();
     } catch (e) {
       debugPrint('[Ring] Reconnect failed: $e');
       _ringInfo = _ringInfo?.copyWith(connectionStatus: RingConnectionStatus.disconnected);
@@ -120,20 +129,25 @@ class RingProvider extends ChangeNotifier {
     }
   }
 
-  /// Auto-reconnect on unexpected disconnect — retries up to 3 times with
-  /// exponential backoff (2s, 4s, 8s).
+  /// Auto-reconnect on unexpected disconnect — retries every 30 s for up to
+  /// 5 minutes (10 attempts) before giving up and showing "disconnected".
+  /// First attempt fires after a 5 s stabilisation delay so the BLE stack
+  /// has time to notice the disconnect before we try again.
   Future<void> _autoReconnectWithRetry() async {
-    const maxAttempts = 3;
+    const maxAttempts = 10;
+    const firstDelay = Duration(seconds: 5);
+    const retryInterval = Duration(seconds: 30);
+
     for (var attempt = 1; attempt <= maxAttempts; attempt++) {
       final deviceId = _ringInfo?.ringDeviceId;
       if (deviceId == null) return; // Ring unpaired while retrying
       if (_bleService.isConnected) return; // Already reconnected
 
-      final delay = Duration(seconds: 2 * attempt);
+      final delay = attempt == 1 ? firstDelay : retryInterval;
       debugPrint('[Ring] Auto-reconnect attempt $attempt/$maxAttempts in ${delay.inSeconds}s');
       await Future.delayed(delay);
 
-      // Check again after the delay
+      // Re-check after delay
       if (_bleService.isConnected || _ringInfo?.ringDeviceId == null) return;
 
       try {
@@ -151,16 +165,76 @@ class RingProvider extends ChangeNotifier {
         _state = RingProviderState.paired;
         debugPrint('[Ring] Auto-reconnect succeeded on attempt $attempt');
         notifyListeners();
+        _syncSleepInBackground();
         return;
       } catch (e) {
         debugPrint('[Ring] Auto-reconnect attempt $attempt failed: $e');
         if (attempt == maxAttempts) {
-          debugPrint('[Ring] All reconnect attempts exhausted');
+          debugPrint('[Ring] All reconnect attempts exhausted after 5 min');
           _ringInfo = _ringInfo?.copyWith(connectionStatus: RingConnectionStatus.disconnected);
           _state = RingProviderState.disconnected;
           notifyListeners();
         }
       }
+    }
+  }
+
+  // ─── Background sleep sync ────────────────────────────────────────────────
+
+  /// Triggered automatically after every successful connect / reconnect.
+  /// Fetches sleep records (0x53) and HR history (0x55) from the ring, then
+  /// uploads to the backend.  Retries the sleep fetch once if the first
+  /// attempt times out before the end-of-data marker is received.
+  /// All errors are caught — this must never disrupt the connection flow.
+  void _syncSleepInBackground() {
+    _runSleepSync().ignore();
+  }
+
+  Future<void> _runSleepSync() async {
+    if (!isConnected) return;
+    debugPrint('[Ring] Background sleep sync: starting');
+
+    try {
+      var (:records, :isComplete) = await _bleService.fetchSleepHistory();
+      debugPrint('[Ring] Sleep fetch: ${records.length} record(s), '
+          'complete=$isComplete');
+
+      // Retry once if the ring timed out before sending the end marker
+      if (!isComplete && records.isNotEmpty) {
+        debugPrint('[Ring] Sleep fetch incomplete — retrying in 3 s');
+        await Future.delayed(const Duration(seconds: 3));
+        if (!isConnected) return;
+        final retry = await _bleService.fetchSleepHistory();
+        if (retry.records.isNotEmpty) {
+          records = retry.records;
+          isComplete = retry.isComplete;
+          debugPrint('[Ring] Retry: ${records.length} record(s), '
+              'complete=$isComplete');
+        }
+      }
+
+      if (records.isEmpty) {
+        debugPrint('[Ring] Sleep sync: no records returned');
+        return;
+      }
+
+      // Fetch HR history for resting-HR computation (non-critical)
+      List<HrDataPoint> hrHistory = [];
+      try {
+        hrHistory = await _bleService.fetchHrHistory();
+        debugPrint('[Ring] HR history: ${hrHistory.length} point(s)');
+      } catch (e) {
+        debugPrint('[Ring] HR history fetch failed (non-critical): $e');
+      }
+
+      await SleepService().syncFromRingRecords(
+        records,
+        isComplete: isComplete,
+        hrHistory: hrHistory,
+      );
+      debugPrint('[Ring] Background sleep sync: complete');
+    } catch (e) {
+      debugPrint('[Ring] Background sleep sync error: $e');
     }
   }
 
