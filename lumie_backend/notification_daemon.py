@@ -398,6 +398,7 @@ async def process_notification_queue(db, client: httpx.AsyncClient) -> None:
     for doc in pending:
         nid = doc["notification_id"]
         recipient_id = doc["recipient_user_id"]
+        notification_type = doc.get("type")
 
         # Look up the recipient's device token
         user = await db.users.find_one(
@@ -408,6 +409,11 @@ async def process_notification_queue(db, client: httpx.AsyncClient) -> None:
 
         if not device_token:
             # No device token — mark as failed so we don't retry forever
+            if notification_type == "ring_command":
+                logger.warning(
+                    "[RingCommand] ❌ No device token for ring_command notification: "
+                    "notification_id=%s user=%s", nid, recipient_id
+                )
             await db.notification_queue.update_one(
                 {"notification_id": nid},
                 {"$set": {"status": "no_token"}},
@@ -436,6 +442,25 @@ async def process_notification_queue(db, client: httpx.AsyncClient) -> None:
             push_type="alert",  # Use alert type for all (reliable delivery)
             priority="10",  # High priority for all (immediate delivery)
         )
+
+        if is_ring_command:
+            if sent:
+                logger.info(
+                    "[RingCommand] ✓ APNs sent: notification_id=%s user=%s "
+                    "request_id=%s command_type=%s token=%s",
+                    nid, recipient_id,
+                    extra_data.get("request_id"),
+                    extra_data.get("command_type"),
+                    device_token[:12]
+                )
+            else:
+                logger.warning(
+                    "[RingCommand] ❌ APNs failed: notification_id=%s user=%s "
+                    "request_id=%s command_type=%s",
+                    nid, recipient_id,
+                    extra_data.get("request_id"),
+                    extra_data.get("command_type")
+                )
 
         new_status = "sent" if sent else "failed"
         await db.notification_queue.update_one(

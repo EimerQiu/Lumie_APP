@@ -120,6 +120,12 @@ import UserNotifications
     didReceiveRemoteNotification userInfo: [AnyHashable: Any],
     fetchCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Void
   ) {
+    // APNs payload has type/request_id at root level, not nested in data
+    let notificationType = userInfo["type"] as? String ?? "unknown"
+    let requestId = userInfo["request_id"] as? String ?? "none"
+    if notificationType == "ring_command" {
+      NSLog("[RingCommand] 📬 Received in background: request_id=%@", requestId)
+    }
     forwardNotification(method: "onNotificationReceived", userInfo: userInfo)
     completionHandler(.newData)
   }
@@ -133,6 +139,11 @@ import UserNotifications
     withCompletionHandler completionHandler: @escaping () -> Void
   ) {
     let userInfo = response.notification.request.content.userInfo
+    let notificationType = userInfo["type"] as? String ?? "unknown"
+    let requestId = userInfo["request_id"] as? String ?? "none"
+    if notificationType == "ring_command" {
+      NSLog("[RingCommand] 👆 Tapped: request_id=%@", requestId)
+    }
     forwardNotification(method: "onNotificationTap", userInfo: userInfo)
     completionHandler()
   }
@@ -144,6 +155,11 @@ import UserNotifications
     withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
   ) {
     let userInfo = notification.request.content.userInfo
+    let notificationType = userInfo["type"] as? String ?? "unknown"
+    let requestId = userInfo["request_id"] as? String ?? "none"
+    if notificationType == "ring_command" {
+      NSLog("[RingCommand] 🎯 Foreground: request_id=%@", requestId)
+    }
     forwardNotification(method: "onNotificationReceived", userInfo: userInfo)
     if #available(iOS 14.0, *) {
       completionHandler([.banner, .sound])

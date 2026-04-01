@@ -304,11 +304,11 @@ class RingProvider extends ChangeNotifier with WidgetsBindingObserver {
   /// reconnect first; successful reconnect will poll pending commands.
   Future<void> handleRemoteRingCommand() async {
     debugPrint(
-      '[RCMD] RingProvider.handleRemoteRingCommand: isConnected=$isConnected isPaired=$isPaired state=$_state',
+      '[RingCommand] 🔄 Handler called: isConnected=$isConnected isPaired=$isPaired state=$_state',
     );
     if (isConnected) {
       debugPrint(
-        '[RCMD] RingProvider: already connected, checking pending commands now',
+        '[RingCommand] ✓ Already connected, checking pending commands...',
       );
       await _checkPendingRingCommandsOnly();
       return;
@@ -316,7 +316,7 @@ class RingProvider extends ChangeNotifier with WidgetsBindingObserver {
 
     if (isPaired) {
       debugPrint(
-        '[RCMD] RingProvider: paired but disconnected, attempting reconnect',
+        '[RingCommand] ⟳ Paired but disconnected, attempting reconnect...',
       );
       await _tryReconnectInternal(runBackgroundSyncAfterConnect: false);
       await _checkPendingRingCommandsOnly();
@@ -324,7 +324,7 @@ class RingProvider extends ChangeNotifier with WidgetsBindingObserver {
     }
 
     debugPrint(
-      '[RCMD] RingProvider: remote ring command ignored because ring is not paired',
+      '[RingCommand] ❌ Ring not paired, ignoring command',
     );
   }
 

@@ -304,8 +304,10 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
     );
 
     if (type == 'ring_command') {
+      final requestId = data['request_id'] as String?;
+      final commandType = data['command_type'] as String?;
       debugPrint(
-        '[RCMD] Detected ring_command payload, forwarding to RingProvider',
+        '[RingCommand] 🎯 Handling ring_command in main: request_id=$requestId command_type=$commandType',
       );
       context.read<RingProvider>().handleRemoteRingCommand();
     } else if (type == null && navigateTo == null) {

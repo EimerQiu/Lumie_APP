@@ -13,7 +13,9 @@
       "Bash(python3 -c \":*)",
       "Bash(head -10 grep -rn \"hr_readings\\\\|heart_rate\\\\|db\\\\.hr\" /Users/ciline/Documents/development/projects/Lumie_APP/lumie_backend/app/services/)",
       "Bash(xcodebuild clean:*)",
-      "Bash(xcodebuild -workspace ios/Runner.xcworkspace -scheme Runner -configuration Debug -derivedDataPath build -verbose)"
+      "Bash(xcodebuild -workspace ios/Runner.xcworkspace -scheme Runner -configuration Debug -derivedDataPath build -verbose)",
+      "Bash(sed -n '71,74p' /Users/ciline/Documents/development/projects/Lumie_APP/lumie_backend/app/skills/system/lumie_internal/ring_live_measure.md)",
+      "Bash(sed -n '106,111p' /Users/ciline/Documents/development/projects/Lumie_APP/lumie_backend/app/skills/system/lumie_internal/ring_live_measure.md)"
     ],
     "additionalDirectories": [
       "/Users/ciline/.claude"

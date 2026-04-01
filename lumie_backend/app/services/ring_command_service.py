@@ -68,10 +68,15 @@ async def create_command(
         "result": None,
         "completed_at": None,
     })
+    logger.info(
+        f"[RingCommand] ⟳ Request created: type={command_type} "
+        f"duration={duration_seconds}s expires_at={_expires_at_iso(command_type, duration_seconds)}"
+    )
 
     # Queue push notification so the phone wakes up and polls
+    notification_id = str(uuid.uuid4())
     await db.notification_queue.insert_one({
-        "notification_id": str(uuid.uuid4()),
+        "notification_id": notification_id,
         "type": "ring_command",
         "recipient_user_id": user_id,
         "title": "Lumie Ring",
@@ -85,8 +90,10 @@ async def create_command(
         "created_at": now,
         "sent_at": None,
     })
-
-    logger.info(f"[RingCommand] Created {command_type} request {request_id} for user {user_id}")
+    logger.info(
+        f"[RingCommand] 📬 Push queued: notification_id={notification_id} "
+        f"for user={user_id} request_id={request_id}"
+    )
     return request_id
 
 
