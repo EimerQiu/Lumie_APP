@@ -60,19 +60,31 @@ class RingProvider extends ChangeNotifier with WidgetsBindingObserver {
     _bleService.onDisconnected = _handleDisconnected;
 
     if (_ringInfo?.isPaired == true) {
-      // Start disconnected; attempt BLE reconnect in the background
       _state = RingProviderState.disconnected;
-      _tryReconnect();
     } else {
       _state = RingProviderState.unpaired;
     }
 
-    // Monitor Bluetooth adapter state
+    // Monitor Bluetooth adapter state and attempt reconnect when BT is ready
     _isBluetoothOn = await RingBleService.isBluetoothOn();
     _btStateSubscription = RingBleService.adapterStateStream.listen((state) {
       _isBluetoothOn = state == BluetoothAdapterState.on;
       notifyListeners();
+
+      // Auto-reconnect when BT becomes available
+      if (_isBluetoothOn && _ringInfo?.isPaired == true && _state == RingProviderState.disconnected) {
+        debugPrint('[Ring] Bluetooth is now on, attempting auto-reconnect');
+        _tryReconnect();
+      }
     });
+
+    // If BT is already on, try reconnect immediately
+    if (_isBluetoothOn && _ringInfo?.isPaired == true) {
+      debugPrint('[Ring] Bluetooth is on at init, attempting initial reconnect');
+      _tryReconnect();
+    } else if (!_isBluetoothOn && _ringInfo?.isPaired == true) {
+      debugPrint('[Ring] Bluetooth not ready at init, will reconnect when ready');
+    }
 
     notifyListeners();
   }
