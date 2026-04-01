@@ -96,6 +96,7 @@ class RingSyncService extends ChangeNotifier {
     Future<List<RingRawTemperatureRecord>> Function()? fetchTemperature,
     Future<List<RingRawSpo2Record>> Function()? fetchSpo2,
   }) async {
+    debugPrint('[RingSync] ⟳ Starting ring data sync...');
     _syncing = true;
     _status = RingSyncStatus(
       phase: RingSyncPhase.syncing,
@@ -196,6 +197,9 @@ class RingSyncService extends ChangeNotifier {
         phase: RingSyncPhase.done,
         lastSyncAt: now,
         lastWasIncomplete: anyIncomplete,
+      );
+      debugPrint(
+        '[RingSync] ✓ All ring data sync completed (incomplete=$anyIncomplete, at=$now)',
       );
     } catch (e) {
       debugPrint('[RingSync] Sync failed: $e');
