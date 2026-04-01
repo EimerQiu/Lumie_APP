@@ -128,6 +128,10 @@ async def send_apns(
     if content_available:
         aps["content-available"] = 1
 
+    # For ring_command: add mutableContent to maximize iOS reception reliability
+    if content_available:
+        aps["mutable-content"] = 1
+
     payload = {
         "aps": aps,
         "task_id": task_id,

@@ -14,11 +14,17 @@ import UserNotifications
     userInfo: [AnyHashable: Any],
     delay: TimeInterval = 0
   ) {
+    let notificationType = userInfo["type"] as? String ?? "unknown"
+    let requestId = userInfo["request_id"] as? String ?? "none"
+    NSLog("[Notification] ➡️ Forwarding to Flutter: method=%@ type=%@ request_id=%@", method, notificationType, requestId)
+
     let send: () -> Void = { [weak self] in
+      NSLog("[Notification] 📡 Invoking method channel: method=%@", method)
       self?.notificationChannel?.invokeMethod(method, arguments: userInfo)
     }
 
     if delay > 0 {
+      NSLog("[Notification] ⏱️ Delaying %fs before forwarding", delay)
       DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
         send()
       }
@@ -123,8 +129,13 @@ import UserNotifications
     // APNs payload has type/request_id at root level, not nested in data
     let notificationType = userInfo["type"] as? String ?? "unknown"
     let requestId = userInfo["request_id"] as? String ?? "none"
+    let appState = UIApplication.shared.applicationState.rawValue
+
+    NSLog("[AppDelegate] 📬 didReceiveRemoteNotification called: type=%@ request_id=%@ app_state=%ld",
+          notificationType, requestId, appState)
+
     if notificationType == "ring_command" {
-      NSLog("[RingCommand] 📬 Received in background: request_id=%@", requestId)
+      NSLog("[RingCommand] 📬 ✓ Received in background: request_id=%@", requestId)
     }
     forwardNotification(method: "onNotificationReceived", userInfo: userInfo)
     completionHandler(.newData)
@@ -141,8 +152,13 @@ import UserNotifications
     let userInfo = response.notification.request.content.userInfo
     let notificationType = userInfo["type"] as? String ?? "unknown"
     let requestId = userInfo["request_id"] as? String ?? "none"
+    let appState = UIApplication.shared.applicationState.rawValue
+
+    NSLog("[AppDelegate] 👆 userNotificationCenter:didReceive: type=%@ request_id=%@ app_state=%ld",
+          notificationType, requestId, appState)
+
     if notificationType == "ring_command" {
-      NSLog("[RingCommand] 👆 Tapped: request_id=%@", requestId)
+      NSLog("[RingCommand] 👆 ✓ Tapped: request_id=%@", requestId)
     }
     forwardNotification(method: "onNotificationTap", userInfo: userInfo)
     completionHandler()
@@ -157,8 +173,13 @@ import UserNotifications
     let userInfo = notification.request.content.userInfo
     let notificationType = userInfo["type"] as? String ?? "unknown"
     let requestId = userInfo["request_id"] as? String ?? "none"
+    let appState = UIApplication.shared.applicationState.rawValue
+
+    NSLog("[AppDelegate] 🎯 willPresent: type=%@ request_id=%@ app_state=%ld",
+          notificationType, requestId, appState)
+
     if notificationType == "ring_command" {
-      NSLog("[RingCommand] 🎯 Foreground: request_id=%@", requestId)
+      NSLog("[RingCommand] 🎯 ✓ Foreground: request_id=%@", requestId)
     }
     forwardNotification(method: "onNotificationReceived", userInfo: userInfo)
     if #available(iOS 14.0, *) {
