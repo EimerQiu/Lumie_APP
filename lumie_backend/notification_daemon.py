@@ -426,9 +426,14 @@ async def process_notification_queue(db, client: httpx.AsyncClient) -> None:
 
         title = doc.get("title", "Lumie")
         body = doc.get("body", "")
-        extra_data = doc.get("data", {})
         notification_type = doc.get("type")
         is_ring_command = notification_type == "ring_command"
+        # Always forward root-level "type" so iOS/Flutter can route correctly.
+        # data sub-dict is merged on top (its fields take precedence for duplicates).
+        extra_data: dict = {}
+        if notification_type:
+            extra_data["type"] = notification_type
+        extra_data.update(doc.get("data") or {})
 
         # ring_command now uses alert + content-available (mixed mode) for reliable iOS delivery
         # include_alert=True ensures user sees notification + iOS invokes app

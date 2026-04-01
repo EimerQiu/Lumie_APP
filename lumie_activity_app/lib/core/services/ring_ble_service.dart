@@ -759,9 +759,13 @@ class RingBleService {
 
       int hr = 0;
       if (data.length == 16) {
+        // Format A (16 bytes, CRC-protected): HR at byte 13
         hr = data[13];
-      } else if (data.length >= 26) {
-        hr = data[21];
+      } else if (data.length >= 23) {
+        // Format B/C/extended (26, 32, 36+ bytes):
+        // Byte[13] is an undocumented status field (not HR).
+        // HR is at byte[22] per manufacturer example.
+        hr = data[22];
       }
 
       if (hr > 0 && hr < 250 && _hrStreamController?.isClosed == false) {
@@ -1137,7 +1141,12 @@ class RingBleService {
       '(protocol duration ${protocolDurationSeconds}s)',
     );
 
+    // Only record a reading when the HR value changes.
+    // 0x09 streams the ring's cached background HR until 0x28 completes and
+    // the ring updates its cache with the fresh optical reading. Deduplicating
+    // filters out repeated stale values and captures only genuine transitions.
     final readings = <int>[];
+    int lastHr = 0;
     StreamSubscription<List<int>>? sub;
 
     sub = _notifyChar!.onValueReceived.listen((data) {
@@ -1151,13 +1160,18 @@ class RingBleService {
       if (data[0] != 0x09) return;
       int hr = 0;
       if (data.length == 16) {
+        // Format A (16 bytes, CRC-protected): HR at byte 13
         hr = data[13];
-      } else if (data.length >= 26) {
-        hr = data[21];
+      } else if (data.length >= 23) {
+        // Format B/C/extended (26, 32, 36+ bytes):
+        // Byte[13] is an undocumented status field (not HR).
+        // HR is at byte[22] per manufacturer example.
+        hr = data[22];
       }
-      if (hr > 0 && hr < 250) {
+      if (hr > 0 && hr < 250 && hr != lastHr) {
         print('[Ring BLE] measureHeartRate: reading $hr bpm');
         readings.add(hr);
+        lastHr = hr;
       }
     });
 
@@ -1183,9 +1197,11 @@ class RingBleService {
       print('[Ring BLE] measureHeartRate: sending 0x09 start');
       await _writeCommand(streamPayload);
 
-      // Collect for the requested duration
-      print('[Ring BLE] measureHeartRate: collecting for ${durationSeconds}s');
-      await Future.delayed(Duration(seconds: durationSeconds));
+      // Collect for the full protocol duration so the ring's optical sensor has
+      // time to produce a fresh reading. durationSeconds is what the advisor
+      // requested; protocolDurationSeconds is the minimum the ring needs (30s).
+      print('[Ring BLE] measureHeartRate: collecting for ${protocolDurationSeconds}s');
+      await Future.delayed(Duration(seconds: protocolDurationSeconds));
 
       // Stop HR measurement
       final stopMeasure = List<int>.filled(15, 0);
@@ -1215,7 +1231,7 @@ class RingBleService {
         avgBpm: avg,
         minBpm: readings.first,
         maxBpm: readings.last,
-        durationSeconds: durationSeconds,
+        durationSeconds: protocolDurationSeconds,
         readings: List.unmodifiable(readings),
       );
     } catch (e) {

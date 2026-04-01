@@ -233,7 +233,7 @@ This section documents the **actual tested behavior** of the X6B smart ring. In 
 | Command | Issue | Resolution |
 |---------|-------|-----------|
 | **0x01 (Set Time)** | Original spec says "decimal" format, but device requires **BCD-encoded** time fields | All implementation uses BCD. Sending plain decimal may ACK but won't update ring RTC. ✓ CORRECT in this doc |
-| **0x09 (Realtime Stream)** | Byte ordering: steps/calories/distance all **little-endian (LE)** | Implementation correctly uses LE. ✓ CORRECT in this doc |
+| **0x09 (Realtime Stream)** | Byte ordering: steps/calories/distance all **LE**. Manufacturer docs claim HR at Byte[21], but **Byte[13] is an undocumented status field** shifting HR to **Byte[22]** in all extended formats (observed lengths: 32, 36 bytes) | Parser uses Byte[13] for Format A (16 B) and Byte[22] for all extended formats (≥23 B). ✓ CORRECT in this doc |
 | **0x19 (Exercise)** | Timestamp response bytes are **BCD-encoded** | Implementation correctly parses BCD. ✓ CORRECT in this doc |
 | **0x28 (Multi-Parameter)** | Duration is **little-endian (LE)** in seconds; response parsing **NOT IMPLEMENTED** in ble_service.dart | ⚠️ TODO: Add response parser case for 0x28 in _parseResponse() method |
 | **0x2A (Set Interval)** | Interval bytes [7..8] are **big-endian**, not little-endian | Implementation correctly uses big-endian. ✓ CORRECT in this doc |
@@ -614,23 +614,45 @@ Byte[14]    = temp_raw    (integer, divide by 10 → °C)
 Byte[15]    = CRC
 ```
 
-**Streamed response — Format B (26 bytes, no CRC, extended):**
+**Streamed response — Format B/C/extended (≥23 bytes, no CRC):**
+
+The manufacturer documentation describes a 26-byte format, but observed packets are 32–36 bytes. All extended formats share the same field layout. **The manufacturer's documented byte positions are off by one** — `Byte[13]` is an undocumented status field (not padding), shifting HR one byte later than stated.
+
+Corrected layout (validated against manufacturer example and live ring capture):
 
 ```
 Byte[0]     = 0x09
 Byte[1..4]  = steps       (4-byte LE integer)
 Byte[5..8]  = cal_raw     (4-byte LE, divide by 100 → kcal)
 Byte[9..12] = dist_raw    (4-byte LE, divide by 100 → km)
-Byte[13..20]= reserved / padding
-Byte[21]    = heart_rate  (integer BPM)
-Byte[22..23]= temp_raw    (2-byte LE, divide by 10 → °C)
-Byte[24]    = spo2        (integer %)
-Byte[25]    = 0x00
+Byte[13]    = status/activity field (undocumented; NOT heart rate)
+Byte[14..21]= reserved / padding (8 bytes)
+Byte[22]    = heart_rate  (integer BPM)  ← NOT byte[21] as manufacturer docs claim
+Byte[23..24]= temp_raw    (2-byte LE, divide by 10 → °C)
+Byte[25]    = spo2        (integer %; valid only when 0x28 measurement active)
+Byte[26+]   = extended trailing bytes (firmware-variant; ignore)
+```
+
+Manufacturer example (32 bytes):
+```
+09 66 00 00 00 19 01 00 00 05 00 00 00 25 00 00
+00 00 00 00 00 00 5A 01 00 00 00 00 00 00 00 00
+→ steps=102, cal=2.81 kcal, dist=0.05 km
+  byte[13]=0x25 (status), byte[22]=0x5A=90 BPM ✓
+```
+
+Live ring capture (36 bytes, during 0x28 HR measurement):
+```
+09 D7 03 00 00 25 0A 00 00 3E 00 00 00 9C 01 00
+00 01 00 00 00 00 3C 01 00 00 00 00 00 00 00 00
+D1 14 00 00
+→ steps=983, cal=25.97 kcal, dist=0.62 km
+  byte[13]=0x9C=156 (status, NOT HR), byte[22]=0x3C=60 BPM ✓
 ```
 
 **How to detect format:**
-- If `length == 16` AND `CRC(Byte[0..14]) == Byte[15]` → Format A.
-- If `length >= 26` → Format B (use first 26 bytes).
+- If `length == 16` AND `CRC(Byte[0..14]) == Byte[15]` → Format A: HR at Byte[13].
+- If `length >= 23` → extended format: HR at Byte[22].
 
 **Multi-frame packets (observed in practice):**
 
@@ -656,14 +678,15 @@ hr       = B[13]
 temp     = B[14] / 10.0
 ```
 
-**Parse steps (Format B):**
+**Parse steps (extended formats, length ≥ 23):**
 ```
 steps    = B[1] | (B[2]<<8) | (B[3]<<16) | (B[4]<<24)
 calories = (B[5] | (B[6]<<8) | (B[7]<<16) | (B[8]<<24)) / 100.0
 distance = (B[9] | (B[10]<<8) | (B[11]<<16) | (B[12]<<24)) / 100.0
-hr       = B[21]
-temp     = (B[22] | (B[23]<<8)) / 10.0
-spo2     = B[24]
+# B[13] = undocumented status byte — do NOT use as HR
+hr       = B[22]   ← manufacturer docs say B[21] but that is wrong
+temp     = (B[23] | (B[24]<<8)) / 10.0
+spo2     = B[25]   (valid only when 0x28 measurement is active)
 ```
 
 **Failure response:** `0xA4 00 ... CRC` (if command is rejected)

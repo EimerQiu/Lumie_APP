@@ -16,15 +16,15 @@ import UserNotifications
   ) {
     let notificationType = userInfo["type"] as? String ?? "unknown"
     let requestId = userInfo["request_id"] as? String ?? "none"
-    print("[Notification] ➡️ Forwarding to Flutter: method=\(method) type=\(notificationType) request_id=\(requestId)")
+    NSLog("[Notification] ➡️ Forwarding to Flutter: method=%@ type=%@ request_id=%@", method, notificationType, requestId)
 
     let send: () -> Void = { [weak self] in
-      print("[Notification] 📡 Invoking method channel: method=\(method)")
+      NSLog("[Notification] 📡 Invoking method channel: method=%@", method)
       self?.notificationChannel?.invokeMethod(method, arguments: userInfo)
     }
 
     if delay > 0 {
-      print("[Notification] ⏱️ Delaying \(delay)s before forwarding")
+      NSLog("[Notification] ⏱️ Delaying %fs before forwarding", delay)
       DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
         send()
       }
@@ -75,25 +75,25 @@ import UserNotifications
   private func requestPushToken(application: UIApplication, result: @escaping FlutterResult) {
     // If we already have a token, return it immediately
     if let token = deviceToken {
-      print("[PUSHDBG] Returning cached APNs token: \(token)")
+      NSLog("[PUSHDBG] Returning cached APNs token: %@", token)
       result(token)
       return
     }
 
-    print("[PUSHDBG] Requesting APNs permission...")
+    NSLog("[PUSHDBG] Requesting APNs permission...")
     // Request permission and register
     UNUserNotificationCenter.current().requestAuthorization(
       options: [.alert, .sound, .badge]
     ) { granted, error in
       guard granted else {
-        print("[PUSHDBG] APNs permission denied or error: \(error?.localizedDescription ?? "unknown")")
+        NSLog("[PUSHDBG] APNs permission denied or error: %@", error?.localizedDescription ?? "unknown")
         DispatchQueue.main.async { result(nil) }
         return
       }
-      print("[PUSHDBG] APNs permission granted, registering for remote notifications...")
+      NSLog("[PUSHDBG] APNs permission granted, registering for remote notifications...")
       DispatchQueue.main.async {
         self.tokenCompletion = { token in
-          print("[PUSHDBG] APNs token received: \(token ?? "nil")")
+          NSLog("[PUSHDBG] APNs token received: %@", token ?? "nil")
           result(token)
         }
         application.registerForRemoteNotifications()
@@ -106,7 +106,7 @@ import UserNotifications
     didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data
   ) {
     let token = deviceToken.map { String(format: "%02.2hhx", $0) }.joined()
-    print("[PUSHDBG] APNs registration successful, token: \(token)")
+    NSLog("[PUSHDBG] APNs registration successful, token: %@", token)
     self.deviceToken = token
     tokenCompletion?(token)
     tokenCompletion = nil
@@ -116,7 +116,7 @@ import UserNotifications
     _ application: UIApplication,
     didFailToRegisterForRemoteNotificationsWithError error: Error
   ) {
-    print("[PUSHDBG] APNs registration failed: \(error.localizedDescription)")
+    NSLog("[PUSHDBG] APNs registration failed: %@", error.localizedDescription)
     tokenCompletion?(nil)
     tokenCompletion = nil
   }
@@ -131,10 +131,11 @@ import UserNotifications
     let requestId = userInfo["request_id"] as? String ?? "none"
     let appState = UIApplication.shared.applicationState.rawValue
 
-    print("[AppDelegate] 📬 didReceiveRemoteNotification called: type=\(notificationType) request_id=\(requestId) app_state=\(appState)")
+    NSLog("[AppDelegate] 📬 didReceiveRemoteNotification called: type=%@ request_id=%@ app_state=%ld",
+          notificationType, requestId, appState)
 
     if notificationType == "ring_command" {
-      print("[RingCommand] 📬 ✓ Received in background: request_id=\(requestId)")
+      NSLog("[RingCommand] 📬 ✓ Received in background: request_id=%@", requestId)
     }
     forwardNotification(method: "onNotificationReceived", userInfo: userInfo)
     completionHandler(.newData)
@@ -153,10 +154,11 @@ import UserNotifications
     let requestId = userInfo["request_id"] as? String ?? "none"
     let appState = UIApplication.shared.applicationState.rawValue
 
-    print("[AppDelegate] 👆 userNotificationCenter:didReceive: type=\(notificationType) request_id=\(requestId) app_state=\(appState)")
+    NSLog("[AppDelegate] 👆 userNotificationCenter:didReceive: type=%@ request_id=%@ app_state=%ld",
+          notificationType, requestId, appState)
 
     if notificationType == "ring_command" {
-      print("[RingCommand] 👆 ✓ Tapped: request_id=\(requestId)")
+      NSLog("[RingCommand] 👆 ✓ Tapped: request_id=%@", requestId)
     }
     forwardNotification(method: "onNotificationTap", userInfo: userInfo)
     completionHandler()
@@ -173,10 +175,11 @@ import UserNotifications
     let requestId = userInfo["request_id"] as? String ?? "none"
     let appState = UIApplication.shared.applicationState.rawValue
 
-    print("[AppDelegate] 🎯 willPresent: type=\(notificationType) request_id=\(requestId) app_state=\(appState)")
+    NSLog("[AppDelegate] 🎯 willPresent: type=%@ request_id=%@ app_state=%ld",
+          notificationType, requestId, appState)
 
     if notificationType == "ring_command" {
-      print("[RingCommand] 🎯 ✓ Foreground: request_id=\(requestId)")
+      NSLog("[RingCommand] 🎯 ✓ Foreground: request_id=%@", requestId)
     }
     forwardNotification(method: "onNotificationReceived", userInfo: userInfo)
     if #available(iOS 14.0, *) {
