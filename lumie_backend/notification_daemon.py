@@ -420,6 +420,9 @@ async def process_notification_queue(db, client: httpx.AsyncClient) -> None:
         notification_type = doc.get("type")
         is_ring_command = notification_type == "ring_command"
 
+        # ring_command now uses alert + content-available (mixed mode) for reliable iOS delivery
+        # include_alert=True ensures user sees notification + iOS invokes app
+        # content_available=True ensures background processing capability
         sent = await send_apns(
             client,
             device_token,
@@ -427,11 +430,11 @@ async def process_notification_queue(db, client: httpx.AsyncClient) -> None:
             body,
             task_id=extra_data.get("job_id", nid),  # reuse task_id payload field
             extra_payload=extra_data,
-            include_alert=not is_ring_command,
-            include_sound=not is_ring_command,
-            content_available=is_ring_command,
-            push_type="background" if is_ring_command else "alert",
-            priority="5" if is_ring_command else "10",
+            include_alert=True,  # Always show alert so iOS wakes app reliably
+            include_sound=True,  # Always include sound for ring commands
+            content_available=is_ring_command,  # Keep content-available for ring_command only
+            push_type="alert",  # Use alert type for all (reliable delivery)
+            priority="10",  # High priority for all (immediate delivery)
         )
 
         new_status = "sent" if sent else "failed"
