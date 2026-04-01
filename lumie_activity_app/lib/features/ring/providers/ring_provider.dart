@@ -169,6 +169,9 @@ class RingProvider extends ChangeNotifier with WidgetsBindingObserver {
         connectionStatus: RingConnectionStatus.connected,
         batteryLevel: battery ?? _ringInfo?.batteryLevel,
       );
+      if (_ringInfo != null) {
+        await _ringService.saveLocalRingInfo(_ringInfo!);
+      }
       _state = RingProviderState.paired;
       debugPrint('[Ring] Reconnect succeeded');
       notifyListeners();
@@ -248,6 +251,9 @@ class RingProvider extends ChangeNotifier with WidgetsBindingObserver {
           connectionStatus: RingConnectionStatus.connected,
           batteryLevel: battery ?? _ringInfo?.batteryLevel,
         );
+        if (_ringInfo != null) {
+          await _ringService.saveLocalRingInfo(_ringInfo!);
+        }
         _state = RingProviderState.paired;
         debugPrint('[Ring] Auto-reconnect succeeded on attempt $attempt');
         notifyListeners();

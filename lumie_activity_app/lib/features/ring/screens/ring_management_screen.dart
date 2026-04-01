@@ -16,13 +16,6 @@ class RingManagementScreen extends StatefulWidget {
 }
 
 class _RingManagementScreenState extends State<RingManagementScreen> {
-  @override
-  void initState() {
-    super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      context.read<RingProvider>().init();
-    });
-  }
 
   @override
   Widget build(BuildContext context) {
