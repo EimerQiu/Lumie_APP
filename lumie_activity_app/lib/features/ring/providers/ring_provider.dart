@@ -2,6 +2,7 @@
 // Handles BLE scanning, connection, pairing, and persistent ring info
 
 import 'dart:async';
+import 'dart:io';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import '../../../core/services/ring_ble_service.dart';
@@ -34,6 +35,7 @@ class RingProvider extends ChangeNotifier with WidgetsBindingObserver {
   bool _isBluetoothOn = false;
   bool _heartRateMeasurementInProgress = false;
   StreamSubscription<BluetoothAdapterState>? _btStateSubscription;
+  Timer? _commandPollTimer;
 
   RingProviderState get state => _state;
   RingInfo? get ringInfo => _ringInfo;
