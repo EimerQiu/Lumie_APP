@@ -24,7 +24,11 @@ output_schema:
       type: string
     member_profile:
       type: object
+    recent_sleep:
+      type: object
     recent_activity:
+      type: object
+    recent_recovery:
       type: object
     task_adherence:
       type: object
@@ -49,21 +53,78 @@ Use this skill when a parent or team admin asks about a specific team member's h
 
 # Connector Rules
 - Allowed connector: `lumie_db_connector`
-- Query from: `profiles`, `activities`, `tasks`, `team_members`
+- Query from: `profiles`, `team_members`, `sleep_sessions`, `activities`, `daily_steps`, `hrv_readings`, `tasks`
 - Only access data within the team scope
 - Task queries must include team_id filter
+
+# Data Scope and Structures
+
+This snapshot is intentionally lightweight, but it should still use ring-synced data explicitly:
+
+- `member_profile`
+  - Source: `profiles`
+  - Fields: `name`, `age`, `icd10_code`, `timezone`
+- `recent_sleep`
+  - Source: `sleep_sessions`
+  - Fields: `bedtime`, `wake_time`, `total_sleep_minutes`, `resting_heart_rate`, `sleep_quality_score`
+- `recent_activity`
+  - Sources: `activities`, `daily_steps`
+  - `activities` fields: `activity_type_name`, `duration_minutes`, `intensity`, `start_time`
+  - `daily_steps` fields: `date_str`, `steps`, `exercise_time_seconds`, `distance_km`
+- `recent_recovery`
+  - Source: `hrv_readings`
+  - Fields: `timestamp`, `hrv_ms`, `fatigue`, `heart_rate_bpm`, `systolic_mmhg`, `diastolic_mmhg`
+- `task_adherence`
+  - Source: `tasks`
+  - Fields: `task_name`, `task_type`, `open_datetime`, `close_datetime`, `done`
+
+Interpretation rules:
+
+- Prefer the latest `sleep_sessions` record for a quick overnight snapshot.
+- Use `daily_steps` for daily movement totals; do not infer step counts from `activities`.
+- Treat blood-pressure values from `hrv_readings` as ring-estimated, not clinical cuff readings.
+- If any section has no data, return that section as empty with a short note rather than omitting it.
 
 # Execution Plan
 1. Verify requester is admin of the target user's team
 2. Get target user's profile
-3. Get recent activities (last 3 days)
-4. Get today's task adherence
-5. Return a concise snapshot
+3. Get the most recent sleep session and last 3 days of sleep trend if available
+4. Get recent activities and last 3 days of daily_steps
+5. Get the latest HRV/recovery reading if available
+6. Get today's task adherence
+7. Return a concise snapshot
 
 # Output Guidance
 - Keep it brief and parent-friendly
 - Highlight any concerns (missed medications, low activity)
 - Include task completion rate for recent days
+- Use a stable object shape:
+  - `member_profile`
+  - `recent_sleep`
+  - `recent_activity`
+  - `recent_recovery`
+  - `task_adherence`
+
+Recommended field examples:
+
+- `recent_sleep`
+  - `latest_bedtime`
+  - `latest_wake_time`
+  - `latest_total_sleep_minutes`
+  - `latest_sleep_quality_score`
+  - `latest_resting_heart_rate`
+- `recent_activity`
+  - `today_steps`
+  - `today_active_minutes`
+  - `recent_activities`
+- `recent_recovery`
+  - `latest_hrv_ms`
+  - `latest_fatigue`
+  - `latest_estimated_bp`
+- `task_adherence`
+  - `today_completion_rate`
+  - `missed_medicine_tasks`
+  - `pending_tasks`
 
 # Failure Handling
 - Fail immediately if not a team admin

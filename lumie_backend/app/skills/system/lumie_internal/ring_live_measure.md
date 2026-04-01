@@ -28,6 +28,7 @@ output_schema:
       type: string
     data:
       type: object
+      description: "For hr_measure: {status, command_type, avg_bpm, min_bpm, max_bpm, duration_seconds}. For temperature: {status, command_type, highest_temp_c, ntc1_c, ntc2_c, ntc3_c}. For timeout/failed: {status, command_type, error?}"
 ---
 
 # Purpose
@@ -50,6 +51,30 @@ Use this skill when the user asks for a **live, on-demand** reading from their r
 - `user_timezone`, `ZoneInfo`, `timezone`, `timedelta`, `datetime`, `asyncio`, `uuid` are all pre-loaded — do NOT import them
 - Use the `db` variable directly
 - The `user_id` and `target_user_id` variables are pre-loaded
+
+# Result Data Contract
+
+The ring app posts the completed live-measurement payload into `ring_command_requests.result`.
+This skill should assume these result shapes:
+
+- `command_type = "hr_measure"`
+  - `avg_bpm`: integer
+  - `min_bpm`: integer
+  - `max_bpm`: integer
+  - `duration_seconds`: integer
+- `command_type = "temperature"`
+  - `highest_temp_c`: float
+  - `ntc1_c`: float
+  - `ntc2_c`: float
+  - `ntc3_c`: float
+
+Always return `data.status` explicitly:
+
+- `"completed"` for success
+- `"timeout"` when the command expired before the app reported back
+- `"failed"` when the app reported an execution failure
+
+Always include `data.command_type`.
 
 # Implementation
 
@@ -156,7 +181,14 @@ else:
             f"Your heart rate over {dur} seconds: "
             f"**{avg} bpm** average (range {mn}–{mx} bpm)."
         )
-        result_data = data
+        result_data = {
+            "status": "completed",
+            "command_type": command_type,
+            "avg_bpm": avg,
+            "min_bpm": mn,
+            "max_bpm": mx,
+            "duration_seconds": dur,
+        }
 
     elif command_type == "temperature":
         highest = data.get("highest_temp_c")
@@ -168,11 +200,22 @@ else:
                else "That may be slightly elevated — monitor it if you feel unwell." if highest and highest >= 37.5
                else "")
         )
-        result_data = data
+        result_data = {
+            "status": "completed",
+            "command_type": command_type,
+            "highest_temp_c": highest,
+            "ntc1_c": ntc1,
+            "ntc2_c": data.get("ntc2_c"),
+            "ntc3_c": data.get("ntc3_c"),
+        }
 
     else:
         result_summary = f"Live measurement completed: {data}"
-        result_data = data
+        result_data = {
+            "status": "completed",
+            "command_type": command_type,
+            "raw_result": data,
+        }
 ```
 
 # Output Guidance
@@ -197,3 +240,4 @@ else:
 - Always return a friendly message even on timeout or failure
 - Never leave the user with a raw error string
 - If DB insert fails, return an error message explaining the service is temporarily unavailable
+- Keep the returned `data` object structurally valid even on error (`status`, `command_type`, optional `error`)

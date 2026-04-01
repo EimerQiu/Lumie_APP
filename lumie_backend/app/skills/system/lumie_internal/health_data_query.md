@@ -33,6 +33,35 @@ output_schema:
 # Purpose
 Use this skill when the user asks a focused question about one health domain: sleep, physical activity, walk test results, or rest days. The schema already describes all collection fields — write queries directly from it.
 
+# Collection Contracts
+
+Use these exact collections for ring-synced domains:
+
+- `sleep_sessions`
+  - `bedtime`, `wake_time`: MongoDB datetimes in UTC
+  - `total_sleep_minutes`, `time_awake_minutes`: numeric durations
+  - `stages`: array of `{stage, duration_minutes, percentage}`
+  - `resting_heart_rate`, `sleep_quality_score`
+- `daily_steps`
+  - `date_str`: `YYYY-MM-DD` string using the ring's local calendar day
+  - `steps`, `exercise_time_seconds`, `distance_km`
+- `hr_readings`
+  - `timestamp`: MongoDB datetime in UTC
+  - `bpm`
+- `hrv_readings`
+  - `timestamp`, `hrv_ms`, `heart_rate_bpm`, `fatigue`, `systolic_mmhg`, `diastolic_mmhg`, `source`
+- `temperature_readings`
+  - `timestamp`, `temp1_c`, `temp2_c`, `temp3_c`
+- `spo2_readings`
+  - `timestamp`, `spo2_percent`
+
+Practical interpretation rules:
+
+- `daily_steps` is one document per day, already upserted by `(user_id, date_str)`; do not expect multiple same-day rows.
+- `hr_readings`, `hrv_readings`, `temperature_readings`, and `spo2_readings` are point-in-time series keyed by `(user_id, timestamp)`.
+- `temperature_readings` are ring/skin-adjacent sensor values, not core thermometer readings.
+- `systolic_mmhg` / `diastolic_mmhg` in `hrv_readings` are ring-estimated values; summarize as trends, not diagnostic measurements.
+
 # When To Use
 - "How did I sleep last night?"
 - "How many hours did I sleep this week?"
@@ -114,6 +143,8 @@ rest = await db.rest_days.find(
 ).sort("date", -1).to_list(30)
 ```
 
+If the collection is unavailable or not documented in the schema/runtime, return that rest-day data is unavailable instead of guessing field names.
+
 ## Heart Rate (`hr_readings` collection)
 ```python
 # Last 24 hours of continuous HR readings from the ring
@@ -128,6 +159,10 @@ avg_bpm = round(statistics.mean(bpms)) if bpms else None
 resting_bpm = sorted(bpms)[len(bpms) // 10] if len(bpms) >= 10 else (min(bpms) if bpms else None)
 peak_bpm = max(bpms) if bpms else None
 ```
+
+Notes:
+- `hr_readings` may contain both sparse 0x55 points and dense 0x54-expanded points.
+- For "resting heart rate", prefer sleep-session `resting_heart_rate` when the user is asking about overnight recovery; use `hr_readings` for rolling recent HR summaries.
 
 ## Daily Steps (`daily_steps` collection)
 ```python
@@ -154,6 +189,10 @@ readings = await db.temperature_readings.find(
     {"user_id": target_user_id, "timestamp": {"$gte": week_start_utc}}
 ).sort("timestamp", -1).to_list(200)
 ```
+
+When summarizing a single reading:
+- If you need one representative value, prefer `temp1_c`
+- If asked for the "highest" temperature, compute `max(temp1_c, temp2_c, temp3_c)` per reading
 
 ## SpO2 / Blood Oxygen (`spo2_readings` collection)
 ```python
@@ -184,6 +223,8 @@ latest = await db.hrv_readings.find_one(
 )
 ```
 
+When summarizing blood pressure from HRV readings, explicitly label it as ring-estimated rather than a cuff measurement.
+
 # Output Guidance
 
 ## Summary — write for the user directly
@@ -205,6 +246,38 @@ Rules:
 
 ## Data structure
 Return clean, display-ready data. No internal IDs. Format datetimes as readable strings.
+
+Recommended output shape by domain:
+
+- `sleep`
+  - `summary`
+  - `data.latest_session`
+  - `data.sessions`
+  - `data.metrics`
+- `activity`
+  - `summary`
+  - `data.activities`
+  - `data.metrics`
+- `heart_rate`
+  - `summary`
+  - `data.readings`
+  - `data.metrics` with `average_bpm`, `resting_bpm`, `peak_bpm`
+- `steps`
+  - `summary`
+  - `data.days`
+  - `data.metrics` with `today_steps`, `today_distance_km`, `today_active_minutes`
+- `temperature`
+  - `summary`
+  - `data.readings`
+  - `data.metrics` with `latest_temp_c` and/or `highest_temp_c`
+- `spo2`
+  - `summary`
+  - `data.readings`
+  - `data.metrics` with `latest_spo2_percent`, `min_spo2_percent`
+- `hrv`
+  - `summary`
+  - `data.readings`
+  - `data.metrics` with `latest_hrv_ms`, `latest_fatigue`, `latest_bp`
 
 # Proactive Mode Guidance
 

@@ -70,6 +70,67 @@
       }
     },
     {
+      "name": "daily_steps",
+      "description": "Daily ring step summaries synced from command 0x51. One document per user per local calendar day from the ring.",
+      "fields": {
+        "user_id": "string",
+        "date_str": "string, YYYY-MM-DD using the ring's local calendar date",
+        "steps": "number, total steps for that day",
+        "exercise_time_seconds": "number, active-movement duration in seconds for that day",
+        "distance_km": "number, total distance for that day in kilometers",
+        "synced_at": "datetime (UTC), when this daily summary was last upserted"
+      },
+      "notes": "Unique key is effectively (user_id, date_str). Records are upserted, so re-sending the same day overwrites the prior summary. date_str is a plain string, not a Mongo datetime; query ranges with string comparison on YYYY-MM-DD. active minutes should be derived as exercise_time_seconds // 60."
+    },
+    {
+      "name": "hr_readings",
+      "description": "Single-point heart-rate readings synced from ring history commands (0x55 and detailed 0x54 expansion).",
+      "fields": {
+        "user_id": "string",
+        "timestamp": "datetime (UTC), exact measurement timestamp",
+        "bpm": "number, heart rate in beats per minute"
+      },
+      "notes": "Unique key is effectively (user_id, timestamp). Sync uses upsert semantics, so duplicate uploads are safe. This collection does not currently store source or created_at fields."
+    },
+    {
+      "name": "hrv_readings",
+      "description": "Ring HRV / stress / blood-pressure snapshots synced from command 0x56.",
+      "fields": {
+        "user_id": "string",
+        "timestamp": "datetime (UTC), exact measurement timestamp",
+        "hrv_ms": "number, heart rate variability in milliseconds",
+        "heart_rate_bpm": "number, heart rate captured with the HRV reading",
+        "fatigue": "number, stress/fatigue score from the ring (0-100)",
+        "systolic_mmhg": "number, estimated systolic blood pressure",
+        "diastolic_mmhg": "number, estimated diastolic blood pressure",
+        "source": "string, currently 'ring'",
+        "created_at": "datetime (UTC), insert timestamp; unchanged on duplicate upserts"
+      },
+      "notes": "Unique key is effectively (user_id, timestamp). Values are ring-estimated wellness metrics, especially blood pressure; treat them as trend indicators rather than clinical-grade measurements."
+    },
+    {
+      "name": "temperature_readings",
+      "description": "Ring temperature snapshots synced from command 0x62.",
+      "fields": {
+        "user_id": "string",
+        "timestamp": "datetime (UTC), exact measurement timestamp",
+        "temp1_c": "number, first temperature sensor reading in Celsius",
+        "temp2_c": "number, second temperature sensor reading in Celsius",
+        "temp3_c": "number, third temperature sensor reading in Celsius"
+      },
+      "notes": "Unique key is effectively (user_id, timestamp). These are ring/skin-adjacent measurements, not oral/core thermometer readings. When summarizing, prefer one representative sensor or report the highest reading explicitly."
+    },
+    {
+      "name": "spo2_readings",
+      "description": "Ring blood-oxygen saturation snapshots synced from command 0x66.",
+      "fields": {
+        "user_id": "string",
+        "timestamp": "datetime (UTC), exact measurement timestamp",
+        "spo2_percent": "number, oxygen saturation percentage 0-100"
+      },
+      "notes": "Unique key is effectively (user_id, timestamp). Sync uses upsert semantics, so duplicate uploads are safe. Isolated low readings may be noisy; trends are usually more meaningful than a single point."
+    },
+    {
       "name": "tasks",
       "description": "Med-Reminder tasks (medication reminders, lifestyle habits, etc.)",
       "fields": {
