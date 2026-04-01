@@ -10,12 +10,38 @@ Flow:
 
 import logging
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from ..core.database import get_database
 
 logger = logging.getLogger(__name__)
+
+
+def _command_timeout_seconds(command_type: str, duration_seconds: int) -> int:
+    """Return the max time a command should stay executable.
+
+    For hr_measure: 30s measurement + 45s buffer (wake-up, BLE reconnect, result return) = 75s total.
+    """
+    if command_type == "hr_measure":
+        return max(duration_seconds, 30) + 45
+    return 20
+
+
+def _expires_at_iso(command_type: str, duration_seconds: int) -> str:
+    return (
+        datetime.now(timezone.utc)
+        + timedelta(seconds=_command_timeout_seconds(command_type, duration_seconds))
+    ).isoformat()
+
+
+def _parse_iso_datetime(value: Optional[str]) -> Optional[datetime]:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
 
 
 async def create_command(
@@ -38,6 +64,7 @@ async def create_command(
         "duration_seconds": duration_seconds,
         "status": "pending",
         "created_at": now,
+        "expires_at": _expires_at_iso(command_type, duration_seconds),
         "result": None,
         "completed_at": None,
     })
@@ -66,10 +93,38 @@ async def create_command(
 async def get_pending_command(user_id: str) -> Optional[dict]:
     """Return the oldest pending command for this user, or None."""
     db = get_database()
-    return await db.ring_command_requests.find_one(
+    pending_docs = await db.ring_command_requests.find(
         {"user_id": user_id, "status": "pending"},
-        sort=[("created_at", 1)],
-    )
+    ).sort([("created_at", 1)]).to_list(length=20)
+
+    now = datetime.now(timezone.utc)
+    for doc in pending_docs:
+        expires_at = _parse_iso_datetime(doc.get("expires_at"))
+        if expires_at is None:
+            duration_seconds = int(doc.get("duration_seconds", 10))
+            expires_at = _parse_iso_datetime(doc.get("created_at"))
+            if expires_at is not None:
+                expires_at = expires_at + timedelta(
+                    seconds=_command_timeout_seconds(
+                        doc.get("command_type", ""),
+                        duration_seconds,
+                    ),
+                )
+
+        if expires_at is not None and expires_at <= now:
+            await db.ring_command_requests.update_one(
+                {"request_id": doc["request_id"], "status": "pending"},
+                {"$set": {
+                    "status": "expired",
+                    "error": "Command expired before the app executed it",
+                    "completed_at": now.isoformat(),
+                }},
+            )
+            continue
+
+        return doc
+
+    return None
 
 
 async def store_result(

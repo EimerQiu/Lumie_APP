@@ -308,6 +308,11 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
         '[RCMD] Detected ring_command payload, forwarding to RingProvider',
       );
       context.read<RingProvider>().handleRemoteRingCommand();
+    } else if (type == null && navigateTo == null) {
+      debugPrint(
+        '[RCMD] Null payload wake-up received, checking pending ring commands as fallback',
+      );
+      context.read<RingProvider>().handleRemoteRingCommand();
     }
 
     if (navigateTo == 'advisor' && mounted) {

@@ -31,7 +31,7 @@ output_schema:
 ---
 
 # Purpose
-Use this skill when the user asks for a **live, on-demand** reading from their ring — not historical data. Examples: "measure my heart rate", "what is my heart rate right now", "check my temperature". This skill sends a command to the ring via push notification and waits for the result. Heart-rate measurements may need up to about 50 seconds end-to-end because the ring protocol requires a 30-second minimum measurement plus wake-up / reconnect time.
+Use this skill when the user asks for a **live, on-demand** reading from their ring — not historical data. Examples: "measure my heart rate", "what is my heart rate right now", "check my temperature". This skill sends a command to the ring via push notification and waits for the result. Heart-rate measurements may need up to about 75 seconds end-to-end because the ring protocol requires a 30-second minimum measurement plus wake-up / BLE reconnect / result return time.
 
 # When To Use
 - "Measure my heart rate"
@@ -68,6 +68,10 @@ await db.ring_command_requests.insert_one({
     "duration_seconds": duration_seconds,
     "status": "pending",
     "created_at": now_iso,
+    "expires_at": (
+        datetime.now(timezone.utc)
+        + timedelta(seconds=(max(duration_seconds, 30) + 45) if command_type == "hr_measure" else 20)
+    ).isoformat(),
     "result": None,
     "completed_at": None,
 })
@@ -91,15 +95,20 @@ await db.notification_queue.insert_one({
     "created_at": now_iso,
     "sent_at": None,
 })
+
+# Ring commands are time-sensitive; flush the queue immediately instead of
+# waiting for the notification daemon's next poll cycle.
+await flush_notification_queue_now()
 ```
 
 ## Step 3 — Poll for the result
 
 For heart-rate measurements, allow extra time for push delivery, app wake-up,
 possible BLE reconnect, and the ring's 30-second minimum measurement window.
+Total window is 30s measurement + 45s buffer = 75s.
 
 ```python
-wait_seconds = duration_seconds + 20 if command_type == "hr_measure" else 20
+wait_seconds = duration_seconds + 45 if command_type == "hr_measure" else 20
 poll_attempts = max(10, (wait_seconds + 1) // 2)
 
 for _ in range(poll_attempts):
@@ -113,6 +122,14 @@ for _ in range(poll_attempts):
 
 ```python
 if not doc or doc.get("status") == "pending":
+    await db.ring_command_requests.update_one(
+        {"request_id": request_id, "status": "pending"},
+        {"$set": {
+            "status": "expired",
+            "error": "Command expired before the app executed it",
+            "completed_at": datetime.now(timezone.utc).isoformat(),
+        }},
+    )
     # Timeout — ring may be out of range or app is not open
     result_summary = (
         "I sent the measurement request to your ring, but it didn't respond in time. "

@@ -265,6 +265,21 @@ async def _execute_script(
     stdout_buf = io.StringIO()
     stderr_buf = io.StringIO()
 
+    async def _flush_notification_queue_now() -> int:
+        """Immediately process pending notification queue entries once."""
+        import httpx
+        import notification_daemon
+
+        pending_before = await db_instance.notification_queue.count_documents({
+            "status": "pending",
+        })
+        async with httpx.AsyncClient(http2=True, timeout=30) as client:
+            await notification_daemon.process_notification_queue(db_instance, client)
+        pending_after = await db_instance.notification_queue.count_documents({
+            "status": "pending",
+        })
+        return max(0, pending_before - pending_after)
+
     # Build the execution namespace
     import asyncio as _asyncio
     from datetime import timedelta, timezone
@@ -283,6 +298,7 @@ async def _execute_script(
         "datetime": datetime,
         "timedelta": timedelta,
         "timezone": timezone,
+        "flush_notification_queue_now": _flush_notification_queue_now,
         "ZoneInfo": ZoneInfo,
         "str": str,
         "int": int,

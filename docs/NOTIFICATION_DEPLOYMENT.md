@@ -227,10 +227,31 @@ sudo journalctl -u lumie-notify -f
 **Checklist:**
 - [ ] iOS device has notifications permission granted (check Settings → Lumie App)
 - [ ] Device token is uploaded: `POST /api/v1/auth/save-device-token` returns 200
-- [ ] Token is stored in DB: `db.users.findOne({_id: "..."}).device_token` is not null
+- [ ] Token is stored in DB: `db.users.findOne({user_id: "..."}, {device_token: 1})` is not null
 - [ ] Daemon is running: `sudo systemctl status lumie-notify` shows "active (running)"
 - [ ] Daemon logs show task polling (check `journalctl`)
 - [ ] Task is in Early/Middle/Late phase threshold (check task progress in DB)
+
+**APNs environment rule that must match the build type:**
+- Use `APNS_USE_SANDBOX=true` when testing an app installed directly from Xcode.
+- Use `APNS_USE_SANDBOX=false` when testing a TestFlight build or App Store / production build.
+- If these do not match, APNs usually returns `BadDeviceToken`, even if token upload succeeds and the backend returns HTTP 200 for the save-token API.
+
+**How to identify which environment the current app is using:**
+- If the app logs a token upload, copy that token from Flutter/iOS logs and compare it with `journalctl -u lumie-notify`.
+- If `api.push.apple.com` returns `BadDeviceToken` for that token, but `api.sandbox.push.apple.com` returns `200 OK`, the device is using a sandbox token.
+- If `api.sandbox.push.apple.com` returns `BadDeviceToken`, but `api.push.apple.com` returns `200 OK`, the device is using a production token.
+- In practice for Lumie: Xcode debug installs have produced sandbox tokens, while TestFlight / release distribution should use production tokens.
+
+**Use `PUSHDBG` logs on device before changing server config:**
+- Search for `PUSHDBG` in Xcode / Flutter logs.
+- The app logs the APNs permission request, APNs registration result, the exact token acquired, and the token upload response.
+- Example sequence:
+  - `[PUSHDBG] APNs registration successful, token: ...`
+  - `[PUSHDBG] APNs token acquired: ...`
+  - `[PUSHDBG] Uploading token to backend: ...`
+  - `[PUSHDBG] Token upload response: 200`
+- If `PUSHDBG` shows one token, but `journalctl -u lumie-notify` is still sending to a different token, the backend stored token is stale or was overwritten by another app session/build.
 
 **Debug steps:**
 ```bash
@@ -277,6 +298,11 @@ nano /home/ubuntu/lumie_backend/.env
 # Then restart the daemon
 sudo systemctl restart lumie-notify
 ```
+
+Important:
+- Do not leave `APNS_USE_SANDBOX=false` on the server while testing an Xcode-installed build.
+- Do not leave `APNS_USE_SANDBOX=true` on the server while validating TestFlight or real production notifications.
+- If you switch build types during debugging, switch the server environment at the same time and restart `lumie-notify`.
 
 ### 2. Update iOS Entitlement
 
@@ -396,4 +422,3 @@ sudo systemctl restart systemd-journald
 - [Med-Reminder PRD](./PRD.md#med-reminder) — Feature requirements
 - `lumie_backend/notification_daemon.py` — Daemon source code
 - `lumie_activity_app/lib/core/services/push_notification_service.dart` — Flutter service
-
