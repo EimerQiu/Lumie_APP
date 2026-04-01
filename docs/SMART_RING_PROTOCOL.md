@@ -235,7 +235,7 @@ This section documents the **actual tested behavior** of the X6B smart ring. In 
 | **0x01 (Set Time)** | Original spec says "decimal" format, but device requires **BCD-encoded** time fields | All implementation uses BCD. Sending plain decimal may ACK but won't update ring RTC. ✓ CORRECT in this doc |
 | **0x09 (Realtime Stream)** | Byte ordering: steps/calories/distance all **LE**. Manufacturer docs claim HR at Byte[21], but **Byte[13] is an undocumented status field** shifting HR to **Byte[22]** in all extended formats (observed lengths: 32, 36 bytes) | Parser uses Byte[13] for Format A (16 B) and Byte[22] for all extended formats (≥23 B). ✓ CORRECT in this doc |
 | **0x19 (Exercise)** | Timestamp response bytes are **BCD-encoded** | Implementation correctly parses BCD. ✓ CORRECT in this doc |
-| **0x28 (Multi-Parameter)** | Duration is **little-endian (LE)** in seconds; response parsing **NOT IMPLEMENTED** in ble_service.dart | ⚠️ TODO: Add response parser case for 0x28 in _parseResponse() method |
+| **0x28 (Multi-Parameter)** | Duration is **little-endian (LE)** in seconds. `0x28` alone does NOT produce live HR in `0x09` packets — it only activates the ring's optical sensor. **Live HR is delivered via `0x18` packets, which require `0x19` exercise mode to be active simultaneously.** | Start `0x28` + `0x09` + `0x19` together for live HR measurement. See workflow in 0x28 section. |
 | **0x2A (Set Interval)** | Interval bytes [7..8] are **big-endian**, not little-endian | Implementation correctly uses big-endian. ✓ CORRECT in this doc |
 | **0x2B (Get Interval)** | Interval bytes [7..8] are **big-endian** in response | Implementation correctly parses big-endian. ✓ CORRECT in this doc |
 
@@ -583,6 +583,8 @@ build_day   = bcd(B[7])
 
 **Purpose:** Start/stop continuous 1-second push of steps, calories, distance, HR, temperature, SpO2.
 
+> **⚠️ Important — Stale HR in 0x09 packets:** The HR field in `0x09` packets reflects the ring's **background-monitor cached HR** — the last value stored from the ring's passive monitoring cycle (typically updated every few minutes). Even while `0x28` is running its optical measurement, the `0x09` HR field continues to show the old cached value until the background cycle updates. **For live optical HR during a measurement session, read `0x18` exercise push packets instead** (requires `0x19` exercise mode to be active).
+
 #### Start command:
 ```
 Byte[0]  = 0x09
@@ -697,6 +699,8 @@ spo2     = B[25]   (valid only when 0x28 measurement is active)
 
 **Purpose:** Automatically pushed by the ring ~every second during an active exercise session. Not a response to any command.
 
+> **This is the correct source for live optical HR.** The ring's optical sensor runs during exercise and pushes fresh HR readings via these packets. HR in `0x09` packets is always a stale cached value — do not use it for real-time HR feedback.
+
 **Packet (up to 21 bytes, no CRC):**
 ```
 Byte[0]     = 0x18
@@ -764,6 +768,8 @@ Byte[15] = CRC
 | 0x04 | End exercise |
 | 0x05 | Query current status |
 
+> **Using 0x19 for HR measurement:** When you need live HR readings (not background-cached), start exercise mode with `AA=0x01, BB=0x09` alongside `0x28` and `0x09`. This causes the ring to emit `0x18` packets containing real-time optical HR at `Byte[1]`. Use `AA=0x04, BB=0x09` to end. See the live HR measurement workflow in the 0x28 section.
+
 **Success response (16 bytes):**
 ```
 Byte[0]  = 0x19
@@ -801,7 +807,22 @@ has_timestamp = (B[3]|B[4]|B[5]|B[6]|B[7]|B[8]) != 0
 
 ### 0x28 — Multi-Parameter Measurement
 
-**Purpose:** Start/stop an on-demand health measurement (HR, HRV/BP, or SpO2). While active, use `0x09` streaming to receive live values.
+**Purpose:** Start/stop an on-demand health measurement (HR, HRV/BP, or SpO2). Activates the ring's optical sensor for a precise measurement.
+
+> **⚠️ Live HR requires `0x19` exercise mode.** Sending `0x28` alone activates the optical sensor but does NOT produce live HR values in `0x09` packets (those remain stale/cached). To get live HR readings, you must also start exercise mode (`0x19 AA=0x01 BB=0x09`), which causes the ring to push `0x18` packets with fresh optical HR at `Byte[1]`.
+
+#### Live HR Measurement Workflow (validated sequence):
+```
+1. Send 0x28  mode=0x02, start=0x01, duration=30+s   → activates optical sensor
+2. Wait 1 second
+3. Send 0x09  start=0x01                              → starts realtime streaming
+4. Send 0x19  AA=0x01, BB=0x09                        → triggers 0x18 live HR push packets
+5. Collect 0x18 packets (HR at Byte[1]) for duration
+6. Send 0x19  AA=0x04, BB=0x09                        → stop exercise mode
+7. Send 0x28  mode=0x02, stop=0x00                    → stop optical measurement
+8. Send 0x09  stop=0x00                               → stop realtime streaming
+```
+Compute avg/min/max from the `0x18` HR values collected in step 5. Skip `Byte[1] == 0xFF` (exercise-ended sentinel).
 
 #### Start measurement:
 ```
@@ -857,11 +878,7 @@ Byte[15] = CRC
 | 0x04 | 0x01 | SpO2 measurement active |
 | 0x00 | 0x00 | No measurement active |
 
-**⚠️ Implementation Note:** Response parsing for 0x28 is **NOT currently implemented** in `ble_service.dart`. The command is sent successfully, but responses are not parsed/displayed. To complete this:
-- Add a `case 0x28:` handler in the `_parseResponse()` method (around line 3500)
-- Parse Byte[1] for active mode code and Byte[2] for result status
-- Format and return a human-readable string (e.g., `"HR measurement: Active"`)
-- This will enable structured data panel updates for HR/HRV/SpO2 measurements via the test app button
+**Implementation note:** `measureHeartRate()` in `ring_ble_service.dart` implements the full workflow above — it sends `0x28` + `0x09` + `0x19`, collects `0x18` packets for the duration, then stops all three modes in reverse order.
 
 ---
 

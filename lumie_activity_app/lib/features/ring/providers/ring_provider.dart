@@ -161,6 +161,10 @@ class RingProvider extends ChangeNotifier with WidgetsBindingObserver {
       if (connectedBleName != null && connectedBleName.isNotEmpty) {
         await _ringService.saveLastBleDeviceName(connectedBleName);
       }
+
+      // Initialize ring: set time, user info, and measurement intervals
+      await _bleService.initializeRing();
+
       _ringInfo = _ringInfo?.copyWith(
         connectionStatus: RingConnectionStatus.connected,
         batteryLevel: battery ?? _ringInfo?.batteryLevel,
@@ -236,6 +240,10 @@ class RingProvider extends ChangeNotifier with WidgetsBindingObserver {
         if (connectedBleName != null && connectedBleName.isNotEmpty) {
           await _ringService.saveLastBleDeviceName(connectedBleName);
         }
+
+        // Initialize ring: set time, user info, and measurement intervals
+        await _bleService.initializeRing();
+
         _ringInfo = _ringInfo?.copyWith(
           connectionStatus: RingConnectionStatus.connected,
           batteryLevel: battery ?? _ringInfo?.batteryLevel,
@@ -469,23 +477,17 @@ class RingProvider extends ChangeNotifier with WidgetsBindingObserver {
   StreamSubscription<int>? _hrStreamSubscription;
 
   /// Start streaming real-time heart rate from the ring.
-  /// Returns a Stream<int> of BPM values. Returns an empty stream if ring is not connected.
+  /// Returns a Stream<int> of BPM values.
   Stream<int> startHrStreaming() {
-    // TODO: Implement real BLE streaming via command 0x19 (Exercise Mode Control)
-    // and listen to notifications on char 0xfff7 for 0x18 (exercise push) or 0x09 (real-time stream)
-    if (!isConnected) {
-      return Stream.empty();
-    }
-
-    // For now, return an empty stream as real streaming is not yet implemented
-    // This prevents the app from crashing while the real implementation is in progress
-    return Stream.empty();
+    if (!isPaired || !isConnected) return Stream.empty();
+    return _bleService.startHrStreaming();
   }
 
   /// Stop streaming heart rate data from the ring.
-  void stopHrStreaming() {
+  Future<void> stopHrStreaming() async {
     _hrStreamSubscription?.cancel();
     _hrStreamSubscription = null;
+    await _bleService.stopHrStreaming();
   }
 
   // ─── Sleep BLE delegation ─────────────────────────────────────────────────

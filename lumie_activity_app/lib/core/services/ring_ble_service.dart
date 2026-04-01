@@ -10,8 +10,10 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import '../../shared/models/ring_models.dart';
 import '../../shared/models/heart_rate_models.dart';
+import 'ring_service.dart';
 
 class RingBleService {
+  final RingService _ringService = RingService();
   static const String _writeCharFragment = 'fff6';
   static const String _notifyCharFragment = 'fff7';
 
@@ -140,13 +142,13 @@ class RingBleService {
     debugPrint('[Ring BLE] Notifications enabled');
     _subscribeRawNotifyLog();
 
-    final timeSynced = await _setTime();
+    final timeSynced = await setTime();
     debugPrint('[Ring BLE] Time sync ${timeSynced ? "ok" : "failed"} (0x01)');
 
     final mac = await _getMacAddress();
     debugPrint('[Ring BLE] MAC address: $mac');
 
-    await _setUserInfo(
+    await setUserInfo(
       gender: gender,
       age: age,
       heightCm: heightCm,
@@ -393,7 +395,7 @@ class RingBleService {
 
     await _notifyChar!.setNotifyValue(true);
     _subscribeRawNotifyLog();
-    final timeSynced = await _setTime();
+    final timeSynced = await setTime();
     debugPrint(
       '[Ring BLE] Reconnect complete, time sync ${timeSynced ? "ok" : "failed"}',
     );
@@ -403,19 +405,17 @@ class RingBleService {
 
   // ─── Heart Rate ───────────────────────────────────────────────────────────
 
-  /// Command 0x55 — Fetch stored HR history from the ring.
-  ///
-  /// Returns all valid HR readings from the past 24 hours so that nighttime
-  /// readings (e.g. 11 PM – midnight from last night) are captured alongside
-  /// this morning's readings and can be matched to sleep session windows.
+  /// Command 0x55 — Fetch stored HR history from the ring with timestamp filter.
   Future<List<HrDataPoint>> fetchHrHistory() async {
     if (_notifyChar == null) {
       debugPrint('[Ring BLE] fetchHrHistory: not connected');
       return [];
     }
-    debugPrint('[Ring BLE] fetchHrHistory: sending 0x55');
 
-    final cutoff = DateTime.now().subtract(const Duration(hours: 24));
+    // Get last sync timestamp or use epoch
+    final lastSync = await _ringService.loadLastSyncAt() ?? DateTime(2000, 1, 1);
+    debugPrint('[Ring BLE] fetchHrHistory: last sync at $lastSync, sending 0x55');
+
     final results = <HrDataPoint>[];
     final completer = Completer<List<HrDataPoint>>();
     StreamSubscription<List<int>>? sub;
@@ -424,9 +424,7 @@ class RingBleService {
       if (data.isEmpty || data[0] != 0x55) return;
 
       if (data.length >= 2 && data[1] == 0xFF) {
-        debugPrint(
-          '[Ring BLE] HR history end marker — ${results.length} record(s) in last 24 h',
-        );
+        debugPrint('[Ring BLE] HR history end marker — ${results.length} record(s)');
         if (!completer.isCompleted) completer.complete(results);
         return;
       }
@@ -438,9 +436,8 @@ class RingBleService {
 
       final recordTime = _parseRingTimestamp(data, 3);
       if (recordTime == null) return;
-      // Accept all readings within the past 24 hours so nighttime sleep HR
-      // (11 PM – midnight from the previous calendar day) is included.
-      if (recordTime.isAfter(cutoff)) {
+
+      if (recordTime.isAfter(lastSync)) {
         results.add(HrDataPoint(time: recordTime, bpm: hr));
       }
     });
@@ -448,17 +445,28 @@ class RingBleService {
     try {
       final payload = List<int>.filled(15, 0);
       payload[0] = 0x55;
-      payload[1] = 0x00;
+      payload[1] = 0x00; // First request (AA=0x00)
+
+      // Encode timestamp as BCD at bytes [3-8]
+      final bcdTs = _encodeBcdTimestamp(lastSync);
+      for (var i = 0; i < 6; i++) {
+        payload[3 + i] = bcdTs[i];
+      }
+
       await _writeCommand(payload);
-      return await completer.future.timeout(
+      final newRecords = await completer.future.timeout(
         const Duration(seconds: 3),
         onTimeout: () {
-          debugPrint(
-            '[Ring BLE] HR history timeout, got ${results.length} records',
-          );
+          debugPrint('[Ring BLE] HR history timeout, got ${results.length} records');
           return results;
         },
       );
+
+      // Update sync timestamp to now
+      if (newRecords.isNotEmpty) {
+        await _ringService.saveLastSyncAt(DateTime.now());
+      }
+      return newRecords;
     } catch (e) {
       debugPrint('[Ring BLE] fetchHrHistory error: $e');
       return results;
@@ -467,17 +475,15 @@ class RingBleService {
     }
   }
 
-  /// Command 0x56 — Fetch stored HRV / stress / blood pressure history.
-  ///
-  /// Each record is 15 bytes:
-  ///   [0]=0x56 [1]=ID1 [2]=ID2 [3-8]=BCD timestamp
-  ///   [9]=hrv_ms [10]=0x00 [11]=hr_bpm [12]=fatigue [13]=systolic [14]=diastolic
+  /// Command 0x56 — Fetch stored HRV / stress / blood pressure history with timestamp filter.
   Future<List<RingRawHrvRecord>> fetchHrvHistory() async {
     if (_notifyChar == null) {
       debugPrint('[Ring BLE] fetchHrvHistory: not connected');
       return [];
     }
-    debugPrint('[Ring BLE] fetchHrvHistory: sending 0x56');
+
+    final lastSync = await _ringService.loadLastSyncAt() ?? DateTime(2000, 1, 1);
+    debugPrint('[Ring BLE] fetchHrvHistory: last sync at $lastSync, sending 0x56');
 
     final results = <RingRawHrvRecord>[];
     final completer = Completer<List<RingRawHrvRecord>>();
@@ -486,21 +492,17 @@ class RingBleService {
     sub = _notifyChar!.onValueReceived.listen((data) {
       if (data.isEmpty || data[0] != 0x56) return;
 
-      // End-of-data marker: 0x56 0xFF
       if (data.length >= 2 && data[1] == 0xFF) {
-        debugPrint(
-          '[Ring BLE] HRV history end marker — ${results.length} record(s)',
-        );
+        debugPrint('[Ring BLE] HRV history end marker — ${results.length} record(s)');
         if (!completer.isCompleted) completer.complete(results);
         return;
       }
 
       if (data.length < 15) return;
-      // byte[10] is always 0x00 per spec — use as a sanity check
       if (data[10] != 0x00) return;
 
       final timestamp = _parseRingTimestamp(data, 3);
-      if (timestamp == null) return;
+      if (timestamp == null || !timestamp.isAfter(lastSync)) return;
 
       final hrv = data[9];
       final hr = data[11];
@@ -508,7 +510,6 @@ class RingBleService {
       final systolic = data[13];
       final diastolic = data[14];
 
-      // Skip zero-value records (ring placeholder / uninitialized slot)
       if (hrv == 0 && hr == 0 && systolic == 0) return;
 
       results.add(
@@ -527,16 +528,25 @@ class RingBleService {
       final payload = List<int>.filled(15, 0);
       payload[0] = 0x56;
       payload[1] = 0x00;
+
+      final bcdTs = _encodeBcdTimestamp(lastSync);
+      for (var i = 0; i < 6; i++) {
+        payload[3 + i] = bcdTs[i];
+      }
+
       await _writeCommand(payload);
-      return await completer.future.timeout(
+      final newRecords = await completer.future.timeout(
         const Duration(seconds: 5),
         onTimeout: () {
-          debugPrint(
-            '[Ring BLE] HRV history timeout, got ${results.length} records',
-          );
+          debugPrint('[Ring BLE] HRV history timeout, got ${results.length} records');
           return results;
         },
       );
+
+      if (newRecords.isNotEmpty) {
+        await _ringService.saveLastSyncAt(DateTime.now());
+      }
+      return newRecords;
     } catch (e) {
       debugPrint('[Ring BLE] fetchHrvHistory error: $e');
       return results;
@@ -545,17 +555,15 @@ class RingBleService {
     }
   }
 
-  /// Command 0x54 — Fetch detailed HR history (15 readings per record at 5-second intervals).
-  ///
-  /// Each record is 24 bytes:
-  ///   [0]=0x54 [1]=ID1 [2]=ID2 [3-8]=BCD timestamp [9-23]=15 bpm readings
-  /// Expands into individual HrDataPoint entries spaced 5 seconds apart.
+  /// Command 0x54 — Fetch detailed HR history with timestamp filter.
   Future<List<HrDataPoint>> fetchHrDetails() async {
     if (_notifyChar == null) {
       debugPrint('[Ring BLE] fetchHrDetails: not connected');
       return [];
     }
-    debugPrint('[Ring BLE] fetchHrDetails: sending 0x54');
+
+    final lastSync = await _ringService.loadLastSyncAt() ?? DateTime(2000, 1, 1);
+    debugPrint('[Ring BLE] fetchHrDetails: last sync at $lastSync, sending 0x54');
 
     final results = <HrDataPoint>[];
     final completer = Completer<List<HrDataPoint>>();
@@ -565,9 +573,7 @@ class RingBleService {
       if (data.isEmpty || data[0] != 0x54) return;
 
       if (data.length >= 2 && data[1] == 0xFF) {
-        debugPrint(
-          '[Ring BLE] HR details end marker — ${results.length} point(s)',
-        );
+        debugPrint('[Ring BLE] HR details end marker — ${results.length} point(s)');
         if (!completer.isCompleted) completer.complete(results);
         return;
       }
@@ -580,12 +586,10 @@ class RingBleService {
       for (int j = 0; j < 15; j++) {
         final bpm = data[9 + j];
         if (bpm == 0 || bpm >= 250) continue;
-        results.add(
-          HrDataPoint(
-            time: startTime.add(Duration(seconds: j * 5)),
-            bpm: bpm,
-          ),
-        );
+        final pointTime = startTime.add(Duration(seconds: j * 5));
+        if (pointTime.isAfter(lastSync)) {
+          results.add(HrDataPoint(time: pointTime, bpm: bpm));
+        }
       }
     });
 
@@ -593,16 +597,25 @@ class RingBleService {
       final payload = List<int>.filled(15, 0);
       payload[0] = 0x54;
       payload[1] = 0x00;
+
+      final bcdTs = _encodeBcdTimestamp(lastSync);
+      for (var i = 0; i < 6; i++) {
+        payload[3 + i] = bcdTs[i];
+      }
+
       await _writeCommand(payload);
-      return await completer.future.timeout(
+      final newRecords = await completer.future.timeout(
         const Duration(seconds: 5),
         onTimeout: () {
-          debugPrint(
-            '[Ring BLE] HR details timeout, got ${results.length} points',
-          );
+          debugPrint('[Ring BLE] HR details timeout, got ${results.length} points');
           return results;
         },
       );
+
+      if (newRecords.isNotEmpty) {
+        await _ringService.saveLastSyncAt(DateTime.now());
+      }
+      return newRecords;
     } catch (e) {
       debugPrint('[Ring BLE] fetchHrDetails error: $e');
       return results;
@@ -611,17 +624,15 @@ class RingBleService {
     }
   }
 
-  /// Command 0x62 — Fetch temperature history from the ring.
-  ///
-  /// Each record is 15 bytes:
-  ///   [0]=0x62 [1]=ID1 [2]=ID2 [3-8]=BCD timestamp
-  ///   [9-10]=temp1 LE16 [11-12]=temp2 LE16 [13-14]=temp3 LE16 (divide by 10 for °C)
+  /// Command 0x62 — Fetch temperature history with timestamp filter.
   Future<List<RingRawTemperatureRecord>> fetchTemperatureHistory() async {
     if (_notifyChar == null) {
       debugPrint('[Ring BLE] fetchTemperatureHistory: not connected');
       return [];
     }
-    debugPrint('[Ring BLE] fetchTemperatureHistory: sending 0x62');
+
+    final lastSync = await _ringService.loadLastSyncAt() ?? DateTime(2000, 1, 1);
+    debugPrint('[Ring BLE] fetchTemperatureHistory: last sync at $lastSync, sending 0x62');
 
     final results = <RingRawTemperatureRecord>[];
     final completer = Completer<List<RingRawTemperatureRecord>>();
@@ -631,9 +642,7 @@ class RingBleService {
       if (data.isEmpty || data[0] != 0x62) return;
 
       if (data.length >= 2 && data[1] == 0xFF) {
-        debugPrint(
-          '[Ring BLE] Temperature end marker — ${results.length} record(s)',
-        );
+        debugPrint('[Ring BLE] Temperature end marker — ${results.length} record(s)');
         if (!completer.isCompleted) completer.complete(results);
         return;
       }
@@ -641,13 +650,12 @@ class RingBleService {
       if (data.length < 15) return;
 
       final timestamp = _parseRingTimestamp(data, 3);
-      if (timestamp == null) return;
+      if (timestamp == null || !timestamp.isAfter(lastSync)) return;
 
       final temp1 = ((data[10] << 8) | data[9]) / 10.0;
       final temp2 = ((data[12] << 8) | data[11]) / 10.0;
       final temp3 = ((data[14] << 8) | data[13]) / 10.0;
 
-      // Skip zero-value records
       if (temp1 == 0.0 && temp2 == 0.0 && temp3 == 0.0) return;
 
       results.add(
@@ -664,16 +672,25 @@ class RingBleService {
       final payload = List<int>.filled(15, 0);
       payload[0] = 0x62;
       payload[1] = 0x00;
+
+      final bcdTs = _encodeBcdTimestamp(lastSync);
+      for (var i = 0; i < 6; i++) {
+        payload[3 + i] = bcdTs[i];
+      }
+
       await _writeCommand(payload);
-      return await completer.future.timeout(
+      final newRecords = await completer.future.timeout(
         const Duration(seconds: 5),
         onTimeout: () {
-          debugPrint(
-            '[Ring BLE] Temperature timeout, got ${results.length} records',
-          );
+          debugPrint('[Ring BLE] Temperature timeout, got ${results.length} records');
           return results;
         },
       );
+
+      if (newRecords.isNotEmpty) {
+        await _ringService.saveLastSyncAt(DateTime.now());
+      }
+      return newRecords;
     } catch (e) {
       debugPrint('[Ring BLE] fetchTemperatureHistory error: $e');
       return results;
@@ -737,71 +754,87 @@ class RingBleService {
     }
   }
 
-  /// Start an on-demand HR measurement.
-  /// Sends 0x28 (HR mode) then enables 0x09 streaming.
+  /// Start continuous HR streaming.
+  /// Sends 0x28 (HR mode, max duration) + 0x09 (realtime) + 0x19 (exercise
+  /// mode). The 0x19 exercise mode causes the ring to emit 0x18 packets with
+  /// fresh optical HR at Byte[1] every ~1 s. 0x09 packets are used as fallback.
+  /// Call [stopHrStreaming] to tear everything down.
   Stream<int> startHrStreaming() {
     if (_notifyChar == null) {
       debugPrint('[Ring BLE] startHrStreaming: not connected');
       return const Stream.empty();
     }
-    debugPrint('[Ring BLE] startHrStreaming: starting 0x28 + 0x09');
+    debugPrint('[Ring BLE] startHrStreaming: starting 0x28 + 0x09 + 0x19');
 
     _hrStreamController?.close();
     _hrStreamController = StreamController<int>.broadcast();
 
-    // Capture the notify char reference at subscription time.
-    // If reconnect happens, old sub is cancelled and a new one is created.
     final notifyChar = _notifyChar!;
-
     _hrStreamSub?.cancel();
     _hrStreamSub = notifyChar.onValueReceived.listen((data) {
-      if (data.isEmpty || data[0] != 0x09) return;
-
-      int hr = 0;
-      if (data.length == 16) {
-        // Format A (16 bytes, CRC-protected): HR at byte 13
-        hr = data[13];
-      } else if (data.length >= 23) {
-        // Format B/C/extended (26, 32, 36+ bytes):
-        // Byte[13] is an undocumented status field (not HR).
-        // HR is at byte[22] per manufacturer example.
-        hr = data[22];
-      }
-
+      if (data.isEmpty || data[0] != 0x18) return;
+      // 0x18 exercise push packet: live optical HR at byte[1].
+      // byte[1] == 0xFF means ring ended exercise; byte[1] == 0x00 means sensor
+      // is still warming up (no valid reading yet) — both are ignored.
+      if (data.length < 2 || data[1] == 0xFF || data[1] == 0x00) return;
+      final hr = data[1];
+      // duration counter (seconds, LE) for log context
+      final secs = data.length >= 14
+          ? data[10] | (data[11] << 8) | (data[12] << 16) | (data[13] << 24)
+          : 0;
+      debugPrint('[Ring HR] 0x18 → $hr BPM (t=${secs}s)');
       if (hr > 0 && hr < 250 && _hrStreamController?.isClosed == false) {
-        debugPrint(
-          '[Ring BLE] HR reading: $hr BPM (packet len=${data.length})',
-        );
         _hrStreamController!.add(hr);
       }
     });
 
-    // 0x28: Start dedicated HR measurement (green LED), 60s duration
+    // 0x28: activate optical sensor, max 90 min = 5400 s
     final measurePayload = List<int>.filled(15, 0);
     measurePayload[0] = 0x28;
     measurePayload[1] = 0x02; // HR mode
     measurePayload[2] = 0x01; // start
-    measurePayload[5] = 60; // duration_lo
-    measurePayload[6] = 0x00; // duration_hi
+    measurePayload[5] = 0x18; // 5400 & 0xFF
+    measurePayload[6] = 0x15; // 5400 >> 8
     _writeCommand(measurePayload).catchError((e) {
-      debugPrint('[Ring BLE] 0x28 write error: $e');
+      debugPrint('[Ring BLE] startHrStreaming 0x28 error: $e');
     });
 
-    // 0x09: Enable realtime streaming
+    // 0x09: realtime streaming (fallback HR source)
     final streamPayload = List<int>.filled(15, 0);
     streamPayload[0] = 0x09;
-    streamPayload[1] = 0x01; // start
+    streamPayload[1] = 0x01;
     streamPayload[2] = 0x01; // enable temperature
     _writeCommand(streamPayload).catchError((e) {
-      debugPrint('[Ring BLE] 0x09 write error: $e');
+      debugPrint('[Ring BLE] startHrStreaming 0x09 error: $e');
+    });
+
+    // 0x19: exercise mode — triggers live 0x18 push packets
+    final exercisePayload = List<int>.filled(15, 0);
+    exercisePayload[0] = 0x19;
+    exercisePayload[1] = 0x01; // start
+    exercisePayload[2] = 0x09; // mode
+    _writeCommand(exercisePayload).catchError((e) {
+      debugPrint('[Ring BLE] startHrStreaming 0x19 error: $e');
     });
 
     return _hrStreamController!.stream;
   }
 
-  /// Stop the on-demand HR measurement and streaming.
+  /// Stop the continuous HR streaming started by [startHrStreaming].
   Future<void> stopHrStreaming() async {
     debugPrint('[Ring BLE] stopHrStreaming');
+
+    // Stop exercise mode first
+    try {
+      final stopExercise = List<int>.filled(15, 0);
+      stopExercise[0] = 0x19;
+      stopExercise[1] = 0x04; // end
+      stopExercise[2] = 0x09;
+      await _writeCommand(stopExercise);
+    } catch (e) {
+      debugPrint('[Ring BLE] stopHrStreaming 0x19 stop error: $e');
+    }
+
     try {
       final measurePayload = List<int>.filled(15, 0);
       measurePayload[0] = 0x28;
@@ -809,7 +842,7 @@ class RingBleService {
       measurePayload[2] = 0x00; // stop
       await _writeCommand(measurePayload);
     } catch (e) {
-      debugPrint('[Ring BLE] 0x28 stop error: $e');
+      debugPrint('[Ring BLE] stopHrStreaming 0x28 stop error: $e');
     }
 
     try {
@@ -818,7 +851,7 @@ class RingBleService {
       streamPayload[1] = 0x00; // stop
       await _writeCommand(streamPayload);
     } catch (e) {
-      debugPrint('[Ring BLE] 0x09 stop error: $e');
+      debugPrint('[Ring BLE] stopHrStreaming 0x09 stop error: $e');
     }
 
     await _hrStreamSub?.cancel();
@@ -1124,10 +1157,12 @@ class RingBleService {
     }
   }
 
-  /// Command 0x28 — Live HR measurement for [durationSeconds] seconds.
+  /// Command 0x28 + 0x09 + 0x19 — Live HR measurement for [durationSeconds] seconds.
   ///
-  /// Starts HR mode (0x28 mode=0x02), collects 0x09 stream readings for the
-  /// requested duration, then stops.  Returns avg/min/max + raw readings.
+  /// Starts HR mode (0x28), realtime streaming (0x09), and exercise mode (0x19).
+  /// Exercise mode causes the ring to emit 0x18 packets with live optical HR at
+  /// bytes[1]. 0x09 streaming alone returns the ring's stale cached background HR.
+  /// Returns avg/min/max + raw readings.
   Future<RingHrMeasurementResult?> measureHeartRate({
     int durationSeconds = 10,
   }) async {
@@ -1141,35 +1176,32 @@ class RingBleService {
       '(protocol duration ${protocolDurationSeconds}s)',
     );
 
-    // Only record a reading when the HR value changes.
-    // 0x09 streams the ring's cached background HR until 0x28 completes and
-    // the ring updates its cache with the fresh optical reading. Deduplicating
-    // filters out repeated stale values and captures only genuine transitions.
     final readings = <int>[];
     int lastHr = 0;
     StreamSubscription<List<int>>? sub;
 
     sub = _notifyChar!.onValueReceived.listen((data) {
       if (data.isEmpty) return;
-      // Log every packet during measurement so we can see what the ring sends
-      if (data[0] == 0x09 || data[0] == 0x28 || data[0] == 0xA8) {
+      if (data[0] == 0x09 || data[0] == 0x18 || data[0] == 0x28 || data[0] == 0xA8) {
         print(
           '[Ring BLE] measureHeartRate RX: cmd=0x${data[0].toRadixString(16)} len=${data.length} data=${_hexDump(data)}',
         );
       }
-      if (data[0] != 0x09) return;
+
       int hr = 0;
-      if (data.length == 16) {
-        // Format A (16 bytes, CRC-protected): HR at byte 13
-        hr = data[13];
-      } else if (data.length >= 23) {
-        // Format B/C/extended (26, 32, 36+ bytes):
-        // Byte[13] is an undocumented status field (not HR).
-        // HR is at byte[22] per manufacturer example.
-        hr = data[22];
+      if (data[0] == 0x18) {
+        // 0x18 exercise packet: live optical HR at bytes[1]
+        if (data.length >= 2 && data[1] != 0xFF) hr = data[1];
+      } else if (data[0] == 0x09) {
+        if (data.length == 16) {
+          hr = data[13];
+        } else if (data.length >= 23) {
+          hr = data[22];
+        }
       }
+
       if (hr > 0 && hr < 250 && hr != lastHr) {
-        print('[Ring BLE] measureHeartRate: reading $hr bpm');
+        print('[Ring BLE] measureHeartRate: reading $hr bpm (cmd=0x${data[0].toRadixString(16)})');
         readings.add(hr);
         lastHr = hr;
       }
@@ -1186,22 +1218,34 @@ class RingBleService {
       print('[Ring BLE] measureHeartRate: sending 0x28 start');
       await _writeCommand(measurePayload);
 
-      // Wait a moment for ring to start streaming
       await Future.delayed(const Duration(seconds: 1));
 
-      // Explicitly enable realtime streaming; relying on 0x28 alone is flaky.
+      // Enable realtime streaming
       final streamPayload = List<int>.filled(15, 0);
       streamPayload[0] = 0x09;
       streamPayload[1] = 0x01; // start
-      streamPayload[2] = 0x01; // enable stream payloads
+      streamPayload[2] = 0x01; // enable temperature
       print('[Ring BLE] measureHeartRate: sending 0x09 start');
       await _writeCommand(streamPayload);
 
-      // Collect for the full protocol duration so the ring's optical sensor has
-      // time to produce a fresh reading. durationSeconds is what the advisor
-      // requested; protocolDurationSeconds is the minimum the ring needs (30s).
+      // Start exercise mode (0x19, mode=0x09) — triggers 0x18 packets with live HR
+      final exercisePayload = List<int>.filled(15, 0);
+      exercisePayload[0] = 0x19;
+      exercisePayload[1] = 0x01; // start
+      exercisePayload[2] = 0x09; // mode
+      print('[Ring BLE] measureHeartRate: sending 0x19 exercise start');
+      await _writeCommand(exercisePayload);
+
       print('[Ring BLE] measureHeartRate: collecting for ${protocolDurationSeconds}s');
       await Future.delayed(Duration(seconds: protocolDurationSeconds));
+
+      // Stop exercise mode
+      final stopExercise = List<int>.filled(15, 0);
+      stopExercise[0] = 0x19;
+      stopExercise[1] = 0x04; // end
+      stopExercise[2] = 0x09;
+      print('[Ring BLE] measureHeartRate: sending 0x19 exercise stop');
+      await _writeCommand(stopExercise);
 
       // Stop HR measurement
       final stopMeasure = List<int>.filled(15, 0);
@@ -1564,6 +1608,47 @@ class RingBleService {
     }
   }
 
+  /// Initialize ring on reconnect: set time, user info (default), and measurement intervals
+  Future<void> initializeRing({
+    int gender = 1, // 1=male, 2=female (default male)
+    int age = 20,
+    int heightCm = 170,
+    int weightKg = 70,
+  }) async {
+    if (!isConnected) {
+      debugPrint('[Ring BLE] initializeRing: not connected');
+      return;
+    }
+
+    try {
+      // Set time
+      await setTime();
+
+      // Set user info
+      await setUserInfo(
+        gender: gender,
+        age: age,
+        heightCm: heightCm,
+        weightKg: weightKg,
+      );
+
+      // Set measurement intervals to 5 minutes for all metrics
+      // measureType: 1=HR, 2=SpO2, 3=Temperature, 4=HRV/BP
+      // mode: 2=auto
+      for (final measureType in [1, 2, 3, 4]) {
+        await setMeasurementInterval(
+          measureType: measureType,
+          mode: 2, // auto
+          intervalMinutes: 5,
+        );
+      }
+
+      debugPrint('[Ring BLE] Ring initialization complete');
+    } catch (e) {
+      debugPrint('[Ring BLE] initializeRing error: $e');
+    }
+  }
+
   // ─── Detailed steps ───────────────────────────────────────────────────────
 
   /// Command 0x52 — Fetch detailed per-minute step records.
@@ -1661,7 +1746,7 @@ class RingBleService {
   /// counter in sync; the ring uses the same 1–7 convention as Dart's weekday.
   /// Returns true if the ring acknowledged success, false on failure or timeout.
   /// Never throws — errors are logged and the pairing flow continues.
-  Future<bool> _setTime() async {
+  Future<bool> setTime() async {
     try {
       final now = DateTime.now();
       final payload = List<int>.filled(15, 0);
@@ -1709,7 +1794,7 @@ class RingBleService {
   }
 
   /// Command 0x02 — Set User Info
-  Future<void> _setUserInfo({
+  Future<void> setUserInfo({
     required int gender,
     required int age,
     required int heightCm,
@@ -1897,6 +1982,18 @@ class RingBleService {
     } catch (_) {
       return null;
     }
+  }
+
+  /// Encode DateTime as 6-byte BCD timestamp: YY MM DD HH mm SS
+  /// YY is relative to year 2000 (BCD)
+  List<int> _encodeBcdTimestamp(DateTime dt) {
+    final yy = _decimalToBcd(dt.year - 2000);
+    final mm = _decimalToBcd(dt.month);
+    final dd = _decimalToBcd(dt.day);
+    final hh = _decimalToBcd(dt.hour);
+    final min = _decimalToBcd(dt.minute);
+    final ss = _decimalToBcd(dt.second);
+    return [yy, mm, dd, hh, min, ss];
   }
 
   /// Decode a 4-byte little-endian unsigned integer from [data] at [offset].

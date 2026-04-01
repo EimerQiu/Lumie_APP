@@ -2010,8 +2010,8 @@ class _MyHomePageState extends State<MyHomePage> {
   Future<void> _toggleExerciseMode() async {
     try {
       if (_isExerciseActive) {
-        // END EXERCISE
-        const sentCmd = '19-06-00-00-00-00-00-00-00-00-00-00-00-00-00-25';
+        // END EXERCISE (AA=0x04)
+        const sentCmd = '19-04-00-00-00-00-00-00-00-00-00-00-00-00-00-1D';
         setState(() {
           _structuredDataTitle = 'Exercise Mode (0x19)';
           _structuredDataOutput = '📤 SENT:\n$sentCmd\n\n📊 Status: STOPPING...';

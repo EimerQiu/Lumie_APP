@@ -3551,9 +3551,11 @@ class BleService {
 
       case 0x09: // Real-time Step/HR/SpO2/Temperature response
         // Two possible layouts have been observed.
-        // A) 16-byte frame (with checksum): 09 S1 S2 S3 S4 C1 C2 C3 C4 D1 D2 D3 D4 HR T1 T2 [CRC]
-        //    Steps S1..S4 LE, Calories C1..C4 LE (kcal*100), Distance D1..D4 LE (km*100), HR, Temp T1T2 LE (0.1°C). SpO2 may be provided via separate frame/field.
-        // B) Extended (>=26 bytes) concatenated layout as per doc when not framing; keep legacy parse for backwards compatibility.
+        // A) 16-byte frame (with valid CRC): 09 S1 S2 S3 S4 C1 C2 C3 C4 D1 D2 D3 D4 HR T CRC
+        //    Steps S1..S4 LE, Calories C1..C4 LE (kcal*100), Distance D1..D4 LE (km*100), HR at byte[13], Temp/10.0 at byte[14].
+        // B) Extended (>=23 bytes, no CRC): byte[13] is an undocumented status field (NOT HR).
+        //    HR is at byte[22]. Temp (2-byte LE, /10) at bytes[23..24]. SpO2 at byte[25].
+        //    Observed lengths: 32, 36 bytes. Manufacturer docs incorrectly claim HR at byte[21].
         if (bytes.length >= 15) {
           // Handle all packets >= 15 bytes; extract what we can from available data
           int steps = 0, calRaw = 0, distRaw = 0, heartRate = 0, spo2 = 0;
@@ -3575,15 +3577,21 @@ class BleService {
                 (bytes[12] << 24);
           }
 
-          // Parse HR and temperature based on packet length
+          // Parse HR and temperature based on packet length.
+          // Format A: exactly 16 bytes with valid CRC — HR at byte[13], temp at byte[14].
+          // Extended: >=23 bytes — byte[13] is status (NOT HR), HR at byte[22],
+          //   temp (2-byte LE) at bytes[23..24], SpO2 at byte[25].
           if (bytes.length == 16) {
             heartRate = bytes[13];
             temp = bytes[14] / 10.0;
-          } else if (bytes.length >= 25) {
-            heartRate = bytes[21];
-            temp = (bytes[22] | (bytes[23] << 8)) / 10.0;
+          } else if (bytes.length >= 23) {
+            // byte[13] is undocumented status — do NOT read as HR
+            heartRate = bytes[22];
             if (bytes.length >= 25) {
-              spo2 = bytes[24];
+              temp = (bytes[23] | (bytes[24] << 8)) / 10.0;
+            }
+            if (bytes.length >= 26) {
+              spo2 = bytes[25];
             }
           }
 

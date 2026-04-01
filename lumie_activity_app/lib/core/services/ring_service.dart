@@ -16,6 +16,8 @@ class RingService {
   static const String _ringPromptShownKey = 'ring_prompt_shown';
   static const String _ringBleDeviceIdKey = 'ring_ble_device_id';
   static const String _ringBleDeviceNameKey = 'ring_ble_device_name';
+  static const String _ringLastSyncAtKey = 'ring_last_sync_at';
+  static const String _ringLastSyncIncompleteKey = 'ring_last_sync_incomplete';
 
   String? _token;
 
@@ -91,6 +93,36 @@ class RingService {
   Future<void> clearLastBleDeviceName() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove(_ringBleDeviceNameKey);
+  }
+
+  /// Load last sync timestamp for data sync
+  Future<DateTime?> loadLastSyncAt() async {
+    final prefs = await SharedPreferences.getInstance();
+    final isoString = prefs.getString(_ringLastSyncAtKey);
+    if (isoString == null) return null;
+    try {
+      return DateTime.parse(isoString);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Save last sync timestamp
+  Future<void> saveLastSyncAt(DateTime timestamp) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_ringLastSyncAtKey, timestamp.toIso8601String());
+  }
+
+  /// Whether the last sync was incomplete (needs continuation)
+  Future<bool> isLastSyncIncomplete() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getBool(_ringLastSyncIncompleteKey) ?? false;
+  }
+
+  /// Mark sync as incomplete (needs continuation with AA=0x02)
+  Future<void> markSyncIncomplete(bool incomplete) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_ringLastSyncIncompleteKey, incomplete);
   }
 
   /// Clear ring-related prefs on logout
