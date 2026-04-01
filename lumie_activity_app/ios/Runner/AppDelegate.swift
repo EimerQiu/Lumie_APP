@@ -69,20 +69,25 @@ import UserNotifications
   private func requestPushToken(application: UIApplication, result: @escaping FlutterResult) {
     // If we already have a token, return it immediately
     if let token = deviceToken {
+      NSLog("[PUSHDBG] Returning cached APNs token: %@", token)
       result(token)
       return
     }
 
+    NSLog("[PUSHDBG] Requesting APNs permission...")
     // Request permission and register
     UNUserNotificationCenter.current().requestAuthorization(
       options: [.alert, .sound, .badge]
     ) { granted, error in
       guard granted else {
+        NSLog("[PUSHDBG] APNs permission denied or error: %@", error?.localizedDescription ?? "unknown")
         DispatchQueue.main.async { result(nil) }
         return
       }
+      NSLog("[PUSHDBG] APNs permission granted, registering for remote notifications...")
       DispatchQueue.main.async {
         self.tokenCompletion = { token in
+          NSLog("[PUSHDBG] APNs token received: %@", token ?? "nil")
           result(token)
         }
         application.registerForRemoteNotifications()
@@ -95,6 +100,7 @@ import UserNotifications
     didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data
   ) {
     let token = deviceToken.map { String(format: "%02.2hhx", $0) }.joined()
+    NSLog("[PUSHDBG] APNs registration successful, token: %@", token)
     self.deviceToken = token
     tokenCompletion?(token)
     tokenCompletion = nil
@@ -104,6 +110,7 @@ import UserNotifications
     _ application: UIApplication,
     didFailToRegisterForRemoteNotificationsWithError error: Error
   ) {
+    NSLog("[PUSHDBG] APNs registration failed: %@", error.localizedDescription)
     tokenCompletion?(nil)
     tokenCompletion = nil
   }

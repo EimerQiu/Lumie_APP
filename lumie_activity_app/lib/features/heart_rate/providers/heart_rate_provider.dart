@@ -1,4 +1,3 @@
-import 'dart:async';
 import 'dart:math';
 import 'package:flutter/foundation.dart';
 
@@ -12,9 +11,7 @@ class HeartRateProvider extends ChangeNotifier {
   List<HrDataPoint> _dailyReadings = [];
   bool _loadingHistory = false;
   HrMeasureState _measureState = HrMeasureState.idle;
-  int? _liveHr;
   int? _finalHr;
-  StreamSubscription<int>? _hrSub;
 
   // ─── ProxyProvider bridge ─────────────────────────────────────────────────
 
@@ -32,11 +29,10 @@ class HeartRateProvider extends ChangeNotifier {
   List<HrDataPoint> get dailyReadings => _dailyReadings;
   bool get loadingHistory => _loadingHistory;
   HrMeasureState get measureState => _measureState;
-  int? get liveHr => _liveHr;
+  int? get liveHr => _finalHr;
   int? get finalHr => _finalHr;
 
-  int? get latestHr =>
-      _dailyReadings.isEmpty ? null : _dailyReadings.last.bpm;
+  int? get latestHr => _dailyReadings.isEmpty ? null : _dailyReadings.last.bpm;
 
   int? get todayMin => _dailyReadings.isEmpty
       ? null
@@ -49,8 +45,8 @@ class HeartRateProvider extends ChangeNotifier {
   int? get todayAvg => _dailyReadings.isEmpty
       ? null
       : (_dailyReadings.map((e) => e.bpm).reduce((a, b) => a + b) /
-              _dailyReadings.length)
-          .round();
+                _dailyReadings.length)
+            .round();
 
   // ─── Actions ──────────────────────────────────────────────────────────────
 
@@ -64,52 +60,47 @@ class HeartRateProvider extends ChangeNotifier {
   }
 
   Future<void> startMeasurement() async {
-    if (_ringProvider == null || !_ringProvider!.isPaired) return;
+    if (_ringProvider == null ||
+        !_ringProvider!.isPaired ||
+        !_ringProvider!.isConnected) {
+      return;
+    }
     if (_measureState == HrMeasureState.measuring) return;
 
     _measureState = HrMeasureState.measuring;
-    _liveHr = null;
     _finalHr = null;
     notifyListeners();
 
-    final stream = _ringProvider!.startHrStreaming();
-    _hrSub = stream.listen((hr) {
-      _liveHr = hr;
-      notifyListeners();
-    });
+    try {
+      final result = await _ringProvider!.measureHeartRate(durationSeconds: 30);
+      _finalHr = result?.avgBpm;
 
+      if (result != null) {
+        _dailyReadings = [
+          ..._dailyReadings,
+          HrDataPoint(time: DateTime.now(), bpm: result.avgBpm),
+        ];
+      }
+      _measureState = HrMeasureState.done;
+    } catch (e) {
+      _measureState = HrMeasureState.idle;
+      debugPrint('[RCMD] HeartRateProvider.startMeasurement error: $e');
+    }
+    notifyListeners();
   }
 
   Future<void> stopMeasurement() async {
     if (_measureState != HrMeasureState.measuring) return;
-
-    await _hrSub?.cancel();
-    _hrSub = null;
-    await _ringProvider?.stopHrStreaming();
-
-    _finalHr = _liveHr;
-    _measureState = HrMeasureState.done;
-
-    // Append the measurement to today's readings
-    if (_finalHr != null) {
-      _dailyReadings = [
-        ..._dailyReadings,
-        HrDataPoint(time: DateTime.now(), bpm: _finalHr!),
-      ];
-    }
+    // The unified measureHeartRate flow is a single awaited BLE operation.
+    // We keep the Stop action as a soft reset for the UI only.
+    _measureState = HrMeasureState.idle;
+    _finalHr = null;
     notifyListeners();
   }
 
   void resetMeasurement() {
     _measureState = HrMeasureState.idle;
-    _liveHr = null;
     _finalHr = null;
     notifyListeners();
-  }
-
-  @override
-  void dispose() {
-    _hrSub?.cancel();
-    super.dispose();
   }
 }

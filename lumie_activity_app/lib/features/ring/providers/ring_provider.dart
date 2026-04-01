@@ -32,6 +32,7 @@ class RingProvider extends ChangeNotifier with WidgetsBindingObserver {
   List<DiscoveredRing> _discoveredRings = [];
   String? _errorMessage;
   bool _isBluetoothOn = false;
+  bool _heartRateMeasurementInProgress = false;
   StreamSubscription<BluetoothAdapterState>? _btStateSubscription;
 
   RingProviderState get state => _state;
@@ -42,6 +43,7 @@ class RingProvider extends ChangeNotifier with WidgetsBindingObserver {
   bool get isBluetoothOn => _isBluetoothOn;
   bool get isPaired => _ringInfo?.isPaired ?? false;
   bool get isConnected => _bleService.isConnected;
+  bool get isHeartRateMeasurementInProgress => _heartRateMeasurementInProgress;
 
   void setToken(String token) => _ringService.setToken(token);
   void clearToken() => _ringService.clearToken();
@@ -92,6 +94,12 @@ class RingProvider extends ChangeNotifier with WidgetsBindingObserver {
   Future<void> tryReconnect() => _tryReconnect();
 
   Future<void> _tryReconnect() async {
+    await _tryReconnectInternal(runBackgroundSyncAfterConnect: true);
+  }
+
+  Future<void> _tryReconnectInternal({
+    required bool runBackgroundSyncAfterConnect,
+  }) async {
     if (_bleService.isConnected) {
       // Already connected at the BLE layer — ensure provider state matches.
       if (_state != RingProviderState.paired) {
@@ -146,7 +154,9 @@ class RingProvider extends ChangeNotifier with WidgetsBindingObserver {
       _state = RingProviderState.paired;
       debugPrint('[Ring] Reconnect succeeded');
       notifyListeners();
-      _syncSleepInBackground();
+      if (runBackgroundSyncAfterConnect) {
+        _syncSleepInBackground();
+      }
     } catch (e) {
       debugPrint('[Ring] Reconnect failed: $e');
       _ringInfo = _ringInfo?.copyWith(
@@ -244,6 +254,10 @@ class RingProvider extends ChangeNotifier with WidgetsBindingObserver {
   /// All errors are caught — this must never disrupt the connection flow.
   void _syncSleepInBackground() {
     if (!isConnected) return;
+    if (_heartRateMeasurementInProgress) {
+      debugPrint('[RCMD] Sync skipped: heart-rate measurement in progress');
+      return;
+    }
     RingSyncService().triggerSync(
       fetchSleep: () => _bleService.fetchSleepHistory(),
       fetchHr: () => _bleService.fetchHrHistory(),
@@ -256,30 +270,62 @@ class RingProvider extends ChangeNotifier with WidgetsBindingObserver {
     RingCommandService().checkAndExecute(_bleService);
   }
 
+  Future<void> _checkPendingRingCommandsOnly() async {
+    if (!isConnected) return;
+    await RingCommandService().checkAndExecute(_bleService);
+  }
+
+  Future<RingHrMeasurementResult?> measureHeartRate({
+    int durationSeconds = 30,
+  }) async {
+    if (!isPaired || !isConnected) {
+      debugPrint('[RCMD] measureHeartRate skipped: ring not connected');
+      return null;
+    }
+    if (_heartRateMeasurementInProgress) {
+      debugPrint(
+        '[RCMD] measureHeartRate skipped: measurement already in progress',
+      );
+      return null;
+    }
+
+    _heartRateMeasurementInProgress = true;
+    try {
+      return await _bleService.measureHeartRate(
+        durationSeconds: durationSeconds,
+      );
+    } finally {
+      _heartRateMeasurementInProgress = false;
+    }
+  }
+
   /// Handle a remote ring command notification while the app is already open.
   /// If we are connected, execute immediately. If paired but disconnected,
   /// reconnect first; successful reconnect will poll pending commands.
   Future<void> handleRemoteRingCommand() async {
     debugPrint(
-      '[Ring] handleRemoteRingCommand: isConnected=$isConnected isPaired=$isPaired state=$_state',
+      '[RCMD] RingProvider.handleRemoteRingCommand: isConnected=$isConnected isPaired=$isPaired state=$_state',
     );
     if (isConnected) {
       debugPrint(
-        '[Ring] Remote ring command: already connected, checking pending commands now',
+        '[RCMD] RingProvider: already connected, checking pending commands now',
       );
-      _syncSleepInBackground();
+      await _checkPendingRingCommandsOnly();
       return;
     }
 
     if (isPaired) {
       debugPrint(
-        '[Ring] Remote ring command: paired but disconnected, attempting reconnect',
+        '[RCMD] RingProvider: paired but disconnected, attempting reconnect',
       );
-      await _tryReconnect();
+      await _tryReconnectInternal(runBackgroundSyncAfterConnect: false);
+      await _checkPendingRingCommandsOnly();
       return;
     }
 
-    debugPrint('[Ring] Remote ring command ignored: ring is not paired');
+    debugPrint(
+      '[RCMD] RingProvider: remote ring command ignored because ring is not paired',
+    );
   }
 
   @override
@@ -404,11 +450,29 @@ class RingProvider extends ChangeNotifier with WidgetsBindingObserver {
   Future<List<HrDataPoint>> fetchHrHistory() =>
       isPaired ? _bleService.fetchHrHistory() : Future.value([]);
 
-  Stream<int> startHrStreaming() =>
-      isPaired ? _bleService.startHrStreaming() : const Stream.empty();
+  // ─── Heart Rate Streaming ─────────────────────────────────────────────────
 
-  Future<void> stopHrStreaming() =>
-      isPaired ? _bleService.stopHrStreaming() : Future.value();
+  StreamSubscription<int>? _hrStreamSubscription;
+
+  /// Start streaming real-time heart rate from the ring.
+  /// Returns a Stream<int> of BPM values. Returns an empty stream if ring is not connected.
+  Stream<int> startHrStreaming() {
+    // TODO: Implement real BLE streaming via command 0x19 (Exercise Mode Control)
+    // and listen to notifications on char 0xfff7 for 0x18 (exercise push) or 0x09 (real-time stream)
+    if (!isConnected) {
+      return Stream.empty();
+    }
+
+    // For now, return an empty stream as real streaming is not yet implemented
+    // This prevents the app from crashing while the real implementation is in progress
+    return Stream.empty();
+  }
+
+  /// Stop streaming heart rate data from the ring.
+  void stopHrStreaming() {
+    _hrStreamSubscription?.cancel();
+    _hrStreamSubscription = null;
+  }
 
   // ─── Sleep BLE delegation ─────────────────────────────────────────────────
 

@@ -54,13 +54,17 @@ class PushNotificationService {
 
     try {
       final deviceToken = await _channel.invokeMethod<String>('getDeviceToken');
-      if (deviceToken == null || deviceToken.isEmpty) return;
+      if (deviceToken == null || deviceToken.isEmpty) {
+        debugPrint('[PUSHDBG] getDeviceToken returned empty');
+        return;
+      }
 
+      debugPrint('[PUSHDBG] APNs token acquired: $deviceToken');
       _token = deviceToken;
       await _uploadToken(authToken, deviceToken);
     } on PlatformException catch (e) {
       // Permission denied or unavailable — not fatal
-      print('Push notification init failed: ${e.message}');
+      debugPrint('[PUSHDBG] Push notification init failed: ${e.message}');
     }
   }
 
@@ -68,13 +72,13 @@ class PushNotificationService {
     if (call.method == 'onNotificationTap') {
       final data = Map<String, dynamic>.from(call.arguments as Map);
       debugPrint(
-        '[Push] onNotificationTap: type=${data['type']} navigate_to=${data['navigate_to']} request_id=${data['request_id']}',
+        '[RCMD] Push tap: type=${data['type']} navigate_to=${data['navigate_to']} request_id=${data['request_id']}',
       );
       _onTap?.call(data);
     } else if (call.method == 'onNotificationReceived') {
       final data = Map<String, dynamic>.from(call.arguments as Map);
       debugPrint(
-        '[Push] onNotificationReceived: type=${data['type']} navigate_to=${data['navigate_to']} request_id=${data['request_id']}',
+        '[RCMD] Push received: type=${data['type']} navigate_to=${data['navigate_to']} request_id=${data['request_id']}',
       );
       _onReceive?.call(data);
     }
@@ -82,7 +86,8 @@ class PushNotificationService {
 
   Future<void> _uploadToken(String authToken, String deviceToken) async {
     try {
-      await http.post(
+      debugPrint('[PUSHDBG] Uploading token to backend: $deviceToken');
+      final response = await http.post(
         Uri.parse('${ApiConstants.baseUrl}/auth/save-device-token'),
         headers: {
           'Content-Type': 'application/json',
@@ -90,22 +95,33 @@ class PushNotificationService {
         },
         body: json.encode({'device_token': deviceToken}),
       );
+      debugPrint('[PUSHDBG] Token upload response: ${response.statusCode}');
+      if (response.statusCode != 200) {
+        debugPrint('[PUSHDBG] Token upload failed: ${response.body}');
+      } else {
+        debugPrint('[PUSHDBG] Token upload successful');
+      }
     } catch (e) {
-      print('Failed to upload device token: $e');
+      debugPrint('[PUSHDBG] Failed to upload device token: $e');
     }
   }
 
   /// Remove server-side token on logout.
   Future<void> deleteToken(String authToken) async {
     try {
-      await http.delete(
+      debugPrint('[PUSHDBG] Deleting token from backend: $_token');
+      final response = await http.delete(
         Uri.parse('${ApiConstants.baseUrl}/auth/device-token'),
         headers: {
           'Content-Type': 'application/json',
           'Authorization': 'Bearer $authToken',
         },
       );
-    } catch (_) {}
+      debugPrint('[PUSHDBG] Token deletion response: ${response.statusCode}');
+    } catch (e) {
+      debugPrint('[PUSHDBG] Failed to delete token: $e');
+    }
     _token = null;
+    debugPrint('[PUSHDBG] Token cleared locally');
   }
 }

@@ -11,7 +11,9 @@
       "Bash(find /Users/ciline/Documents/development/projects/swing/golf_swing_recorder -type f -name *.task -o -name *pose* -o -name *landmarker*)",
       "Bash(python -c \":*)",
       "Bash(python3 -c \":*)",
-      "Bash(head -10 grep -rn \"hr_readings\\\\|heart_rate\\\\|db\\\\.hr\" /Users/ciline/Documents/development/projects/Lumie_APP/lumie_backend/app/services/)"
+      "Bash(head -10 grep -rn \"hr_readings\\\\|heart_rate\\\\|db\\\\.hr\" /Users/ciline/Documents/development/projects/Lumie_APP/lumie_backend/app/services/)",
+      "Bash(xcodebuild clean:*)",
+      "Bash(xcodebuild -workspace ios/Runner.xcworkspace -scheme Runner -configuration Debug -derivedDataPath build -verbose)"
     ],
     "additionalDirectories": [
       "/Users/ciline/.claude"

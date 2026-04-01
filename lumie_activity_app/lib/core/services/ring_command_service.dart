@@ -20,17 +20,17 @@ class RingCommandService {
   /// [bleService] must be connected when this is called.
   Future<void> checkAndExecute(RingBleService bleService) async {
     if (_running) {
-      print('[RingCmd] checkAndExecute skipped: already running');
+      print('[RCMD] checkAndExecute skipped: already running');
       return;
     }
     if (!bleService.isConnected) {
-      print('[RingCmd] checkAndExecute skipped: BLE not connected');
+      print('[RCMD] checkAndExecute skipped: BLE not connected');
       return;
     }
 
     final token = AuthService().token;
     if (token == null) {
-      print('[RingCmd] checkAndExecute skipped: auth token missing');
+      print('[RCMD] checkAndExecute skipped: auth token missing');
       return;
     }
 
@@ -47,12 +47,12 @@ class RingCommandService {
           )
           .timeout(const Duration(seconds: 5));
 
-      print('[RingCmd] pending response: status=${response.statusCode}');
+      print('[RCMD] pending response: status=${response.statusCode}');
       if (response.statusCode != 200) return;
 
       final body = response.body.trim();
       if (body == 'null' || body.isEmpty) {
-        print('[RingCmd] no pending command');
+        print('[RCMD] no pending command');
         return;
       }
 
@@ -61,7 +61,7 @@ class RingCommandService {
       final commandType = doc['command_type'] as String;
       final durationSeconds = (doc['duration_seconds'] as num?)?.toInt() ?? 10;
 
-      print('[RingCmd] Executing $commandType (id=$requestId)');
+      print('[RCMD] Executing $commandType (id=$requestId)');
       await _execute(
         bleService: bleService,
         requestId: requestId,
@@ -70,7 +70,7 @@ class RingCommandService {
         token: token,
       );
     } catch (e) {
-      print('[RingCmd] checkAndExecute error: $e');
+      print('[RCMD] checkAndExecute error: $e');
     } finally {
       _running = false;
     }
@@ -127,7 +127,7 @@ class RingCommandService {
       }
     } catch (e) {
       error = e.toString();
-      print('[RingCmd] BLE execution error: $e');
+      print('[RCMD] BLE execution error: $e');
     }
 
     // Post result back to backend
@@ -146,9 +146,9 @@ class RingCommandService {
             }),
           )
           .timeout(const Duration(seconds: 10));
-      print('[RingCmd] Result posted for $requestId: success=$success');
+      print('[RCMD] Result posted for $requestId: success=$success');
     } catch (e) {
-      print('[RingCmd] Failed to post result: $e');
+      print('[RCMD] Failed to post result: $e');
     }
   }
 }

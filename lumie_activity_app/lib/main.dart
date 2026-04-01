@@ -300,12 +300,12 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
     final navigateTo = data['navigate_to'] as String?;
     final type = data['type'] as String?;
     debugPrint(
-      '[Push] MainNavigation payload: type=$type navigate_to=$navigateTo request_id=${data['request_id']} command_type=${data['command_type']}',
+      '[RCMD] Main payload: type=$type navigate_to=$navigateTo request_id=${data['request_id']} command_type=${data['command_type']}',
     );
 
     if (type == 'ring_command') {
       debugPrint(
-        '[Push] Detected ring_command payload, forwarding to RingProvider',
+        '[RCMD] Detected ring_command payload, forwarding to RingProvider',
       );
       context.read<RingProvider>().handleRemoteRingCommand();
     }
