@@ -1,42 +1,45 @@
-"""Proactive Advisor Service — skill-driven design.
+"""Proactive Advisor Service — structured assessment-driven design.
 
-Instead of hardcoding what data means, this service:
-  1. Loads the full .md guidance for every enabled skill.
-  2. Fetches raw data from MongoDB (structural, per capability).
-  3. Passes skill guidance + raw data + last-nudge context to Claude Haiku.
-  4. Haiku decides whether to nudge using the skill files as its knowledge base.
+Instead of packing raw data + full skill markdown into one LLM prompt,
+this service:
+  1. Runs domain-specific assessment modules (sleep, activity, medication,
+     recovery, dayprint follow-up) that each query their own data and
+     return a structured ProactiveSkillResult.
+  2. Evaluates deterministic guardrails to short-circuit obvious cases.
+  3. Sends only structured assessment results + compact decision policy
+     to the LLM for the final nudge decision.
+  4. Persists audit records for observability.
 
-Updating a skill .md automatically changes how the advisor interprets data —
-no changes to this service needed.
-
-Capability → collections mapping (structural, rarely changes):
-  lumie_internal_data → tasks, sleep_sessions, activities
-  email_read / browser_portal_access / web_read → noted in prompt, data not
-  fetched here (requires execution infrastructure).
+Adding a new domain = add a new assessment module + register it.
+No changes to this orchestrator needed.
 """
 
+import asyncio
 import json
 import logging
-from datetime import datetime, timedelta, timezone
+import uuid
+from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
 from ..core.config import settings
 from ..core.database import get_database
+from ..models.proactive import ProactiveSkillResult
 from ..services.capability_service import get_user_enabled_capability_ids
-from ..services.skill_registry_service import skill_registry
-from ..services.notification_service import queue_checkin_notification
 from ..services.chat_history_service import save_message
+from ..services.notification_service import queue_checkin_notification
+from . import proactive_audit_service as audit
+from . import proactive_guardrails as guardrails
 from .llm_client import chat_completion
+from .proactive_skills import ALL_ASSESSMENTS
 
 logger = logging.getLogger(__name__)
 
-_HAIKU_MODEL = settings.PALEBLUEDOT_MODEL
+_DECISION_MODEL = settings.PALEBLUEDOT_MODEL
 
-# Capabilities whose data we can fetch directly from MongoDB
+# Capabilities whose data we can assess directly from MongoDB
 _INTERNAL_CAP_ID = "lumie_internal_data"
 
-# Capabilities that require execution infrastructure — we note them in the prompt
-# so Haiku is aware, but we don't fetch data for them in proactive runs.
+# Capabilities that require execution infrastructure — noted for context
 _EXECUTION_CAPS = {
     "email_read": "Email (enabled, data not available in proactive mode)",
     "browser_portal_access": "Web portal (enabled, data not available in proactive mode)",
@@ -44,167 +47,89 @@ _EXECUTION_CAPS = {
 }
 
 
-# ── Raw data fetchers (structural, no interpretation embedded) ────────────────
+# ── Assessment execution ────────────────────────────────────────────────────
 
-async def _fetch_lumie_internal_data(db, user_id: str, now_utc: datetime, now_str: str) -> str:
-    """Fetch raw tasks, sleep, and activity data. Returns a text block."""
-    lines: list[str] = []
+async def _run_single_assessment(assess_fn, db, user_id: str, now_utc: datetime) -> ProactiveSkillResult | None:
+    """Run a single assessment with fault isolation."""
+    try:
+        return await assess_fn(db, user_id, now_utc)
+    except Exception as e:
+        fn_name = getattr(assess_fn, "__module__", "unknown")
+        logger.error("Assessment %s failed for user=%s: %s", fn_name, user_id, e, exc_info=True)
+        return None
 
-    # Tasks: overdue (last 3 days), currently active, upcoming (next 2 hours)
-    three_days_ago = (now_utc - timedelta(days=3)).strftime("%Y-%m-%d %H:%M")
-    two_hours_ahead = (now_utc + timedelta(hours=2)).strftime("%Y-%m-%d %H:%M")
 
-    overdue = await db.tasks.find({
-        "user_id": user_id,
-        "done": {"$exists": False},
-        "close_datetime": {"$lt": now_str},
-        "open_datetime": {"$gte": three_days_ago},
-    }).to_list(20)
+async def _run_all_assessments(db, user_id: str, now_utc: datetime) -> list[ProactiveSkillResult]:
+    """Run all assessment modules concurrently with fault isolation."""
+    tasks = [_run_single_assessment(fn, db, user_id, now_utc) for fn in ALL_ASSESSMENTS]
+    raw_results = await asyncio.gather(*tasks)
+    return [r for r in raw_results if r is not None]
 
-    active = await db.tasks.find({
-        "user_id": user_id,
-        "done": {"$exists": False},
-        "open_datetime": {"$lte": now_str},
-        "close_datetime": {"$gte": now_str},
-    }).to_list(10)
 
-    upcoming = await db.tasks.find({
-        "user_id": user_id,
-        "done": {"$exists": False},
-        "open_datetime": {"$gt": now_str, "$lte": two_hours_ahead},
-    }).to_list(10)
+# ── LLM decision prompt ────────────────────────────────────────────────────
 
-    def _task_str(t: dict) -> str:
-        name = t.get("task_name", "Task")
-        if " - " in name:
-            name = name.split(" - ", 1)[1]
-        return f"{name} [{t.get('task_type', '')}] window {t.get('open_datetime', '')}–{t.get('close_datetime', '')}"
+def _build_decision_prompt(
+    user_name: str,
+    role: str,
+    icd10: str,
+    local_time_str: str,
+    skill_results: list[ProactiveSkillResult],
+    last_nudge_str: str,
+    guardrail_summary: dict,
+    execution_caps_notes: list[str],
+) -> tuple[str, str]:
+    """Build compact system + user prompt from structured assessment results."""
 
-    if overdue:
-        lines.append("Overdue tasks (last 3 days):")
-        lines.extend(f"  - {_task_str(t)}" for t in overdue)
-    else:
-        lines.append("No overdue tasks in the last 3 days.")
+    # Serialize skill results for the LLM
+    results_for_llm = []
+    for r in skill_results:
+        results_for_llm.append({
+            "skill_id": r.skill_id,
+            "domain": r.domain,
+            "status": r.status.value,
+            "summary": r.summary,
+            "score": r.score,
+            "signals": r.signals,
+            "recommended_actions": r.recommended_actions,
+        })
 
-    if active:
-        lines.append("Currently active tasks:")
-        lines.extend(f"  - {_task_str(t)}" for t in active)
-    else:
-        lines.append("No tasks currently active.")
+    condition_str = f" with condition code {icd10}" if icd10 else ""
 
-    if upcoming:
-        lines.append("Upcoming tasks (next 2 hours):")
-        lines.extend(f"  - {_task_str(t)}" for t in upcoming)
-
-    # Sleep: most recent session
-    yesterday_utc = now_utc - timedelta(days=1)
-    sleep = await db.sleep_sessions.find_one(
-        {"user_id": user_id, "bedtime": {"$gte": yesterday_utc}},
-        sort=[("bedtime", -1)],
+    system_prompt = (
+        f"You are a proactive health advisor for {user_name}, a {role}{condition_str}.\n"
+        f"Current local time: {local_time_str}.\n\n"
+        "You are in PROACTIVE MODE. You are reviewing structured assessment results to decide "
+        "whether to send a nudge notification.\n\n"
+        "DECISION POLICY:\n"
+        "1. First check follow-up domain: if a recent dayprint shows an unresolved concern, "
+        "struggle, or prior advice topic, prefer a follow-up nudge.\n"
+        "2. If no strong follow-up, check other domains for actionable concerns (score >= 0.3).\n"
+        "3. Only nudge if genuinely worth addressing NOW. Avoid minor, speculative, or future concerns.\n"
+        "4. When multiple domains have concerns, prefer the most personally grounded one.\n"
+        "5. Never repeat the same nudge reason if the situation hasn't materially changed.\n\n"
+        f"Nudge history: {last_nudge_str}\n\n"
+        "Respond with valid JSON only — no markdown, no explanation:\n"
+        '{"should_nudge": true|false, "message": "<friendly nudge message ≤120 chars, or null>", '
+        '"reason": "<brief internal reason>", "primary_domain": "<domain>", "confidence": 0.0-1.0}'
     )
-    if sleep:
-        mins = sleep.get("total_sleep_minutes") or 0
-        score = sleep.get("sleep_quality_score")
-        rhr = sleep.get("resting_heart_rate")
-        parts = [f"Last sleep: {mins // 60}h {mins % 60}m"]
-        if score is not None:
-            parts.append(f"quality {score:.0f}/100")
-        if rhr:
-            parts.append(f"resting HR {rhr} bpm")
-        stages = sleep.get("stages") or []
-        if stages:
-            stage_str = ", ".join(
-                f"{s['stage']} {s.get('duration_minutes', 0)}min"
-                for s in stages
-            )
-            parts.append(f"stages: {stage_str}")
-        lines.append(", ".join(parts))
-    else:
-        lines.append("No sleep data in the last 24 hours.")
 
-    # Activities: last 3 days
-    three_days_ago_iso = (now_utc - timedelta(days=3)).isoformat()
-    activities = await db.activities.find({
-        "user_id": user_id,
-        "start_time": {"$gte": three_days_ago_iso},
-    }).sort("start_time", -1).to_list(10)
+    # Build user message with assessment results + guardrail summary
+    user_parts = ["Assessment results:\n"]
+    user_parts.append(json.dumps(results_for_llm, indent=2))
 
-    if activities:
-        lines.append(f"Activities in the last 3 days ({len(activities)} records):")
-        for a in activities[:5]:
-            lines.append(
-                f"  - {a.get('activity_type_name', 'activity')} "
-                f"{a.get('duration_minutes', 0)}min, "
-                f"intensity {a.get('intensity', '?')}, "
-                f"avg HR {a.get('avg_heart_rate', '?')} bpm"
-            )
-    else:
-        lines.append("No activity recorded in the last 3 days.")
+    if guardrail_summary:
+        user_parts.append(f"\nGuardrail summary: {json.dumps(guardrail_summary)}")
 
-    return "\n".join(lines)
+    if execution_caps_notes:
+        user_parts.append("\nNote: " + "; ".join(execution_caps_notes))
+
+    user_parts.append("\n\nBased on these assessments, should I reach out?")
+    user_message = "\n".join(user_parts)
+
+    return system_prompt, user_message
 
 
-async def _fetch_recent_dayprint_memory(db, user_id: str, now_utc: datetime) -> str:
-    """Fetch recent dayprint entries as lightweight follow-up memory."""
-    since_date = (now_utc - timedelta(days=5)).strftime("%Y-%m-%d")
-    docs = await db.dayprints.find(
-        {"user_id": user_id, "date": {"$gte": since_date}},
-        {"_id": 0, "date": 1, "events": 1},
-    ).sort("date", -1).to_list(5)
-
-    if not docs:
-        return "No recent dayprint memory."
-
-    lines: list[str] = []
-    for doc in docs:
-        date = doc.get("date", "unknown-date")
-        events = doc.get("events") or []
-        important = [e for e in events if e.get("type") == "important_insight"]
-        chats = [e for e in events if e.get("type") == "advisor_chat"]
-        completed = [e for e in events if e.get("type") == "task_completed"]
-
-        day_lines: list[str] = []
-
-        for event in important[-3:]:
-            data = event.get("data") or {}
-            summary = data.get("summary")
-            category = data.get("category", "other")
-            if summary:
-                day_lines.append(f"important_insight [{category}]: {summary}")
-
-        for event in chats[-3:]:
-            data = event.get("data") or {}
-            summary = data.get("summary")
-            if summary:
-                day_lines.append(f"advisor_chat: {summary}")
-
-        if completed:
-            completed_names = []
-            for event in completed[-3:]:
-                task_name = (event.get("data") or {}).get("task_name")
-                if task_name:
-                    completed_names.append(task_name)
-            if completed_names:
-                day_lines.append(
-                    "completed_tasks: " + ", ".join(completed_names)
-                )
-
-        if day_lines:
-            lines.append(f"{date}:")
-            lines.extend(f"  - {line}" for line in day_lines)
-
-    return "\n".join(lines) if lines else "No recent dayprint memory."
-
-
-def _preview_text(text: str, limit: int = 360) -> str:
-    """Compact preview for logs."""
-    compact = " ".join(text.split())
-    if len(compact) <= limit:
-        return compact
-    return compact[: limit - 3] + "..."
-
-
-# ── Main entry point ──────────────────────────────────────────────────────────
+# ── Main entry point ────────────────────────────────────────────────────────
 
 async def run_proactive_check(user_id: str) -> dict:
     """Run a proactive advisor check for a single user.
@@ -217,9 +142,11 @@ async def run_proactive_check(user_id: str) -> dict:
             "reason": str,
         }
     """
+    run_id = str(uuid.uuid4())
     db = get_database()
+    now_utc = datetime.now(timezone.utc)
 
-    # ── 1. User profile ──────────────────────────────────────────────────────
+    # ── 1. User profile ─────────────────────────────────────────────────────
     profile = await db.profiles.find_one({"user_id": user_id}, {"_id": 0})
     if not profile:
         return {"nudged": False, "message": None, "reason": "no_profile"}
@@ -234,64 +161,35 @@ async def run_proactive_check(user_id: str) -> dict:
     except Exception:
         local_tz = ZoneInfo("UTC")
 
-    now_utc = datetime.now(timezone.utc)
     now_local = datetime.now(local_tz)
-    now_str = now_utc.strftime("%Y-%m-%d %H:%M")
+    local_time_str = now_local.strftime("%A, %B %d, %I:%M %p")
 
-    # ── 2. Enabled capabilities + skill texts ────────────────────────────────
+    # ── 2. Enabled capabilities ─────────────────────────────────────────────
     enabled_cap_ids = await get_user_enabled_capability_ids(user_id)
     if not enabled_cap_ids:
         logger.info("Proactive[%s]: no enabled capabilities — skip", user_id)
         return {"nudged": False, "message": None, "reason": "no_enabled_capabilities"}
 
-    logger.info("Proactive[%s]: enabled capabilities: %s", user_id, sorted(enabled_cap_ids))
+    if _INTERNAL_CAP_ID not in enabled_cap_ids:
+        logger.info("Proactive[%s]: lumie_internal_data not enabled — skip", user_id)
+        return {"nudged": False, "message": None, "reason": "no_internal_data_capability"}
 
-    skill_text_blocks: list[str] = []
-    loaded_skill_ids: list[str] = []
-    for cap_id in enabled_cap_ids:
-        for skill in skill_registry.get_skills_by_capability(cap_id):
-            full_text = skill_registry.load_skill_full_text(skill.skill_id)
-            if full_text:
-                skill_text_blocks.append(
-                    f"=== SKILL: {skill.title} ===\n{full_text}\n=== END SKILL ==="
-                )
-                loaded_skill_ids.append(skill.skill_id)
+    logger.info("Proactive[%s]: run_id=%s, capabilities=%s", user_id, run_id, sorted(enabled_cap_ids))
 
-    if not skill_text_blocks:
-        logger.warning("Proactive[%s]: no skill guidance loaded — skip", user_id)
-        return {"nudged": False, "message": None, "reason": "no_skill_guidance"}
-
-    logger.info("Proactive[%s]: loaded %d skills: %s", user_id, len(loaded_skill_ids), loaded_skill_ids)
-
-    # ── 3. Fetch raw data per capability ─────────────────────────────────────
-    data_blocks: list[str] = []
-
-    if _INTERNAL_CAP_ID in enabled_cap_ids:
-        logger.info("Proactive[%s]: fetching lumie_internal_data", user_id)
-        internal_data = await _fetch_lumie_internal_data(db, user_id, now_utc, now_str)
-        data_blocks.append(f"[Lumie Internal Data]\n{internal_data}")
-        logger.info("Proactive[%s]: internal data fetched (%d chars)", user_id, len(internal_data))
-
-    logger.info("Proactive[%s]: fetching recent dayprint memory", user_id)
-    dayprint_memory = await _fetch_recent_dayprint_memory(db, user_id, now_utc)
-    data_blocks.append(f"[Recent Dayprint Memory]\n{dayprint_memory}")
-    logger.info("Proactive[%s]: dayprint memory fetched (%d chars)", user_id, len(dayprint_memory))
+    # ── 3. Run all domain assessments ───────────────────────────────────────
+    skill_results = await _run_all_assessments(db, user_id, now_utc)
     logger.info(
-        "Proactive[%s]: dayprint memory preview=%r",
+        "Proactive[%s]: %d assessments: %s",
         user_id,
-        _preview_text(dayprint_memory),
+        len(skill_results),
+        [(r.skill_id, r.status.value, r.score) for r in skill_results],
     )
 
-    # Note execution-only capabilities so Haiku is aware
-    for cap_id, label in _EXECUTION_CAPS.items():
-        if cap_id in enabled_cap_ids:
-            data_blocks.append(f"[{label}]")
+    if not skill_results:
+        logger.warning("Proactive[%s]: all assessments failed — skip", user_id)
+        return {"nudged": False, "message": None, "reason": "all_assessments_failed"}
 
-    if not data_blocks:
-        logger.warning("Proactive[%s]: no data available — skip", user_id)
-        return {"nudged": False, "message": None, "reason": "no_data_available"}
-
-    # ── 4. Last nudge context ────────────────────────────────────────────────
+    # ── 4. Last nudge context ───────────────────────────────────────────────
     checkin_doc = await db.advisor_checkins.find_one({"user_id": user_id})
     last_nudge = (checkin_doc or {}).get("last_nudge")
     if last_nudge:
@@ -304,6 +202,7 @@ async def run_proactive_check(user_id: str) -> dict:
             last_nudge_str = (
                 f"Last nudge sent {minutes_ago} minutes ago. "
                 f"Reason: \"{last_nudge.get('reason', '')}\". "
+                f"Domain: {last_nudge.get('primary_domain', 'unknown')}. "
                 "Only nudge again for the same concern if the situation has materially changed."
             )
         except Exception:
@@ -311,57 +210,46 @@ async def run_proactive_check(user_id: str) -> dict:
     else:
         last_nudge_str = "No nudge has been sent yet."
 
-    # ── 5. Build prompt ───────────────────────────────────────────────────────
-    skills_block = "\n\n".join(skill_text_blocks)
-    data_block = "\n\n".join(data_blocks)
-    local_time_str = now_local.strftime("%A, %B %d, %I:%M %p")
-    condition_str = f" with condition code {icd10}" if icd10 else ""
-
-    system_prompt = (
-        f"You are a proactive health advisor for {user_name}, a {role}{condition_str}.\n"
-        f"Current local time: {local_time_str}.\n\n"
-        "You are in PROACTIVE MODE. You are autonomously reviewing the user's data to decide "
-        "whether to send a nudge notification right now. You are NOT executing queries or "
-        "responding to a user message.\n\n"
-        "The following are your active skill guidelines. Use them to understand and interpret "
-        "the user's data — particularly the 'When To Use', 'Output Guidance', and domain "
-        "knowledge sections:\n\n"
-        f"{skills_block}\n\n"
-        "You also have recent dayprint memory from the past few days. Use it like lightweight "
-        "recall: notice unresolved concerns, recent struggles, prior advice topics, and places "
-        "where a gentle follow-up or progress check might make sense. Do not ask for follow-up "
-        "unless the memory suggests something genuinely worth revisiting.\n\n"
-        "Decision priority:\n"
-        "1. First check whether recent dayprint memory shows an unresolved issue, recent struggle, "
-        "important health concern, or prior advice topic that would meaningfully benefit from follow-up.\n"
-        "2. If yes, prefer a follow-up/progress-check nudge, as long as it is timely and not repetitive.\n"
-        "3. If no strong follow-up candidate exists, then look at the current structured data for something "
-        "actionable right now.\n"
-        "4. If both are weak, do not nudge.\n\n"
-        "Based on these skill guidelines, recent dayprint memory, and the user's current data, decide whether to send "
-        "a nudge. Only nudge if there is something genuinely worth addressing right now. "
-        "Avoid nudging for minor, speculative, or future concerns. When recent memory and current data both suggest "
-        "good options, prefer the one that feels more personally grounded and continuity-aware rather than the more generic alert.\n\n"
-        f"Nudge history: {last_nudge_str}\n\n"
-        "Respond with valid JSON only — no markdown, no explanation:\n"
-        '{"should_nudge": true|false, "message": "<friendly nudge message ≤120 chars, or null>", '
-        '"reason": "<brief internal reason, e.g. overdue_medication / no_activity_3_days / fine>"}'
-    )
-
-    user_message = (
-        f"Here is {user_name}'s current data:\n\n{data_block}\n\nShould I reach out?"
-    )
-
     logger.info(
-        "Proactive[%s]: calling Haiku (last_nudge=%s)",
+        "Proactive[%s]: last_nudge reason=%s domain=%s",
         user_id,
-        last_nudge_str.split(".")[0] if last_nudge_str else "none",
+        last_nudge.get("reason", "none") if last_nudge else "none",
+        last_nudge.get("primary_domain", "none") if last_nudge else "none",
     )
 
-    # ── 6. Call Claude Haiku ─────────────────────────────────────────────────
+    # ── 5. Evaluate guardrails ──────────────────────────────────────────────
+    guardrail = guardrails.evaluate(skill_results, last_nudge, now_utc)
+    logger.info("Proactive[%s]: guardrail action=%s reason=%s", user_id, guardrail.action, guardrail.reason)
+
+    if guardrail.action == "skip_nudge":
+        await audit.save_run_record(db, run_id, user_id, now_utc, skill_results, guardrail, None)
+        return {"nudged": False, "message": None, "reason": guardrail.reason}
+
+    # ── 6. Build prompt and call LLM ────────────────────────────────────────
+    execution_notes = [
+        label for cap_id, label in _EXECUTION_CAPS.items()
+        if cap_id in enabled_cap_ids
+    ]
+
+    system_prompt, user_message = _build_decision_prompt(
+        user_name=user_name,
+        role=role,
+        icd10=icd10,
+        local_time_str=local_time_str,
+        skill_results=skill_results,
+        last_nudge_str=last_nudge_str,
+        guardrail_summary=guardrail.details,
+        execution_caps_notes=execution_notes,
+    )
+
+    # For force_nudge, we still call the LLM to generate the message
+    logger.info("Proactive[%s]: calling decision model", user_id)
+    logger.debug("Proactive[%s]: system_prompt=\n%s", user_id, system_prompt)
+    logger.debug("Proactive[%s]: user_message=\n%s", user_id, user_message)
+
     try:
         response = await chat_completion(
-            model=_HAIKU_MODEL,
+            model=_DECISION_MODEL,
             max_tokens=200,
             temperature=0,
             system=system_prompt,
@@ -371,41 +259,73 @@ async def run_proactive_check(user_id: str) -> dict:
         if raw.startswith("```"):
             raw_lines = raw.split("\n")
             raw = "\n".join(raw_lines[1:-1]) if len(raw_lines) > 2 else raw
+        logger.info("Proactive[%s]: model response=%r", user_id, raw)
         result = json.loads(raw)
     except Exception as e:
-        logger.error(f"Proactive Haiku call failed for user={user_id}: {e}")
+        logger.error("Proactive[%s]: decision model call failed: %s", user_id, e)
+        await audit.save_run_record(db, run_id, user_id, now_utc, skill_results, guardrail, None)
         return {"nudged": False, "message": None, "reason": f"llm_error: {e}"}
 
     should_nudge: bool = bool(result.get("should_nudge", False))
     message: str | None = result.get("message") or None
     reason: str = result.get("reason", "")
 
-    # ── 7. Save message to chat history + queue notification ─────────────────
+    # If guardrail said force_nudge, override LLM if it said no
+    if guardrail.action == "force_nudge" and not should_nudge:
+        logger.info("Proactive[%s]: guardrail force_nudge overriding model no-nudge", user_id)
+        should_nudge = True
+        if not message:
+            top = max(skill_results, key=lambda r: r.score)
+            message = top.recommended_actions[0] if top.recommended_actions else "Hey, just checking in — how are you doing?"
+        reason = guardrail.reason
+
+    # ── 7. Deliver ──────────────────────────────────────────────────────────
+    decision_data = {
+        "should_nudge": should_nudge,
+        "reason_code": reason,
+        "message": message,
+        "primary_domain": result.get("primary_domain"),
+        "confidence": result.get("confidence", 0.0),
+    }
+
+    delivery_data = {"delivered": False}
+
     if should_nudge and message:
-        # Save advisor message first — this is the source of truth the user sees
-        # when they open the Advisor tab. The push notification is just delivery.
         await save_message(
             user_id=user_id,
             session_id="proactive",
             role="assistant",
             content=message,
-            metadata={"type": "proactive", "reason": reason},
-        )
-        logger.info(
-            "Proactive[%s]: message saved to chat history (session=proactive) content=%r",
-            user_id,
-            message,
+            metadata={"type": "proactive", "reason": reason, "run_id": run_id},
         )
 
-        # Push notification — only needed when app is in background
         await queue_checkin_notification(user_id, message)
+
+        # Build structured last_nudge with evidence summary and inputs hash
+        evidence_summary = guardrails.build_evidence_summary(skill_results)
+        decision_inputs_hash = guardrails.compute_decision_inputs_hash(skill_results)
 
         await db.advisor_checkins.update_one(
             {"user_id": user_id},
-            {"$set": {"last_nudge": {"reason": reason, "nudged_at": now_utc.isoformat()}}},
+            {"$set": {"last_nudge": {
+                "reason": reason,
+                "nudged_at": now_utc.isoformat(),
+                "run_id": run_id,
+                "primary_domain": result.get("primary_domain"),
+                "evidence_summary": evidence_summary,
+                "decision_inputs_hash": decision_inputs_hash,
+            }}},
+            upsert=True,
         )
-        logger.info("Proactive nudge queued for user=%s: %s content=%r", user_id, reason, message)
+
+        delivery_data = {"delivered": True, "run_id": run_id, "reason": reason}
+        logger.info("Proactive[%s]: nudge delivered, reason=%s domain=%s", user_id, reason, result.get("primary_domain"))
     else:
-        logger.info("Proactive: no nudge for user=%s: %s", user_id, reason)
+        logger.info("Proactive[%s]: no nudge, reason=%s", user_id, reason)
+
+    # ── 8. Audit ────────────────────────────────────────────────────────────
+    await audit.save_run_record(
+        db, run_id, user_id, now_utc, skill_results, guardrail, decision_data, delivery_data,
+    )
 
     return {"nudged": should_nudge, "message": message, "reason": reason}

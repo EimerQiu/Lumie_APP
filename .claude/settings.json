@@ -15,10 +15,13 @@
       "Bash(xcodebuild clean:*)",
       "Bash(xcodebuild -workspace ios/Runner.xcworkspace -scheme Runner -configuration Debug -derivedDataPath build -verbose)",
       "Bash(sed -n '71,74p' /Users/ciline/Documents/development/projects/Lumie_APP/lumie_backend/app/skills/system/lumie_internal/ring_live_measure.md)",
-      "Bash(sed -n '106,111p' /Users/ciline/Documents/development/projects/Lumie_APP/lumie_backend/app/skills/system/lumie_internal/ring_live_measure.md)"
+      "Bash(sed -n '106,111p' /Users/ciline/Documents/development/projects/Lumie_APP/lumie_backend/app/skills/system/lumie_internal/ring_live_measure.md)",
+      "Bash(find /Users/ciline/Documents/development/projects/Lumie_APP/lumie_backend/app/skills -name *.md)",
+      "Read(//dev/**)"
     ],
     "additionalDirectories": [
-      "/Users/ciline/.claude"
+      "/Users/ciline/.claude",
+      "/Users/ciline/.claude/plans"
     ]
   }
 }

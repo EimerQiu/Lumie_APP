@@ -44,6 +44,11 @@ class SkillIndexItem:
     api_method: str = "GET"
     shared_credential_id: Optional[str] = None
     credential_display_name: Optional[str] = None
+    # Proactive metadata
+    proactive_eligible: bool = False
+    proactive_domain: Optional[str] = None   # sleep|activity|medication|recovery|followup|decision
+    proactive_priority: int = 0
+    proactive_mode: Optional[str] = None     # assessment|decision
     status: str = "indexed"
     file_path: str = ""
     last_error: Optional[str] = None
@@ -173,6 +178,10 @@ class SkillRegistry:
             api_method=fm.get("api_method", "GET").upper(),
             shared_credential_id=fm.get("shared_credential_id"),
             credential_display_name=fm.get("credential_display_name"),
+            proactive_eligible=bool(fm.get("proactive_eligible", False)),
+            proactive_domain=fm.get("proactive_domain"),
+            proactive_priority=int(fm.get("proactive_priority", 0)),
+            proactive_mode=fm.get("proactive_mode"),
             status="indexed",
             file_path=str(fpath),
         )
@@ -281,6 +290,37 @@ class SkillRegistry:
     def get_all_skills(self) -> list[SkillIndexItem]:
         """Get all skills (any status)."""
         return list(self.skills_by_id.values())
+
+    def get_proactive_skills(self) -> list[SkillIndexItem]:
+        """Get all proactive-eligible skills, sorted by priority (descending)."""
+        return sorted(
+            [item for item in self.skills_by_id.values()
+             if item.status == "indexed" and item.proactive_eligible],
+            key=lambda x: x.proactive_priority,
+            reverse=True,
+        )
+
+    def get_proactive_skills_for_capabilities(
+        self, enabled_capabilities: set[str]
+    ) -> list[SkillIndexItem]:
+        """Get proactive-eligible skills filtered by enabled capabilities."""
+        return sorted(
+            [item for item in self.skills_by_id.values()
+             if item.status == "indexed"
+             and item.proactive_eligible
+             and item.capability_id in enabled_capabilities],
+            key=lambda x: x.proactive_priority,
+            reverse=True,
+        )
+
+    def get_proactive_skills_by_domain(self, domain: str) -> list[SkillIndexItem]:
+        """Get proactive-eligible skills for a specific domain."""
+        return [
+            item for item in self.skills_by_id.values()
+            if item.status == "indexed"
+            and item.proactive_eligible
+            and item.proactive_domain == domain
+        ]
 
     def load_skill_full_text(self, skill_id: str) -> Optional[str]:
         """Load the full .md file content for a selected skill."""

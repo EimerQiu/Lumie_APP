@@ -699,16 +699,15 @@ class RingBleService {
     }
   }
 
-  /// Command 0x66 — Fetch SpO2 (blood oxygen) history from the ring.
-  ///
-  /// Each record is 10 bytes:
-  ///   [0]=0x66 [1]=ID1 [2]=ID2 [3-8]=BCD timestamp [9]=spo2_percent
+  /// Command 0x66 — Fetch SpO2 (blood oxygen) history with timestamp filter.
   Future<List<RingRawSpo2Record>> fetchSpo2History() async {
     if (_notifyChar == null) {
       debugPrint('[Ring BLE] fetchSpo2History: not connected');
       return [];
     }
-    debugPrint('[Ring BLE] fetchSpo2History: sending 0x66');
+
+    final lastSync = await _ringService.loadLastSyncAt() ?? DateTime(2000, 1, 1);
+    debugPrint('[Ring BLE] fetchSpo2History: last sync at $lastSync, sending 0x66');
 
     final results = <RingRawSpo2Record>[];
     final completer = Completer<List<RingRawSpo2Record>>();
@@ -726,7 +725,7 @@ class RingBleService {
       if (data.length < 10) return;
 
       final timestamp = _parseRingTimestamp(data, 3);
-      if (timestamp == null) return;
+      if (timestamp == null || !timestamp.isAfter(lastSync)) return;
 
       final spo2 = data[9];
       if (spo2 == 0 || spo2 > 100) return;
@@ -738,14 +737,25 @@ class RingBleService {
       final payload = List<int>.filled(15, 0);
       payload[0] = 0x66;
       payload[1] = 0x00;
+
+      final bcdTs = _encodeBcdTimestamp(lastSync);
+      for (var i = 0; i < 6; i++) {
+        payload[3 + i] = bcdTs[i];
+      }
+
       await _writeCommand(payload);
-      return await completer.future.timeout(
+      final newRecords = await completer.future.timeout(
         const Duration(seconds: 5),
         onTimeout: () {
           debugPrint('[Ring BLE] SpO2 timeout, got ${results.length} records');
           return results;
         },
       );
+
+      if (newRecords.isNotEmpty) {
+        await _ringService.saveLastSyncAt(DateTime.now());
+      }
+      return newRecords;
     } catch (e) {
       debugPrint('[Ring BLE] fetchSpo2History error: $e');
       return results;
@@ -863,24 +873,16 @@ class RingBleService {
 
   // ─── Sleep ────────────────────────────────────────────────────────────────
 
-  /// Command 0x53 — Fetch stored sleep sessions from the ring.
-  ///
-  /// Matches the validated parsing from the smart_ring_ble_lib test app:
-  /// - Deduplicates records by (index, page, timestamp) key — ring sometimes
-  ///   sends the same segment twice.
-  /// - Tries 130-byte fixed frame first (some firmware always pads to 130),
-  ///   then falls back to variable-length (10 + N bytes).
-  /// - Uses a 8-second inactivity timer (like the test app) rather than
-  ///   waiting for an end marker that the ring sometimes never sends.
-  /// - `isComplete` is true when the end marker `0x53 0xFF` arrived before
-  ///   the timeout.
+  /// Command 0x53 — Fetch stored sleep sessions with timestamp filter.
   Future<({List<RingRawSleepRecord> records, bool isComplete})>
   fetchSleepHistory() async {
     if (_notifyChar == null) {
       debugPrint('[Ring BLE] fetchSleepHistory: not connected');
       return (records: <RingRawSleepRecord>[], isComplete: false);
     }
-    debugPrint('[Ring BLE] fetchSleepHistory: sending 0x53');
+
+    final lastSync = await _ringService.loadLastSyncAt() ?? DateTime(2000, 1, 1);
+    debugPrint('[Ring BLE] fetchSleepHistory: last sync at $lastSync, sending 0x53');
 
     // Dedup map: key = "id1-id2-timestamp"
     final Map<String, RingRawSleepRecord> dedup = {};
@@ -901,7 +903,6 @@ class RingBleService {
     sub = _notifyChar!.onValueReceived.listen((data) {
       if (data.isEmpty || data[0] != 0x53) return;
 
-      // End-of-data marker
       if (data.length >= 2 && data[1] == 0xFF) {
         debugPrint('[Ring BLE] Sleep end marker received');
         isComplete = true;
@@ -911,15 +912,17 @@ class RingBleService {
 
       resetTimer();
 
-      // Try to parse one or more records from this notification
       final parsed = _parseSleepNotification(data);
       for (final rec in parsed) {
-        final key =
-            '${rec.id1}-${rec.id2}-${rec.sessionStart.toIso8601String()}';
-        final existing = dedup[key];
-        if (existing == null ||
-            rec.totalSleepMinutes > existing.totalSleepMinutes) {
-          dedup[key] = rec;
+        // Filter by timestamp
+        if (rec.sessionStart.isAfter(lastSync)) {
+          final key =
+              '${rec.id1}-${rec.id2}-${rec.sessionStart.toIso8601String()}';
+          final existing = dedup[key];
+          if (existing == null ||
+              rec.totalSleepMinutes > existing.totalSleepMinutes) {
+            dedup[key] = rec;
+          }
         }
       }
     });
@@ -928,8 +931,14 @@ class RingBleService {
       final payload = List<int>.filled(15, 0);
       payload[0] = 0x53;
       payload[1] = 0x00;
+
+      final bcdTs = _encodeBcdTimestamp(lastSync);
+      for (var i = 0; i < 6; i++) {
+        payload[3 + i] = bcdTs[i];
+      }
+
       await _writeCommand(payload);
-      resetTimer(); // start inactivity timer after command sent
+      resetTimer();
 
       await completer.future;
       final records = dedup.values.toList()
@@ -937,6 +946,11 @@ class RingBleService {
       debugPrint(
         '[Ring BLE] fetchSleepHistory done — ${records.length} segment(s), complete=$isComplete',
       );
+
+      if (records.isNotEmpty) {
+        await _ringService.saveLastSyncAt(DateTime.now());
+      }
+
       return (records: records, isComplete: isComplete);
     } catch (e) {
       debugPrint('[Ring BLE] fetchSleepHistory error: $e');

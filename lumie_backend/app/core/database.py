@@ -104,6 +104,16 @@ async def create_indexes():
     await db.db.execution_audit_logs.create_index("log_id", unique=True)
     await db.db.execution_audit_logs.create_index([("user_id", 1), ("created_at", -1)])
 
+    # Proactive advisor: audit collections
+    await db.db.proactive_runs.create_index("run_id", unique=True)
+    await db.db.proactive_runs.create_index([("user_id", 1), ("started_at", -1)])
+
+    await db.db.proactive_skill_results.create_index([("run_id", 1)])
+    await db.db.proactive_skill_results.create_index([("user_id", 1), ("assessed_at", -1)])
+
+    await db.db.proactive_decisions.create_index([("run_id", 1)])
+    await db.db.proactive_decisions.create_index([("user_id", 1), ("decided_at", -1)])
+
 
 def get_database() -> AsyncIOMotorDatabase:
     """Get database instance."""
