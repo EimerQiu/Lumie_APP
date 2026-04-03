@@ -9,6 +9,10 @@ target_system: lumie_db
 tags: [team, member, health, parent, admin, snapshot]
 keywords: [team member, my daughter, my son, my child, member health, team health, how is my kid]
 summary: Quick health snapshot for a specific team member, accessible only by team admins/parents.
+proactive_eligible: true
+proactive_domain: team_followup
+proactive_priority: 60
+proactive_mode: assessment
 allowed_connectors: [lumie_db_connector]
 input_schema:
   type: object

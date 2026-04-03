@@ -18,6 +18,10 @@ COOLDOWN_MINUTES = 90
 # Score thresholds
 NO_CONCERN_THRESHOLD = 0.15
 FORCE_NUDGE_THRESHOLD = 0.85
+LOW_PRIORITY_DOMAINS = {"dayprint", "team_followup"}
+LOW_PRIORITY_FORCE_THRESHOLD = 0.30
+NO_CHANGE_STREAK_THRESHOLD = 2
+LOW_PRIORITY_NUDGE_COOLDOWN_MINUTES = 24 * 60
 
 
 def compute_decision_inputs_hash(skill_results: list[ProactiveSkillResult]) -> str:
@@ -57,6 +61,7 @@ def evaluate(
     skill_results: list[ProactiveSkillResult],
     last_nudge: dict | None,
     now_utc: datetime,
+    no_material_change_streak: int = 0,
 ) -> GuardrailVerdict:
     """Evaluate deterministic guardrails before calling the LLM.
 
@@ -64,7 +69,8 @@ def evaluate(
     1. All insufficient data / missing → skip
     2. No concerns (all scores < 0.15) → skip
     3. Cooldown (last nudge < 90 min ago, unless hard nudge) → skip
-    4. No material change (same decision_inputs_hash as last nudge) → skip
+    4. No material change (same decision_inputs_hash as last nudge) → skip,
+       unless stale-streak fallback promotes low-priority follow-up
     5. Hard nudge (any score >= 0.85) → force
     6. Otherwise → proceed to LLM
     """
@@ -121,12 +127,67 @@ def evaluate(
         if last_hash:
             current_hash = compute_decision_inputs_hash(skill_results)
             if current_hash == last_hash:
+                low_priority_candidates = sorted(
+                    [
+                        r for r in skill_results
+                        if r.domain in LOW_PRIORITY_DOMAINS and r.score >= LOW_PRIORITY_FORCE_THRESHOLD
+                    ],
+                    key=lambda x: x.score,
+                    reverse=True,
+                )
+
+                if no_material_change_streak >= NO_CHANGE_STREAK_THRESHOLD and low_priority_candidates:
+                    minutes_since_last = None
+                    try:
+                        nudged_at_raw = last_nudge.get("nudged_at", "")
+                        nudged_at_dt = datetime.fromisoformat(nudged_at_raw)
+                        if nudged_at_dt.tzinfo is None:
+                            nudged_at_dt = nudged_at_dt.replace(tzinfo=timezone.utc)
+                        minutes_since_last = (now_utc - nudged_at_dt).total_seconds() / 60
+                    except (ValueError, TypeError):
+                        pass
+
+                    blocked_domains: list[str] = []
+                    for target in low_priority_candidates:
+                        blocked_by_same_domain_cooldown = (
+                            (last_nudge.get("primary_domain") == target.domain)
+                            and (minutes_since_last is not None)
+                            and (minutes_since_last < LOW_PRIORITY_NUDGE_COOLDOWN_MINUTES)
+                        )
+                        if blocked_by_same_domain_cooldown:
+                            blocked_domains.append(target.domain)
+                            continue
+
+                        return GuardrailVerdict(
+                            action="force_nudge",
+                            reason=f"stale_high_priority_shift_to_{target.domain}",
+                            details={
+                                "target_domain": target.domain,
+                                "target_score": target.score,
+                                "target_signals": target.signals,
+                                "no_material_change_streak": no_material_change_streak,
+                                "decision_inputs_hash": current_hash,
+                            },
+                        )
+
+                    return GuardrailVerdict(
+                        action="skip_nudge",
+                        reason="low_priority_followup_cooldown",
+                        details={
+                            "blocked_domains": blocked_domains,
+                            "no_material_change_streak": no_material_change_streak,
+                            "minutes_since_last": round(minutes_since_last, 1) if minutes_since_last is not None else None,
+                            "cooldown_minutes": LOW_PRIORITY_NUDGE_COOLDOWN_MINUTES,
+                        },
+                    )
+
                 return GuardrailVerdict(
                     action="skip_nudge",
                     reason="no_material_change",
                     details={
                         "decision_inputs_hash": current_hash,
                         "last_reason": last_nudge.get("reason", ""),
+                        "no_material_change_streak": no_material_change_streak,
                     },
                 )
 

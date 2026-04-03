@@ -46,7 +46,7 @@ class SkillIndexItem:
     credential_display_name: Optional[str] = None
     # Proactive metadata
     proactive_eligible: bool = False
-    proactive_domain: Optional[str] = None   # sleep|activity|medication|recovery|followup|decision
+    proactive_domain: Optional[str] = None   # sleep|activity|medication|recovery|dayprint|team_followup|decision
     proactive_priority: int = 0
     proactive_mode: Optional[str] = None     # assessment|decision
     status: str = "indexed"
@@ -293,6 +293,8 @@ class SkillRegistry:
 
     def get_proactive_skills(self) -> list[SkillIndexItem]:
         """Get all proactive-eligible skills, sorted by priority (descending)."""
+        if not self._scanned:
+            self.scan_and_index()
         return sorted(
             [item for item in self.skills_by_id.values()
              if item.status == "indexed" and item.proactive_eligible],
@@ -304,6 +306,8 @@ class SkillRegistry:
         self, enabled_capabilities: set[str]
     ) -> list[SkillIndexItem]:
         """Get proactive-eligible skills filtered by enabled capabilities."""
+        if not self._scanned:
+            self.scan_and_index()
         return sorted(
             [item for item in self.skills_by_id.values()
              if item.status == "indexed"
@@ -315,6 +319,8 @@ class SkillRegistry:
 
     def get_proactive_skills_by_domain(self, domain: str) -> list[SkillIndexItem]:
         """Get proactive-eligible skills for a specific domain."""
+        if not self._scanned:
+            self.scan_and_index()
         return [
             item for item in self.skills_by_id.values()
             if item.status == "indexed"

@@ -7,7 +7,17 @@ from ...models.proactive import ProactiveSkillResult, ProactiveStatus
 logger = logging.getLogger(__name__)
 
 SKILL_ID = "proactive_dayprint_followup"
-DOMAIN = "followup"
+DOMAIN = "dayprint"
+HIGH_PRIORITY_CATEGORIES = {
+    "health",
+    "medication",
+    "sleep",
+    "activity",
+    "mood",
+    "family",
+    "family_concern",
+    "health_concern",
+}
 
 
 async def assess(db, user_id: str, now_utc: datetime) -> ProactiveSkillResult:
@@ -53,11 +63,11 @@ async def assess(db, user_id: str, now_utc: datetime) -> ProactiveSkillResult:
             category = data.get("category", "other")
             if summary:
                 day_items.append(f"insight [{category}]: {summary}")
-                # Health-related insights are stronger follow-up candidates
-                if category in ("health", "medication", "sleep", "activity", "mood"):
+                # Health/family concerns are stronger follow-up candidates
+                if category in HIGH_PRIORITY_CATEGORIES:
                     score = max(score, 0.4)
                     followup_candidates.append(summary)
-                    signals.append(f"health_insight_{date}")
+                    signals.append(f"priority_insight_{category}_{date}")
                 else:
                     score = max(score, 0.2)
                     signals.append(f"insight_{date}")

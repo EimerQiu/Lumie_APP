@@ -13,7 +13,7 @@ class ProactiveStatus(str, Enum):
 
 class ProactiveSkillResult(BaseModel):
     skill_id: str
-    domain: str  # sleep | activity | medication | recovery | followup
+    domain: str  # sleep | activity | medication | recovery | dayprint | team_followup
     status: ProactiveStatus
     summary: str
     score: float  # 0.0 (no concern) → 1.0 (critical)

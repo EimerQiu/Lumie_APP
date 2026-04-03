@@ -125,7 +125,6 @@ class _ChatTabState extends State<_ChatTab> {
 
   static const _sessionIdKey = 'advisor_active_session_id';
   static const _lastActiveKey = 'advisor_last_active_at';
-  static const _lastProactiveSeenKey = 'advisor_last_proactive_seen_at';
   static const _sessionTimeoutMinutes = 2;
 
   @override
@@ -153,7 +152,13 @@ class _ChatTabState extends State<_ChatTab> {
           _items.clear();
           for (final m in messages) {
             _items.add(
-              _ChatItem.message(_Message(text: m.content, isUser: m.isUser)),
+              _ChatItem.message(
+                _Message(
+                  text: m.content,
+                  isUser: m.isUser,
+                  createdAt: m.createdAt,
+                ),
+              ),
             );
           }
           _isLoading = false;
@@ -169,39 +174,42 @@ class _ChatTabState extends State<_ChatTab> {
       if (mounted) setState(() => _isLoading = false);
     }
 
-    // Append any new proactive messages the advisor sent since last open
-    await _loadNewProactiveMessages(prefs);
+    // Always load full proactive check-in history into chat view.
+    await _loadProactiveMessages();
   }
 
-  Future<void> _loadNewProactiveMessages(SharedPreferences prefs) async {
-    final lastSeenStr = prefs.getString(_lastProactiveSeenKey);
+  Future<void> _loadProactiveMessages() async {
     final proactiveMessages = await _historyService.fetchSessionMessages(
       'proactive',
     );
-
-    final newMessages = proactiveMessages.where((m) {
-      if (lastSeenStr == null) return true;
-      return m.createdAt.compareTo(lastSeenStr) > 0;
-    }).toList();
-
-    if (newMessages.isEmpty) return;
+    if (proactiveMessages.isEmpty) return;
 
     if (mounted) {
+      final existingProactiveTexts = _items
+          .where(
+            (i) =>
+                i.type == _ChatItemType.message &&
+                i.message?.isProactive == true,
+          )
+          .map((i) => i.message?.text ?? '')
+          .toSet();
       setState(() {
-        for (final m in newMessages) {
+        for (final m in proactiveMessages) {
+          if (existingProactiveTexts.contains(m.content)) continue;
           _items.add(
             _ChatItem.message(
-              _Message(text: m.content, isUser: false, isProactive: true),
+              _Message(
+                text: m.content,
+                isUser: false,
+                isProactive: true,
+                createdAt: m.createdAt,
+              ),
             ),
           );
         }
       });
       _scrollToBottom();
     }
-
-    // Mark all proactive messages as seen
-    final latest = proactiveMessages.last.createdAt;
-    await prefs.setString(_lastProactiveSeenKey, latest);
   }
 
   Future<void> _saveActiveSession() async {
@@ -254,7 +262,13 @@ class _ChatTabState extends State<_ChatTab> {
             _items.clear();
             for (final m in messages) {
               _items.add(
-                _ChatItem.message(_Message(text: m.content, isUser: m.isUser)),
+                _ChatItem.message(
+                  _Message(
+                    text: m.content,
+                    isUser: m.isUser,
+                    createdAt: m.createdAt,
+                  ),
+                ),
               );
             }
           });
@@ -278,8 +292,11 @@ class _ChatTabState extends State<_ChatTab> {
     if (text.isEmpty) return;
     _input.clear();
     FocusScope.of(context).unfocus();
+    final nowIso = DateTime.now().toUtc().toIso8601String();
 
-    final userItem = _ChatItem.message(_Message(text: text, isUser: true));
+    final userItem = _ChatItem.message(
+      _Message(text: text, isUser: true, createdAt: nowIso),
+    );
 
     setState(() {
       _items.add(userItem);
@@ -302,6 +319,7 @@ class _ChatTabState extends State<_ChatTab> {
           isUser: false,
           isAnalyzing: true,
           jobId: response.jobId,
+          createdAt: nowIso,
         ),
       );
 
@@ -330,6 +348,7 @@ class _ChatTabState extends State<_ChatTab> {
               item.message?.jobId == response.jobId,
         );
         if (idx >= 0) {
+          final createdAt = _items[idx].message?.createdAt;
           if (status == 'success' && resultData != null) {
             // Build AnalysisResult from the generic v2 result dict
             final analysisResult = AnalysisResult(
@@ -342,11 +361,16 @@ class _ChatTabState extends State<_ChatTab> {
                 text: analysisResult.summary,
                 isUser: false,
                 analysisResult: analysisResult,
+                createdAt: createdAt,
               ),
             );
           } else if (status == 'cancelled') {
             _items[idx] = _ChatItem.message(
-              _Message(text: 'Analysis cancelled.', isUser: false),
+              _Message(
+                text: 'Analysis cancelled.',
+                isUser: false,
+                createdAt: createdAt,
+              ),
             );
           } else {
             _items[idx] = _ChatItem.message(
@@ -355,6 +379,7 @@ class _ChatTabState extends State<_ChatTab> {
                     "I wasn't able to complete this analysis. Please try rephrasing your question.",
                 isUser: false,
                 isAnalysisFailed: true,
+                createdAt: createdAt,
               ),
             );
           }
@@ -365,7 +390,12 @@ class _ChatTabState extends State<_ChatTab> {
       // ── "guidance" type: display as info message ─────────────────────
     } else if (response.isGuidance) {
       final replyItem = _ChatItem.message(
-        _Message(text: response.reply, isUser: false, isGuidance: true),
+        _Message(
+          text: response.reply,
+          isUser: false,
+          isGuidance: true,
+          createdAt: DateTime.now().toUtc().toIso8601String(),
+        ),
       );
 
       setState(() {
@@ -382,6 +412,7 @@ class _ChatTabState extends State<_ChatTab> {
           text: response.reply,
           isUser: false,
           navHint: response.navHint,
+          createdAt: DateTime.now().toUtc().toIso8601String(),
         ),
       );
 
@@ -422,6 +453,32 @@ class _ChatTabState extends State<_ChatTab> {
         );
       }
     });
+  }
+
+  DateTime? _messageTime(_Message message) {
+    final raw = message.createdAt;
+    if (raw == null || raw.isEmpty) return null;
+    final parsed = DateTime.tryParse(raw);
+    return parsed?.toLocal();
+  }
+
+  bool _shouldShowTimeForIndex(int index) {
+    if (index <= 0) return true;
+    final current = _messageTime(_items[index].message!);
+    final previous = _messageTime(_items[index - 1].message!);
+    if (current == null) return false;
+    if (previous == null) return true;
+    return current.difference(previous).inMinutes >= 5;
+  }
+
+  String _formatMessageTime(_Message message) {
+    final dt = _messageTime(message);
+    if (dt == null) return '';
+    var hour = dt.hour % 12;
+    if (hour == 0) hour = 12;
+    final minute = dt.minute.toString().padLeft(2, '0');
+    final amPm = dt.hour >= 12 ? 'PM' : 'AM';
+    return '$hour:$minute $amPm';
   }
 
   Future<void> _cancelPendingJob(String jobId) async {
@@ -471,9 +528,12 @@ class _ChatTabState extends State<_ChatTab> {
                         return const _TypingBubble(key: ValueKey('typing'));
                       }
                       final message = _items[i].message!;
+                      final showTimestamp = _shouldShowTimeForIndex(i);
                       return _ChatBubble(
                         key: ValueKey(i),
                         message: message,
+                        showTimestamp: showTimestamp,
+                        timeLabel: _formatMessageTime(message),
                         onCancelJob:
                             message.isAnalyzing &&
                                 message.jobId != null &&
@@ -772,6 +832,7 @@ class _Message {
   final String? jobId;
   final AnalysisResult? analysisResult;
   final String? navHint; // "task_list" | "task_dashboard" | null
+  final String? createdAt; // ISO UTC
 
   const _Message({
     required this.text,
@@ -783,17 +844,22 @@ class _Message {
     this.jobId,
     this.analysisResult,
     this.navHint,
+    this.createdAt,
   });
 }
 
 class _ChatBubble extends StatelessWidget {
   final _Message message;
+  final bool showTimestamp;
+  final String? timeLabel;
   final VoidCallback? onCancelJob;
   final bool isCancelling;
 
   const _ChatBubble({
     super.key,
     required this.message,
+    this.showTimestamp = false,
+    this.timeLabel,
     this.onCancelJob,
     this.isCancelling = false,
   });
@@ -807,6 +873,18 @@ class _ChatBubble extends StatelessWidget {
             ? CrossAxisAlignment.end
             : CrossAxisAlignment.start,
         children: [
+          if (showTimestamp && (timeLabel?.isNotEmpty ?? false))
+            Padding(
+              padding: const EdgeInsets.only(bottom: 6),
+              child: Text(
+                timeLabel!,
+                style: TextStyle(
+                  fontSize: 11,
+                  color: AppColors.textSecondary.withValues(alpha: 0.75),
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+            ),
           if (message.isProactive) ...[
             Padding(
               padding: const EdgeInsets.only(left: 36, bottom: 6),
@@ -1250,7 +1328,11 @@ class _AdviceTabState extends State<_AdviceTab> {
               metrics: [
                 ('Activity', '42 min', Icons.directions_run),
                 ('Sleep', '7h 12m', Icons.bedtime_outlined),
-                ('Fatigue', wellness.fatigue.fullLabel, Icons.battery_charging_full),
+                (
+                  'Fatigue',
+                  wellness.fatigue.fullLabel,
+                  Icons.battery_charging_full,
+                ),
               ],
             ),
           ),

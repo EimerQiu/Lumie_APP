@@ -9,6 +9,10 @@ target_system: lumie_db
 tags: [sleep, activity, exercise, walk test, rest day, heart rate, hrv, steps, health, fitness]
 keywords: [sleep, slept, sleeping, last night, bedtime, wake up, sleep quality, sleep score, sleep hours, deep sleep, rem sleep, light sleep, how did I sleep, sleep data, activity, activities, exercise, steps, step count, how many steps, walked, distance, workout, how active, calories burned, walk test, 6 minute walk, walking test, heart rate, resting heart rate, bpm, pulse, continuous heart rate, hrv, heart rate variability, stress, fatigue, blood pressure, systolic, diastolic, temperature, body temperature, fever, temp, spo2, blood oxygen, oxygen saturation, oxygen level, o2, rest day, rest days, recovery, how many rest days, active days, fitness data, health data, how was my, how am I doing, my health, my activity, my sleep]
 summary: Query focused health data for a single domain — sleep sessions, activity records, walk tests, or rest days. Use this for specific health metric questions, not broad multi-domain summaries.
+proactive_eligible: true
+proactive_domain: sleep
+proactive_priority: 90
+proactive_mode: assessment
 allowed_connectors: [lumie_db_connector]
 input_schema:
   type: object

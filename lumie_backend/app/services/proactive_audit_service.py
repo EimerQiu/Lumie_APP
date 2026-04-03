@@ -59,15 +59,24 @@ async def save_run_record(
                 skill_docs.append(doc)
             await db.proactive_skill_results.insert_many(skill_docs)
 
-        # 3. proactive_decisions — one doc per LLM decision
-        if decision is not None:
-            decision_doc = {
-                "run_id": run_id,
-                "user_id": user_id,
-                "decided_at": finished_at,
-                **decision,
+        # 3. proactive_decisions — one doc per run, including guardrail-only exits
+        if decision is None:
+            decision = {
+                "should_nudge": False,
+                "reason_code": guardrail_dict.get("reason", "no_decision"),
+                "message": None,
+                "primary_domain": None,
+                "confidence": 1.0 if guardrail_dict.get("action") == "skip_nudge" else 0.0,
+                "decision_summary": "implicit_decision_record",
             }
-            await db.proactive_decisions.insert_one(decision_doc)
+
+        decision_doc = {
+            "run_id": run_id,
+            "user_id": user_id,
+            "decided_at": finished_at,
+            **decision,
+        }
+        await db.proactive_decisions.insert_one(decision_doc)
 
         logger.info("Proactive audit: run_id=%s user=%s skills=%d", run_id, user_id, len(skill_results))
     except Exception as e:

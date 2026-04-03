@@ -9,6 +9,10 @@ target_system: lumie_db
 tags: [tasks, medications, reminders, reminder, schedule, today, tomorrow, week, upcoming, overdue, history, med, meds, medicine, find, search]
 keywords: [what should I do, tasks today, medicine today, medication schedule, upcoming tasks, what's due, reminders, reminder, take medicine, daily schedule, what medication, tomorrow tasks, this week, next week, tasks this week, overdue tasks, missed tasks, pending tasks, all tasks, task history, task schedule, task list, what do I have, any tasks, any reminders, med reminder, med-reminder, medication reminder, meds, my meds, take my meds, med schedule, medicine schedule, medicine reminder, find task, search task, task about, task detail, specific task, find a task, look for task, task named, task called, booking, appointment, task with]
 summary: Query tasks and medication reminders for any time range (today, tomorrow, this week, etc.) or search for a specific task by keyword or name. Covers all 7 task types.
+proactive_eligible: true
+proactive_domain: medication
+proactive_priority: 100
+proactive_mode: assessment
 allowed_connectors: [lumie_db_connector]
 input_schema:
   type: object

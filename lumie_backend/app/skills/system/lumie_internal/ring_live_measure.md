@@ -9,6 +9,10 @@ target_system: lumie_db
 tags: [heart rate, temperature, live, real-time, ring]
 keywords: [measure my heart rate, check my heart rate, take my heart rate now, live heart rate, current heart rate, measure heart rate, what is my heart rate, my temperature, check my temperature, take my temperature, body temperature now, current temperature, live temperature, measure temperature]
 summary: Send a live command to the Lumie Ring to take an on-demand heart rate measurement or body temperature reading, then return the result. Use when the user wants a real-time measurement, not stored history.
+proactive_eligible: true
+proactive_domain: recovery
+proactive_priority: 70
+proactive_mode: assessment
 allowed_connectors: [lumie_db_connector]
 input_schema:
   type: object
