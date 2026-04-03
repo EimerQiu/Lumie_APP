@@ -287,3 +287,26 @@ async def get_dayprint(user_id: str, date: Optional[str] = None) -> Optional[dic
         {"_id": 0},
     )
     return doc
+
+
+async def get_dayprint_history(
+    user_id: str,
+    limit: int = 14,
+    before_date: Optional[str] = None,
+) -> tuple[list[dict], bool, Optional[str]]:
+    """Fetch dayprint docs in reverse date order with cursor pagination."""
+    db = get_database()
+    query: dict = {"user_id": user_id}
+    if before_date:
+        query["date"] = {"$lt": before_date}
+
+    fetch_limit = max(limit, 1) + 1
+    cursor = db.dayprints.find(query, {"_id": 0}).sort("date", -1).limit(fetch_limit)
+    docs = await cursor.to_list(length=fetch_limit)
+
+    has_more = len(docs) > limit
+    if has_more:
+        docs = docs[:limit]
+
+    next_before_date = docs[-1]["date"] if docs else None
+    return docs, has_more, next_before_date

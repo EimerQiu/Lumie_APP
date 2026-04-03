@@ -30,6 +30,8 @@
 	<true/>
 	<key>NSCameraUsageDescription</key>
 	<string>Lumie uses the camera to detect your pose and count reps during guided workout sessions.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Lumie needs photo library access so you can attach photos and videos when completing a task.</string>
 	<key>NSBluetoothAlwaysUsageDescription</key>
 	<string>Lumie needs Bluetooth to connect to your Lumie Ring and sync health data.</string>
 	<key>NSBluetoothPeripheralUsageDescription</key>

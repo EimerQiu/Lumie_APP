@@ -1,11 +1,16 @@
 // Tasks List Screen - Main task list with pull-to-refresh and swipe actions
 
 import 'dart:convert';
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
+import 'package:image_picker/image_picker.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:timezone/timezone.dart' as tz;
+import 'package:video_compress/video_compress.dart';
+import 'package:flutter_image_compress/flutter_image_compress.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/services/task_service.dart';
 import '../../../shared/models/task_models.dart';
@@ -142,20 +147,33 @@ class _TasksListScreenState extends State<TasksListScreen> {
                   if (provider.subscriptionBannerMessage != null)
                     Container(
                       width: double.infinity,
-                      margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                      margin: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 4,
+                      ),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 10,
+                      ),
                       decoration: BoxDecoration(
                         color: AppColors.primaryLemon,
                         borderRadius: BorderRadius.circular(12),
                       ),
                       child: Row(
                         children: [
-                          Icon(Icons.info_outline, size: 18, color: AppColors.textOnYellow),
+                          Icon(
+                            Icons.info_outline,
+                            size: 18,
+                            color: AppColors.textOnYellow,
+                          ),
                           const SizedBox(width: 8),
                           Expanded(
                             child: Text(
                               provider.subscriptionBannerMessage!,
-                              style: TextStyle(fontSize: 13, color: AppColors.textOnYellow),
+                              style: TextStyle(
+                                fontSize: 13,
+                                color: AppColors.textOnYellow,
+                              ),
                             ),
                           ),
                         ],
@@ -164,7 +182,10 @@ class _TasksListScreenState extends State<TasksListScreen> {
 
                   // Task limit indicator
                   Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 8,
+                    ),
                     child: Row(
                       children: [
                         Text(
@@ -213,73 +234,83 @@ class _TasksListScreenState extends State<TasksListScreen> {
         MaterialPageRoute(builder: (_) => const AdvisorScreen()),
       ),
       child: Container(
-      margin: const EdgeInsets.fromLTRB(0, 8, 0, 16),
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-      decoration: BoxDecoration(
-        color: AppColors.backgroundWhite,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: AppColors.primaryLemon.withValues(alpha: 0.6)),
-        boxShadow: [
-          BoxShadow(
-            color: AppColors.primaryLemon.withValues(alpha: 0.2),
-            blurRadius: 8,
-            offset: const Offset(0, 2),
+        margin: const EdgeInsets.fromLTRB(0, 8, 0, 16),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+        decoration: BoxDecoration(
+          color: AppColors.backgroundWhite,
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(
+            color: AppColors.primaryLemon.withValues(alpha: 0.6),
           ),
-        ],
-      ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.center,
-        children: [
-          // Sparkle icon
-          Container(
-            padding: const EdgeInsets.all(6),
-            decoration: BoxDecoration(
-              color: AppColors.primaryLemon.withValues(alpha: 0.3),
-              borderRadius: BorderRadius.circular(8),
+          boxShadow: [
+            BoxShadow(
+              color: AppColors.primaryLemon.withValues(alpha: 0.2),
+              blurRadius: 8,
+              offset: const Offset(0, 2),
             ),
-            child: const Icon(Icons.auto_awesome, size: 16, color: AppColors.textOnYellow),
-          ),
-          const SizedBox(width: 10),
-          if (_aiTipLoading)
-            const SizedBox(
-              height: 18,
-              width: 18,
-              child: CircularProgressIndicator(strokeWidth: 2),
-            )
-          else ...[
-            Expanded(
-              child: MarkdownBody(
-                data: _aiTip!.tip,
-                styleSheet: MarkdownStyleSheet(
-                  p: const TextStyle(
-                    fontSize: 13,
-                    color: AppColors.textPrimary,
-                    height: 1.4,
-                  ),
-                  listBullet: const TextStyle(
-                    fontSize: 13,
-                    color: AppColors.textPrimary,
-                    height: 1.4,
-                  ),
-                  strong: const TextStyle(
-                    fontSize: 13,
-                    color: AppColors.textPrimary,
-                    fontWeight: FontWeight.bold,
-                    height: 1.4,
+          ],
+        ),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            // Sparkle icon
+            Container(
+              padding: const EdgeInsets.all(6),
+              decoration: BoxDecoration(
+                color: AppColors.primaryLemon.withValues(alpha: 0.3),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: const Icon(
+                Icons.auto_awesome,
+                size: 16,
+                color: AppColors.textOnYellow,
+              ),
+            ),
+            const SizedBox(width: 10),
+            if (_aiTipLoading)
+              const SizedBox(
+                height: 18,
+                width: 18,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              )
+            else ...[
+              Expanded(
+                child: MarkdownBody(
+                  data: _aiTip!.tip,
+                  styleSheet: MarkdownStyleSheet(
+                    p: const TextStyle(
+                      fontSize: 13,
+                      color: AppColors.textPrimary,
+                      height: 1.4,
+                    ),
+                    listBullet: const TextStyle(
+                      fontSize: 13,
+                      color: AppColors.textPrimary,
+                      height: 1.4,
+                    ),
+                    strong: const TextStyle(
+                      fontSize: 13,
+                      color: AppColors.textPrimary,
+                      fontWeight: FontWeight.bold,
+                      height: 1.4,
+                    ),
                   ),
                 ),
               ),
-            ),
-            GestureDetector(
-              onTap: () => _loadAiTip(forceRefresh: true),
-              child: Padding(
-                padding: const EdgeInsets.only(left: 8),
-                child: Icon(Icons.refresh, size: 18, color: AppColors.textLight),
+              GestureDetector(
+                onTap: () => _loadAiTip(forceRefresh: true),
+                child: Padding(
+                  padding: const EdgeInsets.only(left: 8),
+                  child: Icon(
+                    Icons.refresh,
+                    size: 18,
+                    color: AppColors.textLight,
+                  ),
+                ),
               ),
-            ),
+            ],
           ],
-        ],
-      ),
+        ),
       ),
     );
   }
@@ -363,13 +394,292 @@ class _TasksListScreenState extends State<TasksListScreen> {
   }
 
   void _showCompleteDialog(Task task) {
-    final noteController = TextEditingController(text: task.note ?? '');
-    showDialog(
+    showDialog<String>(
       context: context,
-      builder: (context) => Dialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(24, 16, 16, 20),
+      builder: (context) => _TaskCompleteDialog(task: task),
+    ).then((message) {
+      if (!mounted || message == null || message.isEmpty) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(message)));
+    });
+  }
+
+  Future<void> _deleteTask(Task task) async {
+    try {
+      await context.read<TasksProvider>().deleteTask(task.taskId);
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('"${task.taskName}" deleted')));
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Failed: ${e.toString().replaceFirst('Exception: ', '')}',
+            ),
+          ),
+        );
+      }
+    }
+  }
+}
+
+class _TaskCompleteDialog extends StatefulWidget {
+  final Task task;
+
+  const _TaskCompleteDialog({required this.task});
+
+  @override
+  State<_TaskCompleteDialog> createState() => _TaskCompleteDialogState();
+}
+
+class _TaskCompleteDialogState extends State<_TaskCompleteDialog> {
+  static const int _maxFiles = 99;
+  static const int _maxImageBytes = 500 * 1024;
+  static const int _maxVideoBytes = 5 * 1024 * 1024;
+
+  final TextEditingController _noteController = TextEditingController();
+  final List<_TaskMediaItem> _media = [];
+  final ImagePicker _imagePicker = ImagePicker();
+
+  bool _isWorking = false;
+  String _stageLabel = '';
+  double _compressProgress = 0;
+  double _uploadProgress = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _noteController.text = widget.task.note ?? '';
+  }
+
+  @override
+  void dispose() {
+    _noteController.dispose();
+    super.dispose();
+  }
+
+  bool _isVideoPath(String path) {
+    final lower = path.toLowerCase();
+    return lower.endsWith('.mp4') ||
+        lower.endsWith('.mov') ||
+        lower.endsWith('.m4v') ||
+        lower.endsWith('.3gp') ||
+        lower.endsWith('.avi') ||
+        lower.endsWith('.mkv') ||
+        lower.endsWith('.webm');
+  }
+
+  Future<void> _pickMedia() async {
+    if (_isWorking) return;
+    final available = _maxFiles - _media.length;
+    if (available <= 0) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('You can upload up to 99 files.')),
+      );
+      return;
+    }
+
+    final picked = await _imagePicker.pickMultipleMedia();
+    if (picked.isEmpty) return;
+
+    final existingPaths = _media.map((m) => m.file.path).toSet();
+    final additions = <_TaskMediaItem>[];
+    for (final item in picked) {
+      final path = item.path;
+      if (existingPaths.contains(path)) continue;
+      final file = File(path);
+      if (!file.existsSync()) continue;
+      additions.add(
+        _TaskMediaItem(
+          file: file,
+          isVideo: _isVideoPath(path),
+          originalBytes: file.lengthSync(),
+        ),
+      );
+      existingPaths.add(path);
+    }
+
+    if (additions.isEmpty) return;
+    final trimmed = additions.take(available).toList();
+    setState(() => _media.addAll(trimmed));
+
+    if (additions.length > trimmed.length && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Only the first 99 files were kept.')),
+      );
+    }
+  }
+
+  Future<File> _compressImageToLimit(File source) async {
+    if (source.lengthSync() <= _maxImageBytes) return source;
+
+    final tempDir = await getTemporaryDirectory();
+    File? lastCompressed;
+    final qualities = [85, 75, 65, 55, 45, 35, 25];
+    for (final quality in qualities) {
+      final targetPath =
+          '${tempDir.path}/img_${DateTime.now().microsecondsSinceEpoch}_$quality.jpg';
+      final compressed = await FlutterImageCompress.compressAndGetFile(
+        source.path,
+        targetPath,
+        quality: quality,
+        format: CompressFormat.jpeg,
+      );
+      if (compressed == null) continue;
+      final file = File(compressed.path);
+      if (!file.existsSync()) continue;
+      lastCompressed = file;
+      if (file.lengthSync() <= _maxImageBytes) return file;
+    }
+
+    if (lastCompressed != null &&
+        lastCompressed.lengthSync() <= _maxImageBytes) {
+      return lastCompressed;
+    }
+    throw Exception(
+      'Image is still larger than 500KB after compression. Please choose another image.',
+    );
+  }
+
+  Future<File> _compressVideoToLimit(File source) async {
+    if (source.lengthSync() <= _maxVideoBytes) return source;
+
+    File? lastCompressed;
+    final qualities = [
+      VideoQuality.MediumQuality,
+      VideoQuality.LowQuality,
+      VideoQuality.Res640x480Quality,
+    ];
+
+    for (final quality in qualities) {
+      final info = await VideoCompress.compressVideo(
+        source.path,
+        quality: quality,
+        includeAudio: true,
+        deleteOrigin: false,
+      );
+      final file = info?.file;
+      if (file == null || !file.existsSync()) continue;
+      lastCompressed = file;
+      if (file.lengthSync() <= _maxVideoBytes) return file;
+    }
+
+    if (lastCompressed != null &&
+        lastCompressed.lengthSync() <= _maxVideoBytes) {
+      return lastCompressed;
+    }
+    throw Exception(
+      'Video is still larger than 5MB after compression. Please choose a shorter video.',
+    );
+  }
+
+  Future<List<File>> _compressAll() async {
+    if (_media.isEmpty) return const [];
+    final result = <File>[];
+    for (var i = 0; i < _media.length; i++) {
+      final item = _media[i];
+      setState(() {
+        _stageLabel = 'Compressing ${i + 1}/${_media.length}';
+      });
+      final compressed = item.isVideo
+          ? await _compressVideoToLimit(item.file)
+          : await _compressImageToLimit(item.file);
+      result.add(compressed);
+      setState(() {
+        _compressProgress = (i + 1) / _media.length;
+      });
+    }
+    return result;
+  }
+
+  Future<void> _onComplete() async {
+    if (_isWorking) return;
+    setState(() {
+      _isWorking = true;
+      _stageLabel = 'Preparing...';
+      _compressProgress = 0;
+      _uploadProgress = 0;
+    });
+
+    try {
+      final provider = context.read<TasksProvider>();
+      final note = _noteController.text.trim();
+      if (note.isNotEmpty) {
+        await provider.updateNote(widget.task.taskId, note);
+      }
+
+      final compressedFiles = await _compressAll();
+      if (compressedFiles.isNotEmpty) {
+        setState(() => _stageLabel = 'Uploading...');
+        await provider.uploadTaskAttachments(
+          taskId: widget.task.taskId,
+          files: compressedFiles,
+          onSendProgress: (sent, total) {
+            if (!mounted || total <= 0) return;
+            setState(() {
+              _uploadProgress = sent / total;
+            });
+          },
+        );
+      }
+
+      await provider.completeTask(widget.task.taskId);
+      if (mounted) {
+        Navigator.of(context).pop('"${widget.task.taskName}" completed');
+      }
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _isWorking = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Failed: ${e.toString().replaceFirst('Exception: ', '')}',
+          ),
+        ),
+      );
+    } finally {
+      await VideoCompress.cancelCompression();
+    }
+  }
+
+  Future<void> _onExtend() async {
+    if (_isWorking || widget.task.extensionCount >= 1) return;
+    setState(() => _isWorking = true);
+    try {
+      final provider = context.read<TasksProvider>();
+      final note = _noteController.text.trim();
+      if (note.isNotEmpty) {
+        await provider.updateNote(widget.task.taskId, note);
+      }
+      await provider.extendTask(widget.task.taskId);
+      if (mounted) {
+        Navigator.of(context).pop('"${widget.task.taskName}" extended by 10%');
+      }
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _isWorking = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Failed: ${e.toString().replaceFirst('Exception: ', '')}',
+          ),
+        ),
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Dialog(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(24, 16, 16, 20),
+        child: SingleChildScrollView(
           child: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -387,7 +697,9 @@ class _TasksListScreenState extends State<TasksListScreen> {
                     ),
                   ),
                   IconButton(
-                    onPressed: () => Navigator.of(context).pop(),
+                    onPressed: _isWorking
+                        ? null
+                        : () => Navigator.of(context).pop(),
                     icon: const Icon(Icons.close),
                     padding: EdgeInsets.zero,
                     constraints: const BoxConstraints(),
@@ -395,39 +707,169 @@ class _TasksListScreenState extends State<TasksListScreen> {
                 ],
               ),
               const SizedBox(height: 12),
-              Text('Mark "${task.taskName}" as completed?'),
+              Text('Mark "${widget.task.taskName}" as completed?'),
               const SizedBox(height: 16),
-              TextField(
-                controller: noteController,
-                decoration: InputDecoration(
-                  hintText: 'Add a note (optional)',
-                  hintStyle: TextStyle(color: Colors.grey[400]),
-                  border: const OutlineInputBorder(),
-                  contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                ),
-                maxLines: 2,
-                maxLength: 500,
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  Expanded(
+                    child: Container(
+                      decoration: BoxDecoration(
+                        border: Border.all(color: Colors.grey.shade300),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      padding: const EdgeInsets.fromLTRB(10, 8, 10, 6),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          if (_media.isNotEmpty) ...[
+                            SizedBox(
+                              height: 52,
+                              child: ListView.separated(
+                                scrollDirection: Axis.horizontal,
+                                itemCount: _media.length,
+                                separatorBuilder: (context, index) =>
+                                    const SizedBox(width: 6),
+                                itemBuilder: (context, index) {
+                                  final item = _media[index];
+                                  return Stack(
+                                    clipBehavior: Clip.none,
+                                    children: [
+                                      ClipRRect(
+                                        borderRadius: BorderRadius.circular(8),
+                                        child: Container(
+                                          width: 52,
+                                          height: 52,
+                                          color: Colors.grey.shade200,
+                                          child: item.isVideo
+                                              ? const Icon(
+                                                  Icons.videocam,
+                                                  color:
+                                                      AppColors.textSecondary,
+                                                )
+                                              : Image.file(
+                                                  item.file,
+                                                  fit: BoxFit.cover,
+                                                ),
+                                        ),
+                                      ),
+                                      Positioned(
+                                        top: -6,
+                                        right: -6,
+                                        child: InkWell(
+                                          onTap: _isWorking
+                                              ? null
+                                              : () => setState(
+                                                  () => _media.removeAt(index),
+                                                ),
+                                          child: Container(
+                                            width: 18,
+                                            height: 18,
+                                            decoration: const BoxDecoration(
+                                              color: Colors.white,
+                                              shape: BoxShape.circle,
+                                            ),
+                                            child: const Icon(
+                                              Icons.close,
+                                              size: 14,
+                                              color: AppColors.textSecondary,
+                                            ),
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  );
+                                },
+                              ),
+                            ),
+                            const SizedBox(height: 6),
+                          ],
+                          TextField(
+                            controller: _noteController,
+                            decoration: InputDecoration(
+                              hintText: 'Add a note (optional)',
+                              hintStyle: TextStyle(color: Colors.grey[400]),
+                              border: InputBorder.none,
+                              enabledBorder: InputBorder.none,
+                              focusedBorder: InputBorder.none,
+                              disabledBorder: InputBorder.none,
+                              errorBorder: InputBorder.none,
+                              focusedErrorBorder: InputBorder.none,
+                              isDense: true,
+                              contentPadding: const EdgeInsets.symmetric(
+                                horizontal: 2,
+                                vertical: 8,
+                              ),
+                              counterText: '',
+                            ),
+                            enabled: !_isWorking,
+                            maxLines: 2,
+                            maxLength: 500,
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  IconButton(
+                    onPressed: _isWorking ? null : _pickMedia,
+                    tooltip: 'Select photos and videos',
+                    icon: const Icon(
+                      Icons.photo_library_outlined,
+                      size: 28,
+                      color: AppColors.textPrimary,
+                    ),
+                  ),
+                ],
               ),
+              if (_media.isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.only(top: 6),
+                  child: Text(
+                    '${_media.length}/99 selected',
+                    style: const TextStyle(
+                      color: AppColors.textSecondary,
+                      fontSize: 12,
+                    ),
+                  ),
+                ),
+              if (_isWorking) ...[
+                const SizedBox(height: 8),
+                Text(
+                  _stageLabel,
+                  style: TextStyle(
+                    color: AppColors.textSecondary,
+                    fontSize: 13,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                LinearProgressIndicator(
+                  value: _compressProgress > 0 ? _compressProgress : null,
+                ),
+                const SizedBox(height: 6),
+                Text('Compression ${(100 * _compressProgress).round()}%'),
+                const SizedBox(height: 10),
+                LinearProgressIndicator(
+                  value: _uploadProgress > 0 ? _uploadProgress : null,
+                ),
+                const SizedBox(height: 6),
+                Text('Upload ${(100 * _uploadProgress).round()}%'),
+              ],
               const SizedBox(height: 16),
               Row(
                 mainAxisAlignment: MainAxisAlignment.end,
                 children: [
                   TextButton(
-                    onPressed: task.extensionCount >= 1
+                    onPressed: (_isWorking || widget.task.extensionCount >= 1)
                         ? null
-                        : () {
-                            Navigator.of(context).pop();
-                            _saveNoteAndExtend(task, noteController.text);
-                          },
+                        : _onExtend,
                     child: const Text('Extend'),
                   ),
                   const SizedBox(width: 8),
                   FilledButton(
-                    onPressed: () {
-                      Navigator.of(context).pop();
-                      _saveNoteAndComplete(task, noteController.text);
-                    },
-                    child: const Text('Complete'),
+                    onPressed: _isWorking ? null : _onComplete,
+                    child: Text(_isWorking ? 'Processing...' : 'Complete'),
                   ),
                 ],
               ),
@@ -437,63 +879,16 @@ class _TasksListScreenState extends State<TasksListScreen> {
       ),
     );
   }
+}
 
-  Future<void> _saveNoteAndExtend(Task task, String note) async {
-    try {
-      final provider = context.read<TasksProvider>();
-      if (note.trim().isNotEmpty) {
-        await provider.updateNote(task.taskId, note.trim());
-      }
-      await provider.extendTask(task.taskId);
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('"${task.taskName}" extended by 10%')),
-        );
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed: ${e.toString().replaceFirst('Exception: ', '')}')),
-        );
-      }
-    }
-  }
+class _TaskMediaItem {
+  final File file;
+  final bool isVideo;
+  final int originalBytes;
 
-  Future<void> _saveNoteAndComplete(Task task, String note) async {
-    try {
-      final provider = context.read<TasksProvider>();
-      if (note.trim().isNotEmpty) {
-        await provider.updateNote(task.taskId, note.trim());
-      }
-      await provider.completeTask(task.taskId);
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('"${task.taskName}" completed')),
-        );
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed: ${e.toString().replaceFirst('Exception: ', '')}')),
-        );
-      }
-    }
-  }
-
-  Future<void> _deleteTask(Task task) async {
-    try {
-      await context.read<TasksProvider>().deleteTask(task.taskId);
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('"${task.taskName}" deleted')),
-        );
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed: ${e.toString().replaceFirst('Exception: ', '')}')),
-        );
-      }
-    }
-  }
+  const _TaskMediaItem({
+    required this.file,
+    required this.isVideo,
+    required this.originalBytes,
+  });
 }

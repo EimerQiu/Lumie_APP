@@ -2,7 +2,7 @@
 Task API Routes (Med-Reminder)
 """
 
-from fastapi import APIRouter, Body, Depends, Query, status
+from fastapi import APIRouter, Body, Depends, Query, status, File, UploadFile
 from typing import Optional
 
 import asyncio
@@ -168,6 +168,22 @@ async def complete_task(
     result = await task_service.complete_task(task_id, user_id)
     asyncio.create_task(log_task_completed(user_id, result.task_name, result.task_type))
     return result
+
+
+@router.post("/{task_id}/attachments")
+async def upload_task_attachments(
+    task_id: str,
+    files: list[UploadFile] = File(...),
+    user_id: str = Depends(get_current_user_id),
+):
+    """
+    Upload task check-in media attachments.
+
+    - Supports image/* and video/*
+    - Max 99 files per request and per task total
+    """
+    saved = await task_service.upload_task_attachments(task_id, user_id, files)
+    return {"uploaded": saved, "count": len(saved)}
 
 
 @router.post("/{task_id}/extend", response_model=TaskResponse)

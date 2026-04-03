@@ -12,9 +12,17 @@ class DayprintTab extends StatefulWidget {
 
 class _DayprintTabState extends State<DayprintTab>
     with AutomaticKeepAliveClientMixin {
+  static const int _pageSize = 14;
+
   final DayprintService _service = DayprintService();
-  Dayprint? _dayprint;
+  final ScrollController _scrollController = ScrollController();
+
+  final List<_TimelineEntry> _entries = [];
+
   bool _loading = true;
+  bool _loadingMore = false;
+  bool _hasMore = true;
+  String? _nextBeforeDate;
   String? _error;
 
   @override
@@ -23,65 +31,194 @@ class _DayprintTabState extends State<DayprintTab>
   @override
   void initState() {
     super.initState();
+    _scrollController.addListener(_onScroll);
     _load();
+  }
+
+  @override
+  void dispose() {
+    _scrollController
+      ..removeListener(_onScroll)
+      ..dispose();
+    super.dispose();
   }
 
   Future<void> _load() async {
     setState(() {
       _loading = true;
+      _loadingMore = false;
       _error = null;
+      _entries.clear();
+      _hasMore = true;
+      _nextBeforeDate = null;
     });
+
     try {
-      final dp = await _service.getTodayDayprint();
-      if (mounted) setState(() => _dayprint = dp);
-    } catch (e) {
-      if (mounted) setState(() => _error = 'Could not load Dayprint.');
+      final page = await _service.getDayprintHistory(limit: _pageSize);
+      if (!mounted) return;
+      setState(() {
+        _entries.addAll(_flattenDayprints(page.dayprints));
+        _hasMore = page.hasMore;
+        _nextBeforeDate = page.nextBeforeDate;
+      });
+    } catch (_) {
+      if (mounted) {
+        setState(() => _error = 'Could not load Dayprint.');
+      }
     } finally {
-      if (mounted) setState(() => _loading = false);
+      if (mounted) {
+        setState(() => _loading = false);
+      }
     }
+  }
+
+  Future<void> _loadMore() async {
+    if (_loading || _loadingMore || !_hasMore) return;
+
+    setState(() => _loadingMore = true);
+    try {
+      final page = await _service.getDayprintHistory(
+        limit: _pageSize,
+        beforeDate: _nextBeforeDate,
+      );
+      if (!mounted) return;
+      setState(() {
+        _entries.addAll(_flattenDayprints(page.dayprints));
+        _hasMore = page.hasMore;
+        _nextBeforeDate = page.nextBeforeDate;
+      });
+    } catch (_) {
+      // Keep existing list when load-more fails.
+    } finally {
+      if (mounted) {
+        setState(() => _loadingMore = false);
+      }
+    }
+  }
+
+  void _onScroll() {
+    if (!_scrollController.hasClients ||
+        _loading ||
+        _loadingMore ||
+        !_hasMore) {
+      return;
+    }
+    final pos = _scrollController.position;
+    if (pos.pixels >= pos.maxScrollExtent - 240) {
+      _loadMore();
+    }
+  }
+
+  List<_TimelineEntry> _flattenDayprints(List<Dayprint> dayprints) {
+    final result = <_TimelineEntry>[];
+    for (final day in dayprints) {
+      for (final event in day.events.reversed) {
+        result.add(_TimelineEntry(date: day.date, event: event));
+      }
+    }
+    return result;
   }
 
   @override
   Widget build(BuildContext context) {
     super.build(context);
+
     if (_loading) {
       return const Center(
         child: CircularProgressIndicator(color: AppColors.primaryLemonDark),
       );
     }
+
     if (_error != null) {
       return Center(
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Text(_error!, style: const TextStyle(color: AppColors.textSecondary)),
+            Text(
+              _error!,
+              style: const TextStyle(color: AppColors.textSecondary),
+            ),
             const SizedBox(height: 12),
             TextButton(onPressed: _load, child: const Text('Retry')),
           ],
         ),
       );
     }
-    if (_dayprint == null || _dayprint!.events.isEmpty) {
+
+    if (_entries.isEmpty) {
       return _EmptyDayprint(onRefresh: _load);
     }
+
+    final totalLabel = _hasMore
+        ? '${_entries.length}+ entries'
+        : '${_entries.length} entries';
+
     return SelectionArea(
       child: RefreshIndicator(
         onRefresh: _load,
         color: AppColors.primaryLemonDark,
-        child: ListView(
+        child: ListView.builder(
+          controller: _scrollController,
           padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
-          children: [
-            _SectionHeader(
-              title: "Today's Log",
-              subtitle: '${_dayprint!.events.length} entries',
-            ),
-            const SizedBox(height: 12),
-            ..._dayprint!.events.reversed.map((e) => _EventTile(event: e)),
-          ],
+          itemCount: _entries.length + 2,
+          itemBuilder: (context, index) {
+            if (index == 0) {
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  _SectionHeader(title: 'All Logs', subtitle: totalLabel),
+                  const SizedBox(height: 12),
+                ],
+              );
+            }
+
+            if (index == _entries.length + 1) {
+              if (_loadingMore) {
+                return const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 12),
+                  child: Center(
+                    child: SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: AppColors.primaryLemonDark,
+                      ),
+                    ),
+                  ),
+                );
+              }
+              if (!_hasMore) {
+                return const Padding(
+                  padding: EdgeInsets.only(top: 6, bottom: 2),
+                  child: Center(
+                    child: Text(
+                      'No more logs',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: AppColors.textLight,
+                      ),
+                    ),
+                  ),
+                );
+              }
+              return const SizedBox.shrink();
+            }
+
+            final entry = _entries[index - 1];
+            return _EventTile(event: entry.event, dayDate: entry.date);
+          },
         ),
       ),
     );
   }
+}
+
+class _TimelineEntry {
+  final String date;
+  final DayprintEvent event;
+
+  const _TimelineEntry({required this.date, required this.event});
 }
 
 // ── Empty state ───────────────────────────────────────────────────────────────
@@ -111,7 +248,7 @@ class _EmptyDayprint extends StatelessWidget {
             ),
             const SizedBox(height: 20),
             const Text(
-              'Your Dayprint is empty',
+              'No Dayprint logs yet',
               style: TextStyle(
                 fontSize: 18,
                 fontWeight: FontWeight.bold,
@@ -120,7 +257,7 @@ class _EmptyDayprint extends StatelessWidget {
             ),
             const SizedBox(height: 8),
             const Text(
-              'Complete tasks or chat with your advisor to\nbuild today\'s log.',
+              'Complete tasks or chat with your advisor to\nbuild your Dayprint timeline.',
               textAlign: TextAlign.center,
               style: TextStyle(
                 fontSize: 14,
@@ -177,7 +314,8 @@ class _SectionHeader extends StatelessWidget {
 
 class _EventTile extends StatelessWidget {
   final DayprintEvent event;
-  const _EventTile({required this.event});
+  final String dayDate;
+  const _EventTile({required this.event, required this.dayDate});
 
   @override
   Widget build(BuildContext context) {
@@ -188,18 +326,18 @@ class _EventTile extends StatelessWidget {
     final icon = isTask
         ? Icons.check_circle_outline_rounded
         : isInsight
-            ? Icons.flag_rounded
-            : Icons.chat_bubble_outline_rounded;
+        ? Icons.flag_rounded
+        : Icons.chat_bubble_outline_rounded;
     final iconColor = isTask
         ? AppColors.success
         : isInsight
-            ? AppColors.accentOrange
-            : AppColors.primaryLemonDark;
+        ? AppColors.accentOrange
+        : AppColors.primaryLemonDark;
     final iconBg = isTask
         ? const Color(0xFFDCFCE7)
         : isInsight
-            ? const Color(0xFFFFF7ED)
-            : AppColors.primaryLemon;
+        ? const Color(0xFFFFF7ED)
+        : AppColors.primaryLemon;
 
     String title;
     String? subtitle;
@@ -218,18 +356,22 @@ class _EventTile extends StatelessWidget {
       title = event.type;
     }
 
-    final timeStr = _formatTime(event.timestamp);
+    final timeStr = _formatTimestamp(event.timestamp, dayDate);
 
     return Padding(
       padding: const EdgeInsets.only(bottom: 10),
       child: Container(
         padding: const EdgeInsets.all(14),
         decoration: BoxDecoration(
-          color: isInsight ? const Color(0xFFFFFBF5) : AppColors.backgroundWhite,
+          color: isInsight
+              ? const Color(0xFFFFFBF5)
+              : AppColors.backgroundWhite,
           borderRadius: BorderRadius.circular(12),
           boxShadow: AppColors.cardShadow,
           border: isInsight
-              ? Border(left: BorderSide(color: AppColors.accentOrange, width: 3))
+              ? Border(
+                  left: BorderSide(color: AppColors.accentOrange, width: 3),
+                )
               : null,
         ),
         child: Row(
@@ -238,10 +380,7 @@ class _EventTile extends StatelessWidget {
             Container(
               width: 36,
               height: 36,
-              decoration: BoxDecoration(
-                color: iconBg,
-                shape: BoxShape.circle,
-              ),
+              decoration: BoxDecoration(color: iconBg, shape: BoxShape.circle),
               child: Icon(icon, size: 18, color: iconColor),
             ),
             const SizedBox(width: 12),
@@ -275,10 +414,7 @@ class _EventTile extends StatelessWidget {
             const SizedBox(width: 8),
             Text(
               timeStr,
-              style: const TextStyle(
-                fontSize: 12,
-                color: AppColors.textLight,
-              ),
+              style: const TextStyle(fontSize: 12, color: AppColors.textLight),
             ),
           ],
         ),
@@ -298,18 +434,20 @@ class _EventTile extends StatelessWidget {
     return labels[cat] ?? cat;
   }
 
-  String _formatTime(String iso) {
+  String _formatTimestamp(String iso, String fallbackDate) {
     try {
       String s = iso;
       if (!s.endsWith('Z') && !s.contains('+')) s += 'Z';
       final dt = DateTime.parse(s).toLocal();
+      final month = dt.month.toString().padLeft(2, '0');
+      final day = dt.day.toString().padLeft(2, '0');
       final h = dt.hour;
       final m = dt.minute.toString().padLeft(2, '0');
       final period = h >= 12 ? 'PM' : 'AM';
       final hour12 = h % 12 == 0 ? 12 : h % 12;
-      return '$hour12:$m $period';
+      return '$month/$day $hour12:$m $period';
     } catch (_) {
-      return '';
+      return fallbackDate;
     }
   }
 }

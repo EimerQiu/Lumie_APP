@@ -4,9 +4,11 @@ Business logic for Med-Reminder task and template operations
 """
 
 import uuid
+import shutil
+from pathlib import Path
 from datetime import datetime, timedelta
 from typing import Optional, List
-from fastapi import HTTPException, status
+from fastapi import HTTPException, status, UploadFile
 from zoneinfo import ZoneInfo
 
 from ..core.database import get_database
@@ -23,6 +25,7 @@ from ..models.team import TeamRole, MemberStatus
 
 class TaskService:
     """Service for handling task and template operations"""
+    _upload_root = Path(__file__).resolve().parents[2] / "uploads" / "tasks"
 
     def _format_datetime(self, dt: datetime) -> str:
         """Format datetime to ISO string for response"""
@@ -89,11 +92,106 @@ class TaskService:
             status=task_status,
             task_info=doc.get("task_info"),
             note=doc.get("note"),
+            attachments=doc.get("attachments", []),
             completed_at=self._format_datetime(doc["done"]) if doc.get("done") else None,
             extension_count=doc.get("extension_count", 0),
             created_at=self._format_datetime(doc["created_at"]),
             updated_at=self._format_datetime(doc["updated_at"]),
         )
+
+    def _validate_media_upload(self, upload: UploadFile) -> tuple[str, str]:
+        content_type = (upload.content_type or "").lower()
+        if content_type.startswith("image/"):
+            media_type = "image"
+        elif content_type.startswith("video/"):
+            media_type = "video"
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Unsupported file type: {upload.filename or 'unknown'}",
+            )
+
+        ext = Path(upload.filename or "").suffix.strip().lower()
+        if not ext:
+            ext = ".bin"
+        if len(ext) > 10:
+            ext = ".bin"
+        return media_type, ext
+
+    async def upload_task_attachments(
+        self,
+        task_id: str,
+        user_id: str,
+        files: List[UploadFile],
+    ) -> List[dict]:
+        db = get_database()
+
+        if not files:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="No files uploaded",
+            )
+        if len(files) > 99:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="At most 99 files are allowed",
+            )
+
+        task = await db.tasks.find_one({"task_id": task_id})
+        if not task:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Task not found",
+            )
+        if task["user_id"] != user_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Only the assigned user can upload attachments for this task",
+            )
+
+        existing = task.get("attachments", [])
+        if len(existing) + len(files) > 99:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Total attachments exceeded (max 99 files per task)",
+            )
+
+        now = datetime.utcnow()
+        task_dir = self._upload_root / task_id
+        task_dir.mkdir(parents=True, exist_ok=True)
+
+        saved_attachments: List[dict] = []
+        for upload in files:
+            try:
+                media_type, ext = self._validate_media_upload(upload)
+                attachment_id = str(uuid.uuid4())
+                storage_name = f"{attachment_id}{ext}"
+                storage_path = task_dir / storage_name
+                with storage_path.open("wb") as out:
+                    shutil.copyfileobj(upload.file, out)
+                size_bytes = storage_path.stat().st_size
+                safe_name = (upload.filename or storage_name).split("/")[-1].split("\\")[-1]
+                relative_path = f"tasks/{task_id}/{storage_name}"
+                saved_attachments.append(
+                    {
+                        "attachment_id": attachment_id,
+                        "filename": safe_name,
+                        "media_type": media_type,
+                        "content_type": upload.content_type or "application/octet-stream",
+                        "size_bytes": size_bytes,
+                        "path": relative_path,
+                        "url": f"/uploads/{relative_path}",
+                        "uploaded_at": now.isoformat(),
+                    }
+                )
+            finally:
+                await upload.close()
+
+        await db.tasks.update_one(
+            {"task_id": task_id},
+            {"$set": {"updated_at": now}, "$push": {"attachments": {"$each": saved_attachments}}},
+        )
+        return saved_attachments
 
     def _template_doc_to_response(self, doc: dict) -> TemplateResponse:
         """Convert a MongoDB template document to TemplateResponse"""
@@ -234,6 +332,7 @@ class TaskService:
             "created_by": user_id,
             "rpttask_id": data.rpttask_id,
             "task_info": data.task_info,
+            "attachments": [],
             "completed_at": None,
             "created_at": now,
             "updated_at": now,

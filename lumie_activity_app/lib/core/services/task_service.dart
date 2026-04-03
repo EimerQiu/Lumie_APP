@@ -1,7 +1,9 @@
 /// Task Service - API client for Med-Reminder operations
 
 import 'dart:convert';
+import 'dart:io';
 import 'package:http/http.dart' as http;
+import 'package:dio/dio.dart';
 import '../constants/api_constants.dart';
 import '../../shared/models/task_models.dart';
 import '../../shared/models/subscription_error.dart';
@@ -13,6 +15,7 @@ class TaskService {
   TaskService._internal();
 
   String? _token;
+  final Dio _dio = Dio();
 
   void setToken(String token) {
     _token = token;
@@ -23,9 +26,9 @@ class TaskService {
   }
 
   Map<String, String> get _headers => {
-        'Content-Type': 'application/json',
-        if (_token != null) 'Authorization': 'Bearer $_token',
-      };
+    'Content-Type': 'application/json',
+    if (_token != null) 'Authorization': 'Bearer $_token',
+  };
 
   /// Parse subscription error from 403 response
   SubscriptionErrorResponse? _parseSubscriptionError(dynamic responseBody) {
@@ -45,7 +48,10 @@ class TaskService {
     if (response.statusCode == 403) {
       final body = json.decode(response.body);
       // Check if it's a nested detail with error inside
-      final errorBody = body is Map<String, dynamic> && body.containsKey('detail') && body['detail'] is Map
+      final errorBody =
+          body is Map<String, dynamic> &&
+              body.containsKey('detail') &&
+              body['detail'] is Map
           ? body['detail'] as Map<String, dynamic>
           : body;
       final errorResponse = _parseSubscriptionError(errorBody);
@@ -99,18 +105,16 @@ class TaskService {
 
   /// Get tasks for current user
   /// Optionally pass device timezone for proper overdue checking while traveling
-  Future<TaskListResponse> getTasks({
-    String? date,
-    String? timezone,
-  }) async {
+  Future<TaskListResponse> getTasks({String? date, String? timezone}) async {
     if (_token == null) throw Exception('Not authenticated');
 
     final queryParams = <String, String>{};
     if (date != null) queryParams['date'] = date;
     if (timezone != null) queryParams['timezone'] = timezone;
 
-    final uri = Uri.parse('${ApiConstants.baseUrl}/tasks')
-        .replace(queryParameters: queryParams.isNotEmpty ? queryParams : null);
+    final uri = Uri.parse(
+      '${ApiConstants.baseUrl}/tasks',
+    ).replace(queryParameters: queryParams.isNotEmpty ? queryParams : null);
 
     final response = await http.get(uri, headers: _headers);
 
@@ -133,6 +137,39 @@ class TaskService {
       return Task.fromJson(json.decode(response.body));
     }
     _handleError(response, 'complete task');
+  }
+
+  /// Upload task check-in attachments (image/video multipart).
+  Future<void> uploadTaskAttachments({
+    required String taskId,
+    required List<File> files,
+    void Function(int sent, int total)? onSendProgress,
+  }) async {
+    if (_token == null) throw Exception('Not authenticated');
+    if (files.isEmpty) return;
+
+    final multipartFiles = <MultipartFile>[];
+    for (final file in files) {
+      final filename = file.path.split('/').last;
+      multipartFiles.add(
+        await MultipartFile.fromFile(file.path, filename: filename),
+      );
+    }
+
+    try {
+      await _dio.post(
+        '${ApiConstants.baseUrl}/tasks/$taskId/attachments',
+        data: FormData.fromMap({'files': multipartFiles}),
+        options: Options(headers: {'Authorization': 'Bearer $_token'}),
+        onSendProgress: onSendProgress,
+      );
+    } on DioException catch (e) {
+      final data = e.response?.data;
+      if (data is Map<String, dynamic> && data['detail'] != null) {
+        throw Exception(data['detail'].toString());
+      }
+      throw Exception('Failed to upload attachments');
+    }
   }
 
   /// Extend a task's close_datetime by 10% of its duration
@@ -375,8 +412,9 @@ class TaskService {
     if (email != null && email.isNotEmpty) queryParams['email'] = email;
     if (currentTime != null) queryParams['current_time'] = currentTime;
 
-    final uri = Uri.parse('${ApiConstants.baseUrl}${ApiConstants.adminTaskList}')
-        .replace(queryParameters: queryParams);
+    final uri = Uri.parse(
+      '${ApiConstants.baseUrl}${ApiConstants.adminTaskList}',
+    ).replace(queryParameters: queryParams);
 
     final response = await http.get(uri, headers: _headers);
 
@@ -396,10 +434,7 @@ class TaskService {
     final response = await http.post(
       Uri.parse('${ApiConstants.baseUrl}${ApiConstants.adminTaskComplete}'),
       headers: _headers,
-      body: json.encode({
-        'task_id': taskId,
-        'time_zone': timeZone,
-      }),
+      body: json.encode({'task_id': taskId, 'time_zone': timeZone}),
     );
 
     if (response.statusCode == 200) return;
@@ -411,7 +446,9 @@ class TaskService {
     if (_token == null) throw Exception('Not authenticated');
 
     final response = await http.delete(
-      Uri.parse('${ApiConstants.baseUrl}${ApiConstants.adminDeleteTask}/$taskId'),
+      Uri.parse(
+        '${ApiConstants.baseUrl}${ApiConstants.adminDeleteTask}/$taskId',
+      ),
       headers: _headers,
     );
 
@@ -433,8 +470,9 @@ class TaskService {
       'offset': offset.toString(),
     };
 
-    final uri = Uri.parse('${ApiConstants.baseUrl}${ApiConstants.adminRewardCalc}')
-        .replace(queryParameters: queryParams);
+    final uri = Uri.parse(
+      '${ApiConstants.baseUrl}${ApiConstants.adminRewardCalc}',
+    ).replace(queryParameters: queryParams);
 
     final response = await http.get(uri, headers: _headers);
 

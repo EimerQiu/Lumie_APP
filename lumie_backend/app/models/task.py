@@ -56,6 +56,7 @@ class TaskResponse(BaseModel):
     status: TaskStatus
     task_info: Optional[str] = None
     note: Optional[str] = None
+    attachments: List[dict] = Field(default_factory=list)
     completed_at: Optional[str] = None
     extension_count: int = 0
     created_at: str

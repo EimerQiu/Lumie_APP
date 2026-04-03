@@ -1,6 +1,7 @@
 /// Tasks Provider - State management for Med-Reminder feature
 
 import 'dart:async';
+import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:timezone/timezone.dart' as tz;
@@ -193,6 +194,18 @@ class TasksProvider extends ChangeNotifier {
     });
     // Reload to get fresh data
     await loadTasks();
+  }
+
+  Future<void> uploadTaskAttachments({
+    required String taskId,
+    required List<File> files,
+    void Function(int sent, int total)? onSendProgress,
+  }) async {
+    await _taskService.uploadTaskAttachments(
+      taskId: taskId,
+      files: files,
+      onSendProgress: onSendProgress,
+    );
   }
 
   /// Extend a task's close_datetime by 10% of its duration

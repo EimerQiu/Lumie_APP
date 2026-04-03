@@ -10,10 +10,10 @@ class DayprintEvent {
   });
 
   factory DayprintEvent.fromJson(Map<String, dynamic> json) => DayprintEvent(
-        type: json['type'] as String? ?? '',
-        timestamp: json['timestamp'] as String? ?? '',
-        data: (json['data'] as Map<String, dynamic>?) ?? {},
-      );
+    type: json['type'] as String? ?? '',
+    timestamp: json['timestamp'] as String? ?? '',
+    data: (json['data'] as Map<String, dynamic>?) ?? {},
+  );
 }
 
 class Dayprint {
@@ -28,10 +28,31 @@ class Dayprint {
   });
 
   factory Dayprint.fromJson(Map<String, dynamic> json) => Dayprint(
-        userId: json['user_id'] as String? ?? '',
-        date: json['date'] as String? ?? '',
-        events: (json['events'] as List<dynamic>? ?? [])
-            .map((e) => DayprintEvent.fromJson(e as Map<String, dynamic>))
+    userId: json['user_id'] as String? ?? '',
+    date: json['date'] as String? ?? '',
+    events: (json['events'] as List<dynamic>? ?? [])
+        .map((e) => DayprintEvent.fromJson(e as Map<String, dynamic>))
+        .toList(),
+  );
+}
+
+class DayprintHistoryPage {
+  final List<Dayprint> dayprints;
+  final bool hasMore;
+  final String? nextBeforeDate;
+
+  const DayprintHistoryPage({
+    required this.dayprints,
+    required this.hasMore,
+    required this.nextBeforeDate,
+  });
+
+  factory DayprintHistoryPage.fromJson(Map<String, dynamic> json) =>
+      DayprintHistoryPage(
+        dayprints: (json['dayprints'] as List<dynamic>? ?? [])
+            .map((e) => Dayprint.fromJson(e as Map<String, dynamic>))
             .toList(),
+        hasMore: json['has_more'] as bool? ?? false,
+        nextBeforeDate: json['next_before_date'] as String?,
       );
 }

@@ -13,3 +13,9 @@ class DayprintResponse(BaseModel):
     user_id: str
     date: str           # local date "YYYY-MM-DD"
     events: list[DayprintEvent] = []
+
+
+class DayprintHistoryResponse(BaseModel):
+    dayprints: list[DayprintResponse]
+    has_more: bool
+    next_before_date: Optional[str] = None
