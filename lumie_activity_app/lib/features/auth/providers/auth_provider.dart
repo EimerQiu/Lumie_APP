@@ -36,6 +36,17 @@ class AuthProvider extends ChangeNotifier {
   UserProfile? get profile => _profile;
   bool get isAuthenticated => _state == AuthState.authenticated;
 
+  Future<void> refreshProfile() async {
+    if (!_authService.isAuthenticated) return;
+    try {
+      final latest = await _profileService.getProfile();
+      _profile = latest;
+      notifyListeners();
+    } catch (_) {
+      // Keep existing profile if refresh fails.
+    }
+  }
+
   /// Set authentication token in team and task services
   void _setServiceTokens() {
     final token = _authService.token;
@@ -124,19 +135,13 @@ class AuthProvider extends ChangeNotifier {
   }
 
   /// Log in an existing user
-  Future<bool> login({
-    required String email,
-    required String password,
-  }) async {
+  Future<bool> login({required String email, required String password}) async {
     _state = AuthState.loading;
     _errorMessage = null;
     notifyListeners();
 
     try {
-      _user = await _authService.login(
-        email: email,
-        password: password,
-      );
+      _user = await _authService.login(email: email, password: password);
 
       _setServiceTokens(); // Set token for team service
 

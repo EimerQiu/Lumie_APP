@@ -517,6 +517,35 @@ class RingBleService {
     }
   }
 
+  /// Command 0x55 (paged) — Fetch HR history in [start, end] range.
+  /// Uses AA=0x00 for first page and AA=0x02 for continuation pages.
+  Future<List<HrDataPoint>> fetchHrHistoryRange({
+    required DateTime start,
+    DateTime? end,
+  }) async {
+    if (_notifyChar == null) {
+      debugPrint('[Ring BLE] fetchHrHistoryRange: not connected');
+      return [];
+    }
+
+    final results = <HrDataPoint>[];
+    const maxPages = 20;
+    var aa = 0x00;
+
+    for (var page = 0; page < maxPages; page++) {
+      final pageResult = await _fetchHrHistoryPage(
+        aa: aa,
+        start: start,
+        end: end,
+      );
+      results.addAll(pageResult.points);
+      if (pageResult.endReached || pageResult.points.isEmpty) break;
+      aa = 0x02;
+    }
+
+    return results;
+  }
+
   /// Command 0x56 — Fetch stored HRV / stress / blood pressure history with timestamp filter.
   Future<List<RingRawHrvRecord>> fetchHrvHistory() async {
     if (_notifyChar == null) {
@@ -675,6 +704,171 @@ class RingBleService {
     } catch (e) {
       debugPrint('[Ring BLE] fetchHrDetails error: $e');
       return results;
+    } finally {
+      await sub.cancel();
+    }
+  }
+
+  /// Command 0x54 (paged) — Fetch detailed HR points in [start, end] range.
+  /// Uses AA=0x00 for first page and AA=0x02 for continuation pages.
+  Future<List<HrDataPoint>> fetchHrDetailsRange({
+    required DateTime start,
+    DateTime? end,
+  }) async {
+    if (_notifyChar == null) {
+      debugPrint('[Ring BLE] fetchHrDetailsRange: not connected');
+      return [];
+    }
+
+    final results = <HrDataPoint>[];
+    const maxPages = 20;
+    var aa = 0x00;
+
+    for (var page = 0; page < maxPages; page++) {
+      final pageResult = await _fetchHrDetailsPage(
+        aa: aa,
+        start: start,
+        end: end,
+      );
+      results.addAll(pageResult.points);
+      if (pageResult.endReached || pageResult.points.isEmpty) break;
+      aa = 0x02;
+    }
+
+    return results;
+  }
+
+  Future<({List<HrDataPoint> points, bool endReached})> _fetchHrHistoryPage({
+    required int aa,
+    required DateTime start,
+    DateTime? end,
+  }) async {
+    final upperBound = end;
+    final points = <HrDataPoint>[];
+    var endReached = false;
+    final completer = Completer<void>();
+    StreamSubscription<List<int>>? sub;
+
+    sub = _notifyChar!.onValueReceived.listen((data) {
+      var i = 0;
+      while (i < data.length) {
+        if (data[i] != 0x55) {
+          i++;
+          continue;
+        }
+        if (i + 1 < data.length && data[i + 1] == 0xFF) {
+          endReached = true;
+          if (!completer.isCompleted) completer.complete();
+          i += 2;
+          continue;
+        }
+        if (i + 10 > data.length) break;
+        final frame = data.sublist(i, i + 10);
+        final hr = frame[9];
+        final ts = _parseRingTimestamp(frame, 3);
+        if (hr > 0 && hr < 250 && ts != null) {
+          final inRange =
+              (ts.isAtSameMomentAs(start) || ts.isAfter(start)) &&
+              (upperBound == null ||
+                  ts.isBefore(upperBound) ||
+                  ts.isAtSameMomentAs(upperBound));
+          if (inRange) {
+            points.add(HrDataPoint(time: ts, bpm: hr));
+          }
+        }
+        i += 10;
+      }
+    });
+
+    try {
+      final payload = List<int>.filled(15, 0);
+      payload[0] = 0x55;
+      payload[1] = aa;
+      final bcdTs = _encodeBcdTimestamp(start);
+      for (var j = 0; j < 6; j++) {
+        payload[3 + j] = bcdTs[j];
+      }
+      await _writeCommand(payload);
+      await completer.future.timeout(
+        const Duration(seconds: 3),
+        onTimeout: () {
+          return;
+        },
+      );
+      return (points: points, endReached: endReached);
+    } catch (e) {
+      debugPrint('[Ring BLE] _fetchHrHistoryPage error: $e');
+      return (points: points, endReached: endReached);
+    } finally {
+      await sub.cancel();
+    }
+  }
+
+  Future<({List<HrDataPoint> points, bool endReached})> _fetchHrDetailsPage({
+    required int aa,
+    required DateTime start,
+    DateTime? end,
+  }) async {
+    final upperBound = end;
+    final points = <HrDataPoint>[];
+    var endReached = false;
+    final completer = Completer<void>();
+    StreamSubscription<List<int>>? sub;
+
+    sub = _notifyChar!.onValueReceived.listen((data) {
+      var i = 0;
+      while (i < data.length) {
+        if (data[i] != 0x54) {
+          i++;
+          continue;
+        }
+        if (i + 1 < data.length && data[i + 1] == 0xFF) {
+          endReached = true;
+          if (!completer.isCompleted) completer.complete();
+          i += 2;
+          continue;
+        }
+        if (i + 24 > data.length) break;
+        final frame = data.sublist(i, i + 24);
+        final startTime = _parseRingTimestamp(frame, 3);
+        if (startTime != null) {
+          for (var j = 0; j < 15; j++) {
+            final bpm = frame[9 + j];
+            if (bpm <= 0 || bpm >= 250) continue;
+            final ts = startTime.add(Duration(seconds: j * 5));
+            final inRange =
+                (ts.isAtSameMomentAs(start) || ts.isAfter(start)) &&
+                (upperBound == null ||
+                    ts.isBefore(upperBound) ||
+                    ts.isAtSameMomentAs(upperBound));
+            if (inRange) {
+              points.add(HrDataPoint(time: ts, bpm: bpm));
+            }
+          }
+        }
+        i += 24;
+      }
+    });
+
+    try {
+      final payload = List<int>.filled(15, 0);
+      payload[0] = 0x54;
+      payload[1] = aa;
+      final bcdTs = _encodeBcdTimestamp(start);
+      for (var j = 0; j < 6; j++) {
+        payload[3 + j] = bcdTs[j];
+      }
+      await _writeCommand(payload);
+      await completer.future.timeout(
+        const Duration(seconds: 3),
+        onTimeout: () {
+          return;
+        },
+      );
+      return (points: points, endReached: endReached);
+    } catch (e) {
+      debugPrint('[Ring BLE] _fetchHrDetailsPage error: $e');
+      return (points: points, endReached: endReached);
     } finally {
       await sub.cancel();
     }

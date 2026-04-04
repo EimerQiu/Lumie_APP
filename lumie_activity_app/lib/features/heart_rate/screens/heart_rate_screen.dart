@@ -1,7 +1,9 @@
 import 'package:fl_chart/fl_chart.dart';
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../../core/theme/app_colors.dart';
+import '../../auth/providers/auth_provider.dart';
 import '../../ring/providers/ring_provider.dart';
 import '../providers/heart_rate_provider.dart';
 
@@ -14,8 +16,13 @@ class HeartRateScreen extends StatefulWidget {
 
 class _HeartRateScreenState extends State<HeartRateScreen>
     with SingleTickerProviderStateMixin {
+  static const Duration _disconnectConfirmDelay = Duration(seconds: 15);
+
   late AnimationController _pulseController;
   late Animation<double> _pulseAnimation;
+  RingProvider? _ringProvider;
+  Timer? _disconnectConfirmTimer;
+  bool _isDisconnectedConfirmed = false;
 
   @override
   void initState() {
@@ -27,12 +34,63 @@ class _HeartRateScreenState extends State<HeartRateScreen>
     _pulseAnimation = Tween<double>(begin: 1.0, end: 1.25).animate(
       CurvedAnimation(parent: _pulseController, curve: Curves.easeInOut),
     );
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final auth = context.read<AuthProvider>();
+      if (auth.profile?.age == null) {
+        auth.refreshProfile();
+      }
+    });
   }
 
   @override
   void dispose() {
+    _disconnectConfirmTimer?.cancel();
+    _ringProvider?.removeListener(_onRingConnectionChanged);
     _pulseController.dispose();
     super.dispose();
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final ring = context.read<RingProvider>();
+    if (_ringProvider == ring) return;
+    _ringProvider?.removeListener(_onRingConnectionChanged);
+    _ringProvider = ring;
+    _ringProvider?.addListener(_onRingConnectionChanged);
+    _syncDisconnectUiState();
+  }
+
+  void _onRingConnectionChanged() {
+    _syncDisconnectUiState();
+  }
+
+  void _syncDisconnectUiState() {
+    final ring = _ringProvider;
+    if (!mounted || ring == null) return;
+
+    if (!ring.isPaired || ring.isConnected) {
+      _disconnectConfirmTimer?.cancel();
+      _disconnectConfirmTimer = null;
+      if (_isDisconnectedConfirmed) {
+        setState(() => _isDisconnectedConfirmed = false);
+      }
+      return;
+    }
+
+    if (_disconnectConfirmTimer?.isActive ?? false) return;
+
+    ring.tryReconnect();
+    _disconnectConfirmTimer = Timer(_disconnectConfirmDelay, () {
+      if (!mounted) return;
+      final stillDisconnected =
+          _ringProvider?.isPaired == true &&
+          !(_ringProvider?.isConnected ?? false);
+      if (stillDisconnected && !_isDisconnectedConfirmed) {
+        setState(() => _isDisconnectedConfirmed = true);
+      }
+    });
   }
 
   void _startMeasurement(HeartRateProvider provider) {
@@ -75,13 +133,19 @@ class _HeartRateScreenState extends State<HeartRateScreen>
       body: Consumer2<RingProvider, HeartRateProvider>(
         builder: (context, ring, hr, _) {
           if (!ring.isPaired) return _buildNoRingState();
-          if (!ring.isConnected) return _buildDisconnectedState(ring);
+          final showDisconnectedInPlace =
+              !ring.isConnected && _isDisconnectedConfirmed;
           return SingleChildScrollView(
             padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                _buildMeasureCard(hr),
+                _buildMeasureCard(
+                  hr,
+                  isRingConnected: ring.isConnected,
+                  showDisconnectedInPlace: showDisconnectedInPlace,
+                  onReconnect: ring.tryReconnect,
+                ),
               ],
             ),
           );
@@ -99,7 +163,11 @@ class _HeartRateScreenState extends State<HeartRateScreen>
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(Icons.watch_off_outlined, size: 64, color: AppColors.textLight),
+            Icon(
+              Icons.watch_off_outlined,
+              size: 64,
+              color: AppColors.textLight,
+            ),
             const SizedBox(height: 16),
             const Text(
               'No ring connected',
@@ -121,53 +189,16 @@ class _HeartRateScreenState extends State<HeartRateScreen>
     );
   }
 
-  Widget _buildDisconnectedState(RingProvider ring) {
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(32),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(Icons.bluetooth_disabled, size: 64, color: AppColors.textLight),
-            const SizedBox(height: 16),
-            const Text(
-              'Ring disconnected',
-              style: TextStyle(
-                fontSize: 20,
-                fontWeight: FontWeight.w600,
-                color: AppColors.textPrimary,
-              ),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              'Make sure your Lumie Ring is nearby and powered on.',
-              style: TextStyle(fontSize: 15, color: AppColors.textSecondary),
-              textAlign: TextAlign.center,
-            ),
-            const SizedBox(height: 24),
-            ElevatedButton.icon(
-              onPressed: () => ring.tryReconnect(),
-              icon: const Icon(Icons.refresh),
-              label: const Text('Reconnect'),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: AppColors.textPrimary,
-                foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 12),
-                shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(30)),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
   // ─── Daily trend card ─────────────────────────────────────────────────────
 
   // ─── Measure HR card ──────────────────────────────────────────────────────
 
-  Widget _buildMeasureCard(HeartRateProvider hr) {
+  Widget _buildMeasureCard(
+    HeartRateProvider hr, {
+    required bool isRingConnected,
+    required bool showDisconnectedInPlace,
+    required VoidCallback onReconnect,
+  }) {
     return Container(
       padding: const EdgeInsets.all(24),
       decoration: BoxDecoration(
@@ -176,20 +207,34 @@ class _HeartRateScreenState extends State<HeartRateScreen>
         boxShadow: AppColors.cardShadow,
       ),
       child: switch (hr.measureState) {
-        HrMeasureState.idle => _buildIdleState(hr),
-        HrMeasureState.measuring => _buildMeasuringState(hr),
+        HrMeasureState.idle => _buildIdleState(
+          hr,
+          isRingConnected: isRingConnected,
+          showDisconnectedInPlace: showDisconnectedInPlace,
+          onReconnect: onReconnect,
+        ),
+        HrMeasureState.measuring => _buildMeasuringState(
+          hr,
+          isRingConnected: isRingConnected,
+          showDisconnectedInPlace: showDisconnectedInPlace,
+        ),
         HrMeasureState.done => _buildDoneState(hr),
       },
     );
   }
 
-  Widget _buildIdleState(HeartRateProvider hr) {
+  Widget _buildIdleState(
+    HeartRateProvider hr, {
+    required bool isRingConnected,
+    required bool showDisconnectedInPlace,
+    required VoidCallback onReconnect,
+  }) {
     return Column(
       children: [
         Icon(Icons.favorite_border, size: 40, color: Colors.redAccent),
         const SizedBox(height: 16),
         ElevatedButton.icon(
-          onPressed: () => _startMeasurement(hr),
+          onPressed: isRingConnected ? () => _startMeasurement(hr) : null,
           icon: const Icon(Icons.favorite),
           label: const Text('Measure Heart Rate'),
           style: ElevatedButton.styleFrom(
@@ -205,11 +250,28 @@ class _HeartRateScreenState extends State<HeartRateScreen>
             ),
           ),
         ),
+        if (showDisconnectedInPlace) ...[
+          const SizedBox(height: 14),
+          Text(
+            'Ring disconnected',
+            style: TextStyle(
+              fontSize: 13,
+              color: AppColors.textSecondary,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+          const SizedBox(height: 8),
+          TextButton(onPressed: onReconnect, child: const Text('Reconnect')),
+        ],
       ],
     );
   }
 
-  Widget _buildMeasuringState(HeartRateProvider hr) {
+  Widget _buildMeasuringState(
+    HeartRateProvider hr, {
+    required bool isRingConnected,
+    required bool showDisconnectedInPlace,
+  }) {
     final elapsed = hr.elapsed;
     final mm = elapsed.inMinutes.remainder(60).toString().padLeft(2, '0');
     final ss = elapsed.inSeconds.remainder(60).toString().padLeft(2, '0');
@@ -218,7 +280,7 @@ class _HeartRateScreenState extends State<HeartRateScreen>
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         // BPM + pulse icon row
-        if (hr.isWarmingUp)
+        if (hr.isWarmingUp && isRingConnected && !showDisconnectedInPlace)
           Padding(
             padding: const EdgeInsets.symmetric(vertical: 16),
             child: Row(
@@ -226,7 +288,11 @@ class _HeartRateScreenState extends State<HeartRateScreen>
               children: [
                 ScaleTransition(
                   scale: _pulseAnimation,
-                  child: const Icon(Icons.favorite, size: 28, color: Colors.redAccent),
+                  child: const Icon(
+                    Icons.favorite,
+                    size: 28,
+                    color: Colors.redAccent,
+                  ),
                 ),
                 const SizedBox(width: 10),
                 Text(
@@ -247,11 +313,17 @@ class _HeartRateScreenState extends State<HeartRateScreen>
             children: [
               ScaleTransition(
                 scale: _pulseAnimation,
-                child: const Icon(Icons.favorite, size: 36, color: Colors.redAccent),
+                child: const Icon(
+                  Icons.favorite,
+                  size: 36,
+                  color: Colors.redAccent,
+                ),
               ),
               const SizedBox(width: 12),
               Text(
-                '${hr.liveHr}',
+                (!isRingConnected || showDisconnectedInPlace)
+                    ? '_ _'
+                    : '${hr.liveHr ?? '_ _'}',
                 style: const TextStyle(
                   fontSize: 56,
                   fontWeight: FontWeight.bold,
@@ -294,15 +366,20 @@ class _HeartRateScreenState extends State<HeartRateScreen>
                   child: Text(
                     'Waiting for readings…',
                     style: TextStyle(
-                        fontSize: 13, color: AppColors.textSecondary),
+                      fontSize: 13,
+                      color: AppColors.textSecondary,
+                    ),
                   ),
                 )
               : _buildSessionChart(hr),
         ),
         const SizedBox(height: 8),
         // Session stats (only once we have data)
-        if (hr.sessionReadings.isNotEmpty)
-          _buildSessionStatsRow(hr),
+        if (hr.sessionReadings.isNotEmpty) _buildSessionStatsRow(hr),
+        if (hr.sessionReadings.isNotEmpty) ...[
+          const SizedBox(height: 12),
+          _buildZoneDurationBars(hr),
+        ],
         const SizedBox(height: 20),
         // Stop button
         OutlinedButton(
@@ -373,6 +450,10 @@ class _HeartRateScreenState extends State<HeartRateScreen>
         ],
         // Stats
         if (hr.sessionReadings.isNotEmpty) _buildSessionStatsRow(hr),
+        if (hr.sessionReadings.isNotEmpty) ...[
+          const SizedBox(height: 12),
+          _buildZoneDurationBars(hr),
+        ],
         const SizedBox(height: 20),
         TextButton(
           onPressed: () {
@@ -406,6 +487,19 @@ class _HeartRateScreenState extends State<HeartRateScreen>
     final yMin = ((minBpm - 10).clamp(30, 200)).toDouble();
     final yMax = ((maxBpm + 10).clamp(50, 250)).toDouble();
     final totalSecs = spots.last.x;
+    final attemptedRanges = hr.attemptedBackfillRanges;
+    final visualBackfillRanges = attemptedRanges
+        .map((range) {
+          final x1 = range.start.difference(origin).inMilliseconds / 1000.0;
+          final x2 = range.end.difference(origin).inMilliseconds / 1000.0;
+          return VerticalRangeAnnotation(
+            x1: x1.clamp(0, totalSecs > 0 ? totalSecs : 1),
+            x2: x2.clamp(0, totalSecs > 0 ? totalSecs : 1),
+            color: Colors.amber.withValues(alpha: 0.12),
+          );
+        })
+        .where((r) => r.x2 > r.x1)
+        .toList();
 
     return LineChart(
       LineChartData(
@@ -413,6 +507,9 @@ class _HeartRateScreenState extends State<HeartRateScreen>
         maxY: yMax,
         minX: 0,
         maxX: totalSecs > 0 ? totalSecs : 1,
+        rangeAnnotations: RangeAnnotations(
+          verticalRangeAnnotations: visualBackfillRanges,
+        ),
         clipData: const FlClipData.all(),
         gridData: FlGridData(
           show: true,
@@ -425,8 +522,12 @@ class _HeartRateScreenState extends State<HeartRateScreen>
         ),
         borderData: FlBorderData(show: false),
         titlesData: FlTitlesData(
-          rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-          topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+          rightTitles: const AxisTitles(
+            sideTitles: SideTitles(showTitles: false),
+          ),
+          topTitles: const AxisTitles(
+            sideTitles: SideTitles(showTitles: false),
+          ),
           leftTitles: AxisTitles(
             sideTitles: SideTitles(
               showTitles: true,
@@ -484,9 +585,10 @@ class _HeartRateScreenState extends State<HeartRateScreen>
               return LineTooltipItem(
                 '${spot.y.toInt()} BPM\n$m:${s.toString().padLeft(2, '0')}',
                 const TextStyle(
-                    color: Colors.white,
-                    fontSize: 12,
-                    fontWeight: FontWeight.w600),
+                  color: Colors.white,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                ),
               );
             }).toList(),
           ),
@@ -503,13 +605,178 @@ class _HeartRateScreenState extends State<HeartRateScreen>
   }
 
   Widget _buildSessionStatsRow(HeartRateProvider hr) {
-    return Row(
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        _StatChip(label: 'Avg', value: '${hr.sessionAvg ?? '—'} BPM'),
-        const SizedBox(width: 8),
-        _StatChip(label: 'Min', value: '${hr.sessionMin ?? '—'} BPM'),
-        const SizedBox(width: 8),
-        _StatChip(label: 'Max', value: '${hr.sessionMax ?? '—'} BPM'),
+        if (hr.attemptedBackfillRanges.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 8),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  width: 14,
+                  height: 10,
+                  decoration: BoxDecoration(
+                    color: Colors.amber.withValues(alpha: 0.2),
+                    borderRadius: BorderRadius.circular(3),
+                  ),
+                ),
+                const SizedBox(width: 6),
+                Text(
+                  'Backfill attempted segment',
+                  style: TextStyle(
+                    fontSize: 11,
+                    color: AppColors.textSecondary,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        Row(
+          children: [
+            _StatChip(label: 'Avg', value: '${hr.sessionAvg ?? '—'} BPM'),
+            const SizedBox(width: 8),
+            _StatChip(label: 'Min', value: '${hr.sessionMin ?? '—'} BPM'),
+            const SizedBox(width: 8),
+            _StatChip(label: 'Max', value: '${hr.sessionMax ?? '—'} BPM'),
+          ],
+        ),
+      ],
+    );
+  }
+
+  Widget _buildZoneDurationBars(HeartRateProvider hr) {
+    final age = context.watch<AuthProvider>().profile?.age;
+    final ageLabel = age?.toString() ?? 'N/A';
+    final maxHr = hr.estimateMaxHeartRate(age: age);
+    final zoneDurations = hr.zoneDurations(age: age);
+    final maxDuration = zoneDurations.reduce((a, b) => a > b ? a : b);
+
+    const zoneColors = [
+      Color(0xFFB8B8BE),
+      Color(0xFF90CFF2),
+      Color(0xFF57B7E2),
+      Color(0xFF45C8B8),
+      Color(0xFFE7C457),
+      Color(0xFFFF6B5A),
+    ];
+
+    String fmt(Duration d) {
+      if (d.inMinutes > 0) return '${d.inMinutes}m';
+      return '${d.inSeconds}s';
+    }
+
+    String zoneRangeLabel(int zone) {
+      final z0 = (maxHr * 0.5).round();
+      final z1 = (maxHr * 0.6).round();
+      final z2 = (maxHr * 0.7).round();
+      final z3 = (maxHr * 0.8).round();
+      final z4 = (maxHr * 0.9).round();
+      switch (zone) {
+        case 0:
+          return '<$z0';
+        case 1:
+          return '$z0-$z1';
+        case 2:
+          return '${z1 + 1}-$z2';
+        case 3:
+          return '${z2 + 1}-$z3';
+        case 4:
+          return '${z3 + 1}-$z4';
+        default:
+          return '${z4 + 1}-$maxHr';
+      }
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        for (var i = 0; i < 6; i++)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 8),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Row(
+                    children: [
+                      Container(
+                        width: 3,
+                        height: 16,
+                        decoration: BoxDecoration(
+                          color: zoneColors[i],
+                          borderRadius: BorderRadius.circular(2),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Stack(
+                          alignment: Alignment.centerLeft,
+                          children: [
+                            Container(
+                              height: 16,
+                              decoration: BoxDecoration(
+                                color: AppColors.backgroundPaper,
+                                borderRadius: BorderRadius.circular(999),
+                              ),
+                            ),
+                            FractionallySizedBox(
+                              widthFactor: maxDuration == Duration.zero
+                                  ? 0
+                                  : zoneDurations[i].inMilliseconds /
+                                        maxDuration.inMilliseconds,
+                              child: Container(
+                                height: 16,
+                                decoration: BoxDecoration(
+                                  color: zoneColors[i],
+                                  borderRadius: BorderRadius.circular(999),
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Text(
+                  'Zone $i  ${fmt(zoneDurations[i])}',
+                  style: const TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
+                    color: AppColors.textPrimary,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        const SizedBox(height: 2),
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+          decoration: BoxDecoration(
+            color: AppColors.backgroundPaper,
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: Text(
+            'Age: $ageLabel\n'
+            'Formula: HRmax = 208 - 0.7 × age = $maxHr\n'
+            'Ranges (bpm): '
+            'Z0 ${zoneRangeLabel(0)}, '
+            'Z1 ${zoneRangeLabel(1)}, '
+            'Z2 ${zoneRangeLabel(2)}, '
+            'Z3 ${zoneRangeLabel(3)}, '
+            'Z4 ${zoneRangeLabel(4)}, '
+            'Z5 ${zoneRangeLabel(5)}',
+            style: TextStyle(
+              fontSize: 11,
+              height: 1.35,
+              color: AppColors.textSecondary,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+        ),
       ],
     );
   }

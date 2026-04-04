@@ -5,12 +5,14 @@ import 'dart:async';
 import 'dart:io';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
+import '../../../core/services/profile_service.dart';
 import '../../../core/services/ring_ble_service.dart';
 import '../../../core/services/ring_service.dart';
 import '../../../core/services/ring_sync_service.dart';
 import '../../../core/services/ring_command_service.dart';
 import '../../../shared/models/ring_models.dart';
 import '../../../shared/models/heart_rate_models.dart';
+import '../../../shared/models/user_models.dart';
 
 enum RingProviderState {
   idle,
@@ -27,6 +29,7 @@ enum RingProviderState {
 class RingProvider extends ChangeNotifier with WidgetsBindingObserver {
   final RingBleService _bleService = RingBleService();
   final RingService _ringService = RingService();
+  final ProfileService _profileService = ProfileService();
 
   RingProviderState _state = RingProviderState.idle;
   RingInfo? _ringInfo;
@@ -169,7 +172,13 @@ class RingProvider extends ChangeNotifier with WidgetsBindingObserver {
       }
 
       // Initialize ring: set time, user info, and measurement intervals
-      await _bleService.initializeRing();
+      final ringUser = await _resolveRingUserInfoFromProfile();
+      await _bleService.initializeRing(
+        gender: ringUser.gender,
+        age: ringUser.age,
+        heightCm: ringUser.heightCm,
+        weightKg: ringUser.weightKg,
+      );
 
       _ringInfo = _ringInfo?.copyWith(
         connectionStatus: RingConnectionStatus.connected,
@@ -251,7 +260,13 @@ class RingProvider extends ChangeNotifier with WidgetsBindingObserver {
         }
 
         // Initialize ring: set time, user info, and measurement intervals
-        await _bleService.initializeRing();
+        final ringUser = await _resolveRingUserInfoFromProfile();
+        await _bleService.initializeRing(
+          gender: ringUser.gender,
+          age: ringUser.age,
+          heightCm: ringUser.heightCm,
+          weightKg: ringUser.weightKg,
+        );
 
         _ringInfo = _ringInfo?.copyWith(
           connectionStatus: RingConnectionStatus.connected,
@@ -292,6 +307,7 @@ class RingProvider extends ChangeNotifier with WidgetsBindingObserver {
       debugPrint('[RCMD] Sync skipped: heart-rate measurement in progress');
       return;
     }
+    unawaited(_writeUserInfoToRing());
     RingSyncService().triggerSync(
       fetchSleep: () => _bleService.fetchSleepHistory(),
       fetchHr: () => _bleService.fetchHrHistory(),
@@ -302,6 +318,62 @@ class RingProvider extends ChangeNotifier with WidgetsBindingObserver {
       fetchSpo2: () => _bleService.fetchSpo2History(),
     );
     RingCommandService().checkAndExecute(_bleService);
+  }
+
+  Future<void> _writeUserInfoToRing() async {
+    if (!isConnected) return;
+    try {
+      final ringUser = await _resolveRingUserInfoFromProfile();
+      await _bleService.setUserInfo(
+        gender: ringUser.gender,
+        age: ringUser.age,
+        heightCm: ringUser.heightCm,
+        weightKg: ringUser.weightKg,
+      );
+      debugPrint(
+        '[Ring] User info synced to ring: gender=${ringUser.gender} age=${ringUser.age} h=${ringUser.heightCm} w=${ringUser.weightKg}',
+      );
+    } catch (e) {
+      debugPrint('[Ring] Failed to sync user info to ring: $e');
+    }
+  }
+
+  Future<({int gender, int age, int heightCm, int weightKg})>
+  _resolveRingUserInfoFromProfile() async {
+    // Defaults kept conservative; values are clamped before writing to ring.
+    var gender = 1; // 1=male, 2=female (protocol)
+    var age = 20;
+    var heightCm = 170;
+    var weightKg = 70;
+
+    try {
+      final profile = await _profileService.getProfile();
+      if (profile.age != null) {
+        age = profile.age!.clamp(5, 100);
+      }
+      if (profile.height != null) {
+        heightCm = _toHeightCm(profile.height!).clamp(80, 240);
+      }
+      if (profile.weight != null) {
+        weightKg = _toWeightKg(profile.weight!).clamp(25, 250);
+      }
+      // No explicit gender in current profile model; keep default.
+    } catch (_) {
+      // Keep defaults if profile read fails.
+    }
+
+    return (gender: gender, age: age, heightCm: heightCm, weightKg: weightKg);
+  }
+
+  int _toHeightCm(HeightData height) {
+    if (height.unit == HeightUnit.cm) return height.value.round();
+    // ft/in mode stores total inches in value.
+    return (height.value * 2.54).round();
+  }
+
+  int _toWeightKg(WeightData weight) {
+    if (weight.unit == WeightUnit.kg) return weight.value.round();
+    return (weight.value / 2.20462).round();
   }
 
   Future<void> _checkPendingRingCommandsOnly() async {
@@ -479,6 +551,20 @@ class RingProvider extends ChangeNotifier with WidgetsBindingObserver {
 
   Future<List<HrDataPoint>> fetchHrHistory() =>
       isPaired ? _bleService.fetchHrHistory() : Future.value([]);
+
+  Future<List<HrDataPoint>> fetchHrHistoryRange({
+    required DateTime start,
+    DateTime? end,
+  }) => isPaired
+      ? _bleService.fetchHrHistoryRange(start: start, end: end)
+      : Future.value([]);
+
+  Future<List<HrDataPoint>> fetchHrDetailsRange({
+    required DateTime start,
+    DateTime? end,
+  }) => isPaired
+      ? _bleService.fetchHrDetailsRange(start: start, end: end)
+      : Future.value([]);
 
   // ─── Heart Rate Streaming ─────────────────────────────────────────────────
 

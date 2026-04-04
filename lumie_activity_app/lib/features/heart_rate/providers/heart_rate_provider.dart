@@ -7,6 +7,22 @@ import '../../ring/providers/ring_provider.dart';
 
 enum HrMeasureState { idle, measuring, done }
 
+class _HrRange {
+  final DateTime start;
+  final DateTime end;
+
+  const _HrRange({required this.start, required this.end});
+
+  bool get isValid => !end.isBefore(start);
+
+  bool overlaps(_HrRange other) =>
+      !end.isBefore(other.start) && !other.end.isBefore(start);
+
+  bool contains(DateTime t) =>
+      (t.isAtSameMomentAs(start) || t.isAfter(start)) &&
+      (t.isAtSameMomentAs(end) || t.isBefore(end));
+}
+
 class HeartRateProvider extends ChangeNotifier {
   RingProvider? _ringProvider;
   List<HrDataPoint> _dailyReadings = [];
@@ -22,10 +38,20 @@ class HeartRateProvider extends ChangeNotifier {
   int? _currentBpm; // latest filtered reading
 
   static const Duration _maxDuration = Duration(hours: 1, minutes: 30);
+  static const Duration _gapDetectThreshold = Duration(seconds: 5);
+  static const Duration _gapEdgeTrim = Duration(seconds: 1);
+  static const Duration _backfillQueryLookback = Duration(seconds: 90);
+
+  final List<_HrRange> _pendingBackfillRanges = [];
+  final List<_HrRange> _attemptedBackfillRanges = [];
+  bool _backfillInProgress = false;
+  DateTime? _lastRealtimePointTime;
+  DateTime? _measurementStartedAt;
+  bool _lastRingConnected = false;
 
   // Adaptive EMA smoothing parameters
   static const double _minAlpha = 0.15; // smooth during stable periods
-  static const double _maxAlpha = 0.6;  // responsive during rapid changes
+  static const double _maxAlpha = 0.6; // responsive during rapid changes
   double _emaValue = 0.0;
   int _previousRaw = 0;
   int _stabilityCounter = 0;
@@ -33,10 +59,26 @@ class HeartRateProvider extends ChangeNotifier {
   // ─── ProxyProvider bridge ─────────────────────────────────────────────────
 
   void updateRingProvider(RingProvider ring) {
+    final previousRing = _ringProvider;
     final wasPaired = _ringProvider?.isPaired ?? false;
+    previousRing?.removeListener(_onRingStateChanged);
     _ringProvider = ring;
+    _ringProvider!.addListener(_onRingStateChanged);
+    _lastRingConnected = ring.isConnected;
     if (!wasPaired && ring.isPaired) {
       fetchDailyHistory();
+    }
+  }
+
+  void _onRingStateChanged() {
+    final ring = _ringProvider;
+    if (ring == null) return;
+    final connected = ring.isConnected;
+    final justReconnected = !_lastRingConnected && connected;
+    _lastRingConnected = connected;
+    if (justReconnected && _measureState == HrMeasureState.measuring) {
+      _enqueueGapsFromSession();
+      _kickBackfillIfNeeded();
     }
   }
 
@@ -45,21 +87,23 @@ class HeartRateProvider extends ChangeNotifier {
   List<HrDataPoint> get dailyReadings => _dailyReadings;
   bool get loadingHistory => _loadingHistory;
   HrMeasureState get measureState => _measureState;
+
   /// True until EMA has stabilized — BPM should not be shown yet (first ~2 seconds).
   bool get isWarmingUp => _stabilityCounter < 3;
 
   int? get liveHr => isWarmingUp ? null : _currentBpm;
   int? get finalHr => _currentBpm;
   Duration get elapsed => _elapsed;
-  List<HrSessionPoint> get sessionReadings => List.unmodifiable(_sessionReadings);
+  List<HrSessionPoint> get sessionReadings =>
+      List.unmodifiable(_sessionReadings);
 
   int? get sessionMin => _sessionReadings.isEmpty
       ? null
-      : _sessionReadings.map((e) => e.smoothedBpm.toInt()).reduce(min);
+      : _sessionReadings.map((e) => e.smoothedBpm.round()).reduce(min);
 
   int? get sessionMax => _sessionReadings.isEmpty
       ? null
-      : _sessionReadings.map((e) => e.smoothedBpm.toInt()).reduce(max);
+      : _sessionReadings.map((e) => e.smoothedBpm.round()).reduce(max);
 
   int? get sessionAvg => _sessionReadings.isEmpty
       ? null
@@ -82,6 +126,67 @@ class HeartRateProvider extends ChangeNotifier {
       : (_dailyReadings.map((e) => e.bpm).reduce((a, b) => a + b) /
                 _dailyReadings.length)
             .round();
+
+  List<HrBackfillRange> get attemptedBackfillRanges => _attemptedBackfillRanges
+      .map((e) => HrBackfillRange(start: e.start, end: e.end))
+      .toList(growable: false);
+
+  int estimateMaxHeartRate({int? age}) {
+    final safeAge = age ?? 20;
+    final estimated = (208 - 0.7 * safeAge).round();
+    return estimated.clamp(130, 210);
+  }
+
+  List<Duration> zoneDurations({int? age}) {
+    final zones = List<Duration>.filled(6, Duration.zero);
+    if (_sessionReadings.isEmpty) return zones;
+
+    final maxHr = estimateMaxHeartRate(age: age);
+    final sorted = [..._sessionReadings]
+      ..sort((a, b) => a.time.compareTo(b.time));
+
+    int zoneForBpm(int bpm) {
+      final ratio = bpm / maxHr;
+      if (ratio < 0.5) return 0;
+      if (ratio < 0.6) return 1;
+      if (ratio < 0.7) return 2;
+      if (ratio < 0.8) return 3;
+      if (ratio < 0.9) return 4;
+      return 5;
+    }
+
+    for (var i = 0; i < sorted.length; i++) {
+      final current = sorted[i];
+      final bpm = current.smoothedBpm.round();
+      final zone = zoneForBpm(bpm);
+
+      Duration span;
+      switch (current.source) {
+        case HrSessionPointSource.realtime:
+          if (i < sorted.length - 1) {
+            final delta = sorted[i + 1].time.difference(current.time);
+            if (delta > Duration.zero && delta <= const Duration(seconds: 5)) {
+              span = delta;
+              break;
+            }
+          }
+          span = const Duration(seconds: 1);
+          break;
+        case HrSessionPointSource.backfillDetail:
+          // 0x54 detailed HR is one point per 5 seconds.
+          span = const Duration(seconds: 5);
+          break;
+        case HrSessionPointSource.backfillHistory:
+          // 0x55 single-point history has coarser/unknown interval.
+          span = const Duration(seconds: 1);
+          break;
+      }
+
+      zones[zone] += span;
+    }
+
+    return zones;
+  }
 
   // ─── Adaptive EMA Smoothing ───────────────────────────────────────────────
 
@@ -138,13 +243,22 @@ class HeartRateProvider extends ChangeNotifier {
     _stabilityCounter = 0;
     _currentBpm = null;
     _elapsed = Duration.zero;
+    _pendingBackfillRanges.clear();
+    _attemptedBackfillRanges.clear();
+    _backfillInProgress = false;
+    _measurementStartedAt = DateTime.now();
+    _lastRealtimePointTime = null;
+    _lastRingConnected = _ringProvider?.isConnected ?? false;
     _measureState = HrMeasureState.measuring;
     notifyListeners();
 
     final stream = _ringProvider!.startHrStreaming();
-    _hrSub = stream.listen(_onRawReading, onError: (e) {
-      debugPrint('[HR] stream error: $e');
-    });
+    _hrSub = stream.listen(
+      _onRawReading,
+      onError: (e) {
+        debugPrint('[HR] stream error: $e');
+      },
+    );
 
     _elapsedTimer = Timer.periodic(const Duration(seconds: 1), (_) {
       _elapsed += const Duration(seconds: 1);
@@ -158,17 +272,196 @@ class HeartRateProvider extends ChangeNotifier {
 
   void _onRawReading(int raw) {
     if (raw < 30 || raw > 220) return; // reject implausible values
+    final now = DateTime.now();
     final smoothed = _adaptiveEMA(raw);
-    _currentBpm = smoothed.toInt();
+    _currentBpm = smoothed.round();
     // Only record to session once the warmup phase is complete
     if (!isWarmingUp) {
-      _sessionReadings.add(HrSessionPoint(
-        time: DateTime.now(),
-        rawBpm: raw,
-        smoothedBpm: smoothed,
-      ));
+      if (_lastRealtimePointTime != null) {
+        final gap = now.difference(_lastRealtimePointTime!);
+        if (gap > _gapDetectThreshold) {
+          _enqueueGap(
+            _HrRange(
+              start: _lastRealtimePointTime!.add(_gapEdgeTrim),
+              end: now.subtract(_gapEdgeTrim),
+            ),
+          );
+          _kickBackfillIfNeeded();
+        }
+      }
+      _sessionReadings.add(
+        HrSessionPoint(
+          time: now,
+          rawBpm: raw,
+          smoothedBpm: smoothed,
+          source: HrSessionPointSource.realtime,
+        ),
+      );
+      _lastRealtimePointTime = now;
     }
     notifyListeners();
+  }
+
+  void _enqueueGapsFromSession() {
+    if (_sessionReadings.length < 2) return;
+    final sorted = [..._sessionReadings]
+      ..sort((a, b) => a.time.compareTo(b.time));
+    for (var i = 1; i < sorted.length; i++) {
+      final prev = sorted[i - 1].time;
+      final next = sorted[i].time;
+      if (next.difference(prev) <= _gapDetectThreshold) continue;
+      _enqueueGap(
+        _HrRange(
+          start: prev.add(_gapEdgeTrim),
+          end: next.subtract(_gapEdgeTrim),
+        ),
+      );
+    }
+  }
+
+  void _enqueueGap(_HrRange gap) {
+    if (!gap.isValid) return;
+    if (_isCoveredByRanges(gap, _attemptedBackfillRanges)) return;
+    if (_isCoveredByRanges(gap, _pendingBackfillRanges)) return;
+    _pendingBackfillRanges.add(gap);
+    _mergeRangesInPlace(_pendingBackfillRanges);
+  }
+
+  bool _isCoveredByRanges(_HrRange range, List<_HrRange> ranges) {
+    for (final r in ranges) {
+      if (r.overlaps(range)) return true;
+    }
+    return false;
+  }
+
+  void _mergeRangesInPlace(List<_HrRange> ranges) {
+    if (ranges.length < 2) return;
+    ranges.sort((a, b) => a.start.compareTo(b.start));
+    final merged = <_HrRange>[ranges.first];
+    for (var i = 1; i < ranges.length; i++) {
+      final last = merged.last;
+      final current = ranges[i];
+      if (!last.end.isBefore(current.start)) {
+        final mergedEnd = last.end.isAfter(current.end)
+            ? last.end
+            : current.end;
+        merged[merged.length - 1] = _HrRange(start: last.start, end: mergedEnd);
+      } else {
+        merged.add(current);
+      }
+    }
+    ranges
+      ..clear()
+      ..addAll(merged);
+  }
+
+  void _markBackfillAttempted(_HrRange range) {
+    _attemptedBackfillRanges.add(range);
+    _mergeRangesInPlace(_attemptedBackfillRanges);
+  }
+
+  void _kickBackfillIfNeeded() {
+    if (_backfillInProgress || _measureState != HrMeasureState.measuring) {
+      return;
+    }
+    final ring = _ringProvider;
+    if (ring == null || !ring.isConnected) return;
+    if (_pendingBackfillRanges.isEmpty) return;
+    _runBackfill();
+  }
+
+  Future<void> _runBackfill() async {
+    if (_backfillInProgress) return;
+    _backfillInProgress = true;
+    try {
+      while (_measureState == HrMeasureState.measuring &&
+          _pendingBackfillRanges.isNotEmpty &&
+          (_ringProvider?.isConnected ?? false)) {
+        final gap = _pendingBackfillRanges.removeAt(0);
+        _markBackfillAttempted(gap);
+
+        final measurementStart = _measurementStartedAt ?? gap.start;
+        var queryStart = gap.start.subtract(_backfillQueryLookback);
+        if (queryStart.isBefore(measurementStart)) {
+          queryStart = measurementStart;
+        }
+
+        final ring = _ringProvider;
+        if (ring == null || !ring.isConnected) break;
+
+        final results = await Future.wait([
+          ring.fetchHrDetailsRange(start: queryStart, end: gap.end),
+          ring.fetchHrHistoryRange(start: queryStart, end: gap.end),
+        ]);
+
+        if (_measureState != HrMeasureState.measuring) break;
+        _mergeBackfilledPoints(
+          detailPoints: results[0],
+          historyPoints: results[1],
+          gap: gap,
+        );
+      }
+    } catch (e) {
+      debugPrint('[HR] backfill error: $e');
+    } finally {
+      _backfillInProgress = false;
+      notifyListeners();
+    }
+  }
+
+  void _mergeBackfilledPoints({
+    required List<HrDataPoint> detailPoints,
+    required List<HrDataPoint> historyPoints,
+    required _HrRange gap,
+  }) {
+    final windowStart = (_measurementStartedAt ?? DateTime.now()).subtract(
+      const Duration(seconds: 30),
+    );
+    final windowEnd = DateTime.now().add(const Duration(seconds: 5));
+
+    final bySecond = <int, HrSessionPoint>{};
+    for (final p in _sessionReadings) {
+      final key = p.time.millisecondsSinceEpoch ~/ 1000;
+      bySecond[key] = p;
+    }
+
+    void addPoints(List<HrDataPoint> points, HrSessionPointSource source) {
+      for (final p in points) {
+        if (!gap.contains(p.time)) continue;
+        if (p.time.isBefore(windowStart) || p.time.isAfter(windowEnd)) continue;
+        final key = p.time.millisecondsSinceEpoch ~/ 1000;
+        final existing = bySecond[key];
+        if (existing == null) {
+          bySecond[key] = HrSessionPoint(
+            time: p.time,
+            rawBpm: p.bpm,
+            smoothedBpm: p.bpm.toDouble(),
+            source: source,
+          );
+          continue;
+        }
+        if (existing.source == HrSessionPointSource.realtime) continue;
+        if (existing.source == HrSessionPointSource.backfillDetail &&
+            source == HrSessionPointSource.backfillHistory) {
+          continue;
+        }
+        bySecond[key] = HrSessionPoint(
+          time: p.time,
+          rawBpm: p.bpm,
+          smoothedBpm: p.bpm.toDouble(),
+          source: source,
+        );
+      }
+    }
+
+    addPoints(detailPoints, HrSessionPointSource.backfillDetail);
+    addPoints(historyPoints, HrSessionPointSource.backfillHistory);
+
+    final merged = bySecond.values.toList()
+      ..sort((a, b) => a.time.compareTo(b.time));
+    _sessionReadings
+      ..clear()
+      ..addAll(merged);
   }
 
   Future<void> stopMeasurement() async {
@@ -200,6 +493,11 @@ class HeartRateProvider extends ChangeNotifier {
     _measureState = HrMeasureState.idle;
     _currentBpm = null;
     _sessionReadings.clear();
+    _pendingBackfillRanges.clear();
+    _attemptedBackfillRanges.clear();
+    _backfillInProgress = false;
+    _lastRealtimePointTime = null;
+    _measurementStartedAt = null;
     _emaValue = 0.0;
     _previousRaw = 0;
     _stabilityCounter = 0;
@@ -212,6 +510,7 @@ class HeartRateProvider extends ChangeNotifier {
     _elapsedTimer?.cancel();
     _autoStopTimer?.cancel();
     _hrSub?.cancel();
+    _ringProvider?.removeListener(_onRingStateChanged);
     super.dispose();
   }
 }
