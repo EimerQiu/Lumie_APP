@@ -74,7 +74,9 @@ class RingProvider extends ChangeNotifier with WidgetsBindingObserver {
       notifyListeners();
 
       // Auto-reconnect when BT becomes available
-      if (_isBluetoothOn && _ringInfo?.isPaired == true && _state == RingProviderState.disconnected) {
+      if (_isBluetoothOn &&
+          _ringInfo?.isPaired == true &&
+          _state == RingProviderState.disconnected) {
         debugPrint('[Ring] Bluetooth is now on, attempting auto-reconnect');
         _tryReconnect();
       }
@@ -82,10 +84,14 @@ class RingProvider extends ChangeNotifier with WidgetsBindingObserver {
 
     // If BT is already on, try reconnect immediately
     if (_isBluetoothOn && _ringInfo?.isPaired == true) {
-      debugPrint('[Ring] Bluetooth is on at init, attempting initial reconnect');
+      debugPrint(
+        '[Ring] Bluetooth is on at init, attempting initial reconnect',
+      );
       _tryReconnect();
     } else if (!_isBluetoothOn && _ringInfo?.isPaired == true) {
-      debugPrint('[Ring] Bluetooth not ready at init, will reconnect when ready');
+      debugPrint(
+        '[Ring] Bluetooth not ready at init, will reconnect when ready',
+      );
     }
 
     notifyListeners();
@@ -351,9 +357,7 @@ class RingProvider extends ChangeNotifier with WidgetsBindingObserver {
       return;
     }
 
-    debugPrint(
-      '[RingCommand] ❌ Ring not paired, ignoring command',
-    );
+    debugPrint('[RingCommand] ❌ Ring not paired, ignoring command');
   }
 
   @override
@@ -389,9 +393,7 @@ class RingProvider extends ChangeNotifier with WidgetsBindingObserver {
         },
         onTimeout: () {
           if (_state == RingProviderState.scanning) {
-            _state = _discoveredRings.isEmpty
-                ? RingProviderState.idle
-                : RingProviderState.scanning;
+            _state = RingProviderState.idle;
             notifyListeners();
           }
         },

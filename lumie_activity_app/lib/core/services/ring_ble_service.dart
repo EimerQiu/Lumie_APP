@@ -37,12 +37,29 @@ class RingBleService {
 
   // Keep-alive timer (command 0x2A sent every 30 seconds while connected)
   Timer? _keepAliveTimer;
+  StreamSubscription<List<ScanResult>>? _scanResultsSub;
 
   bool get isConnected => _connectedDevice != null && _writeChar != null;
   String? get connectedBleDeviceId => _connectedDevice?.remoteId.str;
   String? get connectedBleDeviceName => _connectedDevice?.platformName;
 
   // ─── Scanning ────────────────────────────────────────────────────────────
+
+  bool _isX6bName(String name) => name.toUpperCase().startsWith('X6B');
+
+  bool _isLikelyRing(ScanResult result) {
+    final platformName = result.device.platformName;
+    final advName = result.advertisementData.advName;
+    return _isX6bName(platformName) || _isX6bName(advName);
+  }
+
+  String _displayNameForResult(ScanResult result) {
+    final platformName = result.device.platformName.trim();
+    if (platformName.isNotEmpty) return platformName;
+    final advName = result.advertisementData.advName.trim();
+    if (advName.isNotEmpty) return advName;
+    return result.device.remoteId.str;
+  }
 
   /// Scan for nearby Lumie Rings (filtered by device name prefix "X6B").
   Future<void> startScan({
@@ -51,40 +68,56 @@ class RingBleService {
   }) async {
     debugPrint('[Ring BLE] startScan: stopping any existing scan');
     await FlutterBluePlus.stopScan();
+    await _scanResultsSub?.cancel();
+    _scanResultsSub = null;
 
     final found = <String>{};
 
-    await FlutterBluePlus.startScan(timeout: _scanTimeout);
-
-    FlutterBluePlus.scanResults.listen((results) {
+    // Subscribe before starting scan so we don't miss early advertisements.
+    _scanResultsSub = FlutterBluePlus.scanResults.listen((results) {
       for (final result in results) {
-        final name = result.device.platformName;
-        if (!name.toUpperCase().startsWith('X6B')) continue;
+        if (!_isLikelyRing(result)) continue;
 
         final id = result.device.remoteId.str;
         if (found.contains(id)) continue;
         found.add(id);
+        final displayName = _displayNameForResult(result);
 
-        debugPrint('[Ring BLE] Found ring: $name ($id) RSSI=${result.rssi}');
+        debugPrint(
+          '[Ring BLE] Found ring: $displayName ($id) RSSI=${result.rssi}',
+        );
         onFound(
-          DiscoveredRing(deviceId: id, displayName: name, rssi: result.rssi),
+          DiscoveredRing(
+            deviceId: id,
+            displayName: displayName,
+            rssi: result.rssi,
+          ),
         );
       }
     });
 
-    await FlutterBluePlus.isScanning
-        .where((s) => !s)
-        .first
-        .timeout(
-          _scanTimeout + const Duration(seconds: 2),
-          onTimeout: () => false,
-        );
+    await FlutterBluePlus.startScan(timeout: _scanTimeout);
+
+    try {
+      await FlutterBluePlus.isScanning
+          .where((s) => !s)
+          .first
+          .timeout(
+            _scanTimeout + const Duration(seconds: 2),
+            onTimeout: () => false,
+          );
+    } finally {
+      await _scanResultsSub?.cancel();
+      _scanResultsSub = null;
+    }
     debugPrint('[Ring BLE] Scan complete, found ${found.length} ring(s)');
     onTimeout();
   }
 
   Future<void> stopScan() async {
     await FlutterBluePlus.stopScan();
+    await _scanResultsSub?.cancel();
+    _scanResultsSub = null;
   }
 
   // ─── Connection ──────────────────────────────────────────────────────────
@@ -270,8 +303,7 @@ class RingBleService {
 
     scanSub = FlutterBluePlus.scanResults.listen((results) {
       for (final result in results) {
-        if (!result.device.platformName.toUpperCase().startsWith('X6B'))
-          continue;
+        if (!_isLikelyRing(result)) continue;
         final id = result.device.remoteId.str;
         firstX6bId ??= id;
         if (id == storedDeviceId && !exactMatch.isCompleted) {
@@ -315,11 +347,14 @@ class RingBleService {
 
     scanSub = FlutterBluePlus.scanResults.listen((results) {
       for (final result in results) {
+        if (!_isLikelyRing(result)) continue;
         final name = result.device.platformName;
-        if (!name.toUpperCase().startsWith('X6B')) continue;
+        final advName = result.advertisementData.advName;
         final id = result.device.remoteId.str;
         firstX6bId ??= id;
-        if (name == storedDeviceName && !exactMatch.isCompleted) {
+        final sameName =
+            name == storedDeviceName || advName == storedDeviceName;
+        if (sameName && !exactMatch.isCompleted) {
           exactMatch.complete(id);
         }
       }
@@ -413,8 +448,11 @@ class RingBleService {
     }
 
     // Get last sync timestamp or use epoch
-    final lastSync = await _ringService.loadLastSyncAt() ?? DateTime(2000, 1, 1);
-    debugPrint('[Ring BLE] fetchHrHistory: last sync at $lastSync, sending 0x55');
+    final lastSync =
+        await _ringService.loadLastSyncAt() ?? DateTime(2000, 1, 1);
+    debugPrint(
+      '[Ring BLE] fetchHrHistory: last sync at $lastSync, sending 0x55',
+    );
 
     final results = <HrDataPoint>[];
     final completer = Completer<List<HrDataPoint>>();
@@ -424,7 +462,9 @@ class RingBleService {
       if (data.isEmpty || data[0] != 0x55) return;
 
       if (data.length >= 2 && data[1] == 0xFF) {
-        debugPrint('[Ring BLE] HR history end marker — ${results.length} record(s)');
+        debugPrint(
+          '[Ring BLE] HR history end marker — ${results.length} record(s)',
+        );
         if (!completer.isCompleted) completer.complete(results);
         return;
       }
@@ -457,7 +497,9 @@ class RingBleService {
       final newRecords = await completer.future.timeout(
         const Duration(seconds: 3),
         onTimeout: () {
-          debugPrint('[Ring BLE] HR history timeout, got ${results.length} records');
+          debugPrint(
+            '[Ring BLE] HR history timeout, got ${results.length} records',
+          );
           return results;
         },
       );
@@ -482,8 +524,11 @@ class RingBleService {
       return [];
     }
 
-    final lastSync = await _ringService.loadLastSyncAt() ?? DateTime(2000, 1, 1);
-    debugPrint('[Ring BLE] fetchHrvHistory: last sync at $lastSync, sending 0x56');
+    final lastSync =
+        await _ringService.loadLastSyncAt() ?? DateTime(2000, 1, 1);
+    debugPrint(
+      '[Ring BLE] fetchHrvHistory: last sync at $lastSync, sending 0x56',
+    );
 
     final results = <RingRawHrvRecord>[];
     final completer = Completer<List<RingRawHrvRecord>>();
@@ -493,7 +538,9 @@ class RingBleService {
       if (data.isEmpty || data[0] != 0x56) return;
 
       if (data.length >= 2 && data[1] == 0xFF) {
-        debugPrint('[Ring BLE] HRV history end marker — ${results.length} record(s)');
+        debugPrint(
+          '[Ring BLE] HRV history end marker — ${results.length} record(s)',
+        );
         if (!completer.isCompleted) completer.complete(results);
         return;
       }
@@ -538,7 +585,9 @@ class RingBleService {
       final newRecords = await completer.future.timeout(
         const Duration(seconds: 5),
         onTimeout: () {
-          debugPrint('[Ring BLE] HRV history timeout, got ${results.length} records');
+          debugPrint(
+            '[Ring BLE] HRV history timeout, got ${results.length} records',
+          );
           return results;
         },
       );
@@ -562,8 +611,11 @@ class RingBleService {
       return [];
     }
 
-    final lastSync = await _ringService.loadLastSyncAt() ?? DateTime(2000, 1, 1);
-    debugPrint('[Ring BLE] fetchHrDetails: last sync at $lastSync, sending 0x54');
+    final lastSync =
+        await _ringService.loadLastSyncAt() ?? DateTime(2000, 1, 1);
+    debugPrint(
+      '[Ring BLE] fetchHrDetails: last sync at $lastSync, sending 0x54',
+    );
 
     final results = <HrDataPoint>[];
     final completer = Completer<List<HrDataPoint>>();
@@ -573,7 +625,9 @@ class RingBleService {
       if (data.isEmpty || data[0] != 0x54) return;
 
       if (data.length >= 2 && data[1] == 0xFF) {
-        debugPrint('[Ring BLE] HR details end marker — ${results.length} point(s)');
+        debugPrint(
+          '[Ring BLE] HR details end marker — ${results.length} point(s)',
+        );
         if (!completer.isCompleted) completer.complete(results);
         return;
       }
@@ -607,7 +661,9 @@ class RingBleService {
       final newRecords = await completer.future.timeout(
         const Duration(seconds: 5),
         onTimeout: () {
-          debugPrint('[Ring BLE] HR details timeout, got ${results.length} points');
+          debugPrint(
+            '[Ring BLE] HR details timeout, got ${results.length} points',
+          );
           return results;
         },
       );
@@ -631,8 +687,11 @@ class RingBleService {
       return [];
     }
 
-    final lastSync = await _ringService.loadLastSyncAt() ?? DateTime(2000, 1, 1);
-    debugPrint('[Ring BLE] fetchTemperatureHistory: last sync at $lastSync, sending 0x62');
+    final lastSync =
+        await _ringService.loadLastSyncAt() ?? DateTime(2000, 1, 1);
+    debugPrint(
+      '[Ring BLE] fetchTemperatureHistory: last sync at $lastSync, sending 0x62',
+    );
 
     final results = <RingRawTemperatureRecord>[];
     final completer = Completer<List<RingRawTemperatureRecord>>();
@@ -642,7 +701,9 @@ class RingBleService {
       if (data.isEmpty || data[0] != 0x62) return;
 
       if (data.length >= 2 && data[1] == 0xFF) {
-        debugPrint('[Ring BLE] Temperature end marker — ${results.length} record(s)');
+        debugPrint(
+          '[Ring BLE] Temperature end marker — ${results.length} record(s)',
+        );
         if (!completer.isCompleted) completer.complete(results);
         return;
       }
@@ -682,7 +743,9 @@ class RingBleService {
       final newRecords = await completer.future.timeout(
         const Duration(seconds: 5),
         onTimeout: () {
-          debugPrint('[Ring BLE] Temperature timeout, got ${results.length} records');
+          debugPrint(
+            '[Ring BLE] Temperature timeout, got ${results.length} records',
+          );
           return results;
         },
       );
@@ -706,8 +769,11 @@ class RingBleService {
       return [];
     }
 
-    final lastSync = await _ringService.loadLastSyncAt() ?? DateTime(2000, 1, 1);
-    debugPrint('[Ring BLE] fetchSpo2History: last sync at $lastSync, sending 0x66');
+    final lastSync =
+        await _ringService.loadLastSyncAt() ?? DateTime(2000, 1, 1);
+    debugPrint(
+      '[Ring BLE] fetchSpo2History: last sync at $lastSync, sending 0x66',
+    );
 
     final results = <RingRawSpo2Record>[];
     final completer = Completer<List<RingRawSpo2Record>>();
@@ -881,8 +947,11 @@ class RingBleService {
       return (records: <RingRawSleepRecord>[], isComplete: false);
     }
 
-    final lastSync = await _ringService.loadLastSyncAt() ?? DateTime(2000, 1, 1);
-    debugPrint('[Ring BLE] fetchSleepHistory: last sync at $lastSync, sending 0x53');
+    final lastSync =
+        await _ringService.loadLastSyncAt() ?? DateTime(2000, 1, 1);
+    debugPrint(
+      '[Ring BLE] fetchSleepHistory: last sync at $lastSync, sending 0x53',
+    );
 
     // Dedup map: key = "id1-id2-timestamp"
     final Map<String, RingRawSleepRecord> dedup = {};
@@ -1196,7 +1265,10 @@ class RingBleService {
 
     sub = _notifyChar!.onValueReceived.listen((data) {
       if (data.isEmpty) return;
-      if (data[0] == 0x09 || data[0] == 0x18 || data[0] == 0x28 || data[0] == 0xA8) {
+      if (data[0] == 0x09 ||
+          data[0] == 0x18 ||
+          data[0] == 0x28 ||
+          data[0] == 0xA8) {
         print(
           '[Ring BLE] measureHeartRate RX: cmd=0x${data[0].toRadixString(16)} len=${data.length} data=${_hexDump(data)}',
         );
@@ -1215,7 +1287,9 @@ class RingBleService {
       }
 
       if (hr > 0 && hr < 250 && hr != lastHr) {
-        print('[Ring BLE] measureHeartRate: reading $hr bpm (cmd=0x${data[0].toRadixString(16)})');
+        print(
+          '[Ring BLE] measureHeartRate: reading $hr bpm (cmd=0x${data[0].toRadixString(16)})',
+        );
         readings.add(hr);
         lastHr = hr;
       }
@@ -1250,7 +1324,9 @@ class RingBleService {
       print('[Ring BLE] measureHeartRate: sending 0x19 exercise start');
       await _writeCommand(exercisePayload);
 
-      print('[Ring BLE] measureHeartRate: collecting for ${protocolDurationSeconds}s');
+      print(
+        '[Ring BLE] measureHeartRate: collecting for ${protocolDurationSeconds}s',
+      );
       await Future.delayed(Duration(seconds: protocolDurationSeconds));
 
       // Stop exercise mode

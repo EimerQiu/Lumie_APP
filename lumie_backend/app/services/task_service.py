@@ -5,6 +5,7 @@ Business logic for Med-Reminder task and template operations
 
 import uuid
 import shutil
+import subprocess
 from pathlib import Path
 from datetime import datetime, timedelta
 from typing import Optional, List
@@ -26,6 +27,112 @@ from ..models.team import TeamRole, MemberStatus
 class TaskService:
     """Service for handling task and template operations"""
     _upload_root = Path(__file__).resolve().parents[2] / "uploads" / "tasks"
+    _thumb_size = 160
+
+    def _generate_thumbnail(
+        self,
+        source_path: Path,
+        task_id: str,
+        attachment_id: str,
+        media_type: str,
+    ) -> tuple[str, str] | tuple[None, None]:
+        ffmpeg = shutil.which("ffmpeg")
+        if not ffmpeg:
+            return None, None
+
+        thumb_name = f"{attachment_id}_thumb.jpg"
+        thumb_relative = f"tasks/{task_id}/{thumb_name}"
+        thumb_path = self._upload_root / task_id / thumb_name
+
+        try:
+            if media_type == "image":
+                cmd = [
+                    ffmpeg,
+                    "-y",
+                    "-i",
+                    str(source_path),
+                    "-vf",
+                    f"scale={self._thumb_size}:{self._thumb_size}:force_original_aspect_ratio=increase,crop={self._thumb_size}:{self._thumb_size}",
+                    "-q:v",
+                    "8",
+                    str(thumb_path),
+                ]
+            else:
+                # Seek a little for better preview frame, then scale down.
+                cmd = [
+                    ffmpeg,
+                    "-y",
+                    "-ss",
+                    "00:00:00.500",
+                    "-i",
+                    str(source_path),
+                    "-frames:v",
+                    "1",
+                    "-vf",
+                    f"scale={self._thumb_size}:{self._thumb_size}:force_original_aspect_ratio=increase,crop={self._thumb_size}:{self._thumb_size}",
+                    "-q:v",
+                    "6",
+                    str(thumb_path),
+                ]
+            subprocess.run(
+                cmd,
+                check=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            if not thumb_path.exists():
+                return None, None
+            return thumb_relative, f"/api/v1/uploads/{thumb_relative}"
+        except Exception:
+            return None, None
+
+    def _generate_playback_mp4(
+        self,
+        source_path: Path,
+        task_id: str,
+        attachment_id: str,
+        media_type: str,
+    ) -> tuple[str, str] | tuple[None, None]:
+        if media_type != "video":
+            return None, None
+        ffmpeg = shutil.which("ffmpeg")
+        if not ffmpeg:
+            return None, None
+
+        out_name = f"{attachment_id}_playback.mp4"
+        out_relative = f"tasks/{task_id}/{out_name}"
+        out_path = self._upload_root / task_id / out_name
+        try:
+            cmd = [
+                ffmpeg,
+                "-y",
+                "-i",
+                str(source_path),
+                "-c:v",
+                "libx264",
+                "-preset",
+                "veryfast",
+                "-crf",
+                "28",
+                "-pix_fmt",
+                "yuv420p",
+                "-c:a",
+                "aac",
+                "-movflags",
+                "+faststart",
+                str(out_path),
+            ]
+            subprocess.run(
+                cmd,
+                check=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            if not out_path.exists():
+                return None, None
+            return out_relative, f"/api/v1/uploads/{out_relative}"
+        except Exception:
+            return None, None
 
     def _format_datetime(self, dt: datetime) -> str:
         """Format datetime to ISO string for response"""
@@ -172,6 +279,18 @@ class TaskService:
                 size_bytes = storage_path.stat().st_size
                 safe_name = (upload.filename or storage_name).split("/")[-1].split("\\")[-1]
                 relative_path = f"tasks/{task_id}/{storage_name}"
+                thumb_path, thumb_url = self._generate_thumbnail(
+                    source_path=storage_path,
+                    task_id=task_id,
+                    attachment_id=attachment_id,
+                    media_type=media_type,
+                )
+                playback_path, playback_url = self._generate_playback_mp4(
+                    source_path=storage_path,
+                    task_id=task_id,
+                    attachment_id=attachment_id,
+                    media_type=media_type,
+                )
                 saved_attachments.append(
                     {
                         "attachment_id": attachment_id,
@@ -180,7 +299,12 @@ class TaskService:
                         "content_type": upload.content_type or "application/octet-stream",
                         "size_bytes": size_bytes,
                         "path": relative_path,
-                        "url": f"/uploads/{relative_path}",
+                        # Canonical public path for new attachments.
+                        "url": f"/api/v1/uploads/{relative_path}",
+                        "thumbnail_path": thumb_path,
+                        "thumbnail_url": thumb_url,
+                        "playback_path": playback_path,
+                        "playback_url": playback_url,
                         "uploaded_at": now.isoformat(),
                     }
                 )

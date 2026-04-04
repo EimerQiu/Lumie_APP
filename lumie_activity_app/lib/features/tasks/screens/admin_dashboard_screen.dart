@@ -3,8 +3,17 @@
 /// Shows all tasks across teams with email search, member quick-filter chips,
 /// previous/upcoming split with pagination, and swipe actions to complete/delete.
 
+import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:dio/dio.dart';
+import 'package:flutter_image_compress/flutter_image_compress.dart';
+import 'package:image_gallery_saver_plus/image_gallery_saver_plus.dart';
+import 'package:image_picker/image_picker.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:provider/provider.dart';
+import 'package:video_compress/video_compress.dart';
+import 'package:video_player/video_player.dart';
+import '../../../core/constants/api_constants.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../shared/models/task_models.dart';
 import '../../../features/auth/providers/auth_provider.dart';
@@ -19,8 +28,13 @@ class AdminDashboardScreen extends StatefulWidget {
 }
 
 class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
+  static const int _maxImageBytes = 500 * 1024;
+  static const int _maxVideoBytes = 5 * 1024 * 1024;
+
   final _emailController = TextEditingController();
   final _scrollController = ScrollController();
+  final ImagePicker _imagePicker = ImagePicker();
+  final Dio _dio = Dio();
   double _overscrollAccumulation = 0;
 
   @override
@@ -61,56 +75,60 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
           ),
         ),
         Scaffold(
-      backgroundColor: Colors.transparent,
-      appBar: AppBar(
-        title: const Text('All Tasks'),
-        backgroundColor: Colors.transparent,
-        elevation: 0,
-        foregroundColor: AppColors.textPrimary,
-        actions: [
-          IconButton(
-            onPressed: () {
-              final adminProvider = context.read<AdminTasksProvider>();
-              final authProvider = context.read<AuthProvider>();
+          backgroundColor: Colors.transparent,
+          appBar: AppBar(
+            title: const Text('All Tasks'),
+            backgroundColor: Colors.transparent,
+            elevation: 0,
+            foregroundColor: AppColors.textPrimary,
+            actions: [
+              IconButton(
+                onPressed: () {
+                  final adminProvider = context.read<AdminTasksProvider>();
+                  final authProvider = context.read<AuthProvider>();
 
-              // Use selected member email, or default to current user
-              final email = adminProvider.filterEmail ?? authProvider.user?.email;
+                  // Use selected member email, or default to current user
+                  final email =
+                      adminProvider.filterEmail ?? authProvider.user?.email;
 
-              if (email == null) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('Unable to determine user email')),
-                );
-                return;
-              }
+                  if (email == null) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text('Unable to determine user email'),
+                      ),
+                    );
+                    return;
+                  }
 
-              Navigator.pushNamed(
-                context,
-                '/tasks/reward-calc',
-                arguments: email,
+                  Navigator.pushNamed(
+                    context,
+                    '/tasks/reward-calc',
+                    arguments: email,
+                  );
+                },
+                icon: const Icon(Icons.attach_money),
+                tooltip: 'Reward Calculator',
+              ),
+            ],
+          ),
+          body: Consumer<AdminTasksProvider>(
+            builder: (context, provider, _) {
+              return Column(
+                children: [
+                  // Search bar
+                  _buildSearchBar(provider),
+
+                  // Member quick-filter chips
+                  if (provider.memberChips.isNotEmpty)
+                    _buildMemberChips(provider),
+
+                  // Task list
+                  Expanded(child: _buildTaskList(provider)),
+                ],
               );
             },
-            icon: const Icon(Icons.attach_money),
-            tooltip: 'Reward Calculator',
           ),
-        ],
-      ),
-      body: Consumer<AdminTasksProvider>(
-        builder: (context, provider, _) {
-          return Column(
-            children: [
-              // Search bar
-              _buildSearchBar(provider),
-
-              // Member quick-filter chips
-              if (provider.memberChips.isNotEmpty) _buildMemberChips(provider),
-
-              // Task list
-              Expanded(child: _buildTaskList(provider)),
-            ],
-          );
-        },
-      ),
-    ),
+        ),
       ],
     );
   }
@@ -131,7 +149,10 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
               decoration: InputDecoration(
                 hintText: 'Search by email...',
                 prefixIcon: const Icon(Icons.search, size: 20),
-                contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                contentPadding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 12,
+                ),
                 border: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(12),
                   borderSide: BorderSide(color: AppColors.surfaceLight),
@@ -172,7 +193,9 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
     final email = _emailController.text.trim();
     if (email.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please enter an email address to search')),
+        const SnackBar(
+          content: Text('Please enter an email address to search'),
+        ),
       );
       return;
     }
@@ -212,7 +235,9 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                   fontSize: 13,
                 ),
               ),
-              backgroundColor: isSelected ? color : color.withValues(alpha: 0.1),
+              backgroundColor: isSelected
+                  ? color
+                  : color.withValues(alpha: 0.1),
               side: BorderSide(color: color.withValues(alpha: 0.3)),
               onPressed: () {
                 _emailController.text = chip.email;
@@ -226,7 +251,9 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
   }
 
   Widget _buildTaskList(AdminTasksProvider provider) {
-    if (provider.isLoading && provider.previousTasks.isEmpty && provider.upcomingTasks.isEmpty) {
+    if (provider.isLoading &&
+        provider.previousTasks.isEmpty &&
+        provider.upcomingTasks.isEmpty) {
       return const Center(child: CircularProgressIndicator());
     }
 
@@ -251,20 +278,33 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
     }
 
     // Filter tasks: only show tasks the user can access
-    final filteredPreviousTasks = provider.previousTasks.where((task) => _canViewTask(context, task)).toList();
-    final filteredUpcomingTasks = provider.upcomingTasks.where((task) => _canViewTask(context, task)).toList();
+    final filteredPreviousTasks = provider.previousTasks
+        .where((task) => _canViewTask(context, task))
+        .toList();
+    final filteredUpcomingTasks = provider.upcomingTasks
+        .where((task) => _canViewTask(context, task))
+        .toList();
 
-    final allEmpty = filteredPreviousTasks.isEmpty && filteredUpcomingTasks.isEmpty;
+    final allEmpty =
+        filteredPreviousTasks.isEmpty && filteredUpcomingTasks.isEmpty;
     if (allEmpty) {
       return const Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(Icons.admin_panel_settings, size: 64, color: AppColors.surfaceLight),
+            Icon(
+              Icons.admin_panel_settings,
+              size: 64,
+              color: AppColors.surfaceLight,
+            ),
             SizedBox(height: 16),
             Text(
               'No tasks found',
-              style: TextStyle(fontSize: 18, fontWeight: FontWeight.w500, color: AppColors.textSecondary),
+              style: TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.w500,
+                color: AppColors.textSecondary,
+              ),
             ),
             SizedBox(height: 8),
             Text(
@@ -316,9 +356,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
           if (provider.isLoadingMorePrevious)
             const Padding(
               padding: EdgeInsets.symmetric(vertical: 16),
-              child: Center(
-                child: CircularProgressIndicator(strokeWidth: 2),
-              ),
+              child: Center(child: CircularProgressIndicator(strokeWidth: 2)),
             ),
 
           // Previous Tasks section
@@ -334,12 +372,19 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                 isAdmin: canManage,
                 onComplete: () => _completeTask(provider, task),
                 onDelete: () => _deleteTask(provider, task),
+                resolveAttachmentUrls: _thumbnailUrlCandidates,
+                onAttachmentTap: (attachment) =>
+                    _openAttachmentPreview(attachment),
+                onAddAttachment: (task.isCompleted && canManage)
+                    ? () => _pickAndUploadAttachments(provider, task)
+                    : null,
               );
             }),
           ],
 
           // Divider
-          if (filteredPreviousTasks.isNotEmpty && filteredUpcomingTasks.isNotEmpty)
+          if (filteredPreviousTasks.isNotEmpty &&
+              filteredUpcomingTasks.isNotEmpty)
             const Divider(height: 32),
 
           // Upcoming Tasks section
@@ -355,6 +400,12 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                 isAdmin: canManage,
                 onComplete: () => _completeTask(provider, task),
                 onDelete: () => _deleteTask(provider, task),
+                resolveAttachmentUrls: _thumbnailUrlCandidates,
+                onAttachmentTap: (attachment) =>
+                    _openAttachmentPreview(attachment),
+                onAddAttachment: (task.isCompleted && canManage)
+                    ? () => _pickAndUploadAttachments(provider, task)
+                    : null,
               );
             }),
           ],
@@ -363,9 +414,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
           if (provider.isLoadingMoreUpcoming)
             const Padding(
               padding: EdgeInsets.symmetric(vertical: 16),
-              child: Center(
-                child: CircularProgressIndicator(strokeWidth: 2),
-              ),
+              child: Center(child: CircularProgressIndicator(strokeWidth: 2)),
             ),
 
           const SizedBox(height: 24),
@@ -374,7 +423,10 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
     );
   }
 
-  Future<void> _completeTask(AdminTasksProvider provider, AdminTaskData task) async {
+  Future<void> _completeTask(
+    AdminTasksProvider provider,
+    AdminTaskData task,
+  ) async {
     try {
       await provider.completeTask(task.taskId);
       if (mounted) {
@@ -385,13 +437,20 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed: ${e.toString().replaceFirst('Exception: ', '')}')),
+          SnackBar(
+            content: Text(
+              'Failed: ${e.toString().replaceFirst('Exception: ', '')}',
+            ),
+          ),
         );
       }
     }
   }
 
-  Future<void> _deleteTask(AdminTasksProvider provider, AdminTaskData task) async {
+  Future<void> _deleteTask(
+    AdminTasksProvider provider,
+    AdminTaskData task,
+  ) async {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
@@ -423,10 +482,314 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed: ${e.toString().replaceFirst('Exception: ', '')}')),
+          SnackBar(
+            content: Text(
+              'Failed: ${e.toString().replaceFirst('Exception: ', '')}',
+            ),
+          ),
         );
       }
     }
+  }
+
+  List<String> _attachmentUrlCandidates(
+    TaskAttachment attachment, {
+    bool preferThumbnail = false,
+  }) {
+    final raw = preferThumbnail
+        ? (attachment.thumbnailUrl ?? attachment.url)
+        : attachment.url;
+
+    if (raw.startsWith('http://') || raw.startsWith('https://')) {
+      return [raw];
+    }
+    final base = Uri.parse(ApiConstants.baseUrl);
+    final scheme = base.scheme;
+    final host = base.host;
+    final path = raw.startsWith('/') ? raw : '/$raw';
+    final basePath = base.path.endsWith('/')
+        ? base.path.substring(0, base.path.length - 1)
+        : base.path;
+
+    final candidates = <String>[
+      '$scheme://$host$path',
+      '$scheme://$host$basePath$path',
+      '${ApiConstants.baseUrl}$path',
+    ];
+
+    if (host == 'yumo.org') {
+      candidates.add('$scheme://api.yumo.org$path');
+      candidates.add('$scheme://api.yumo.org$basePath$path');
+    } else if (host == 'api.yumo.org') {
+      candidates.add('$scheme://yumo.org$path');
+      candidates.add('$scheme://yumo.org$basePath$path');
+    }
+    return candidates.toSet().toList();
+  }
+
+  List<String> _thumbnailUrlCandidates(TaskAttachment attachment) =>
+      _attachmentUrlCandidates(attachment, preferThumbnail: true);
+
+  List<String> _videoPreviewUrlCandidates(TaskAttachment attachment) {
+    final preferred = <String>[];
+    if ((attachment.playbackUrl ?? '').isNotEmpty) {
+      preferred.addAll(
+        _attachmentUrlCandidatesFromRaw(attachment.playbackUrl!),
+      );
+    }
+    preferred.addAll(_attachmentUrlCandidates(attachment));
+    return preferred.toSet().toList();
+  }
+
+  List<String> _attachmentUrlCandidatesFromRaw(String raw) {
+    if (raw.startsWith('http://') || raw.startsWith('https://')) {
+      return [raw];
+    }
+    final base = Uri.parse(ApiConstants.baseUrl);
+    final scheme = base.scheme;
+    final host = base.host;
+    final path = raw.startsWith('/') ? raw : '/$raw';
+    final basePath = base.path.endsWith('/')
+        ? base.path.substring(0, base.path.length - 1)
+        : base.path;
+
+    final candidates = <String>[
+      '$scheme://$host$path',
+      '$scheme://$host$basePath$path',
+      '${ApiConstants.baseUrl}$path',
+    ];
+
+    if (host == 'yumo.org') {
+      candidates.add('$scheme://api.yumo.org$path');
+      candidates.add('$scheme://api.yumo.org$basePath$path');
+    } else if (host == 'api.yumo.org') {
+      candidates.add('$scheme://yumo.org$path');
+      candidates.add('$scheme://yumo.org$basePath$path');
+    }
+    return candidates.toSet().toList();
+  }
+
+  Future<void> _openAttachmentPreview(TaskAttachment attachment) async {
+    final urlCandidates = attachment.isVideo
+        ? _videoPreviewUrlCandidates(attachment)
+        : _attachmentUrlCandidates(attachment);
+    if (!mounted) return;
+    if (attachment.isVideo) {
+      await showDialog(
+        context: context,
+        builder: (_) => _VideoPreviewDialog(
+          urlCandidates: urlCandidates,
+          onDownload: (resolvedUrl) =>
+              _downloadAttachment(attachment, directUrl: resolvedUrl),
+        ),
+      );
+      return;
+    }
+
+    await showDialog(
+      context: context,
+      builder: (_) => _ImagePreviewDialog(
+        urlCandidates: urlCandidates,
+        onDownload: (resolvedUrl) =>
+            _downloadAttachment(attachment, directUrl: resolvedUrl),
+      ),
+    );
+  }
+
+  Future<File> _compressImageToLimit(File source) async {
+    if (source.lengthSync() <= _maxImageBytes) return source;
+    final tempDir = await getTemporaryDirectory();
+    File? lastCompressed;
+    final qualities = [85, 75, 65, 55, 45, 35, 25];
+    for (final quality in qualities) {
+      final targetPath =
+          '${tempDir.path}/admin_img_${DateTime.now().microsecondsSinceEpoch}_$quality.jpg';
+      final compressed = await FlutterImageCompress.compressAndGetFile(
+        source.path,
+        targetPath,
+        quality: quality,
+        format: CompressFormat.jpeg,
+      );
+      if (compressed == null) continue;
+      final file = File(compressed.path);
+      if (!file.existsSync()) continue;
+      lastCompressed = file;
+      if (file.lengthSync() <= _maxImageBytes) return file;
+    }
+    if (lastCompressed != null &&
+        lastCompressed.lengthSync() <= _maxImageBytes) {
+      return lastCompressed;
+    }
+    throw Exception('Image is still larger than 500KB after compression.');
+  }
+
+  Future<File> _compressVideoToLimit(File source) async {
+    final lowerPath = source.path.toLowerCase();
+    final isMp4 = lowerPath.endsWith('.mp4');
+    if (source.lengthSync() <= _maxVideoBytes && isMp4) return source;
+    File? lastCompressed;
+    final qualities = [
+      VideoQuality.MediumQuality,
+      VideoQuality.LowQuality,
+      VideoQuality.Res640x480Quality,
+    ];
+    for (final quality in qualities) {
+      final info = await VideoCompress.compressVideo(
+        source.path,
+        quality: quality,
+        includeAudio: true,
+        deleteOrigin: false,
+      );
+      final file = info?.file;
+      if (file == null || !file.existsSync()) continue;
+      lastCompressed = file;
+      if (file.lengthSync() <= _maxVideoBytes) return file;
+    }
+    if (lastCompressed != null &&
+        lastCompressed.lengthSync() <= _maxVideoBytes) {
+      return lastCompressed;
+    }
+    if (source.lengthSync() <= _maxVideoBytes) {
+      return source;
+    }
+    throw Exception('Video is still larger than 5MB after compression.');
+  }
+
+  Future<void> _pickAndUploadAttachments(
+    AdminTasksProvider provider,
+    AdminTaskData task,
+  ) async {
+    final available = 99 - task.attachments.length;
+    if (available <= 0) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('This task already has 99 attachments.')),
+      );
+      return;
+    }
+    final picked = await _imagePicker.pickMultipleMedia();
+    if (picked.isEmpty) return;
+    final selected = picked.take(available).toList();
+    if (selected.isEmpty) return;
+    if (!mounted) return;
+
+    final progress = ValueNotifier<double>(0);
+    final stage = ValueNotifier<String>('Compression...');
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => PopScope(
+        canPop: false,
+        child: AlertDialog(
+          title: const Text('Uploading media'),
+          content: SizedBox(
+            height: 72,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                ValueListenableBuilder<String>(
+                  valueListenable: stage,
+                  builder: (_, value, __) => Text(value),
+                ),
+                const SizedBox(height: 10),
+                ValueListenableBuilder<double>(
+                  valueListenable: progress,
+                  builder: (_, value, __) =>
+                      LinearProgressIndicator(value: value > 0 ? value : null),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+
+    try {
+      final files = <File>[];
+      for (var i = 0; i < selected.length; i++) {
+        final x = selected[i];
+        final src = File(x.path);
+        if (!src.existsSync()) continue;
+        final lower = src.path.toLowerCase();
+        final isVideo =
+            lower.endsWith('.mp4') ||
+            lower.endsWith('.mov') ||
+            lower.endsWith('.m4v') ||
+            lower.endsWith('.3gp') ||
+            lower.endsWith('.avi') ||
+            lower.endsWith('.mkv') ||
+            lower.endsWith('.webm');
+        final out = isVideo
+            ? await _compressVideoToLimit(src)
+            : await _compressImageToLimit(src);
+        files.add(out);
+        progress.value = ((i + 1) / selected.length) * 0.7;
+      }
+
+      stage.value = 'Upload...';
+      await provider.uploadTaskAttachments(
+        taskId: task.taskId,
+        files: files,
+        onSendProgress: (sent, total) {
+          if (total <= 0) return;
+          progress.value = 0.7 + ((sent / total) * 0.3);
+        },
+      );
+      if (mounted) {
+        Navigator.of(context).pop();
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('Media uploaded')));
+      }
+    } catch (e) {
+      if (mounted) {
+        Navigator.of(context).pop();
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Failed: ${e.toString().replaceFirst('Exception: ', '')}',
+            ),
+          ),
+        );
+      }
+    } finally {
+      progress.dispose();
+      stage.dispose();
+      await VideoCompress.cancelCompression();
+    }
+  }
+
+  Future<void> _downloadAttachment(
+    TaskAttachment attachment, {
+    String? directUrl,
+  }) async {
+    final candidates = directUrl != null
+        ? [directUrl, ..._attachmentUrlCandidates(attachment)]
+        : _attachmentUrlCandidates(attachment);
+    var downloaded = false;
+    for (final url in candidates.toSet()) {
+      try {
+        final tempDir = await getTemporaryDirectory();
+        final localPath = '${tempDir.path}/${attachment.filename}';
+        await _dio.download(url, localPath);
+        final result = await ImageGallerySaverPlus.saveFile(
+          localPath,
+          isReturnPathOfIOS: true,
+        );
+        final ok =
+            (result['isSuccess'] == true) || (result['filePath'] != null);
+        if (ok) {
+          downloaded = true;
+          break;
+        }
+      } catch (_) {}
+    }
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(downloaded ? 'Saved to Photos' : 'Download failed'),
+      ),
+    );
   }
 
   /// Check if current user can view a task (access control filter)
@@ -510,7 +873,11 @@ class _SectionHeader extends StatelessWidget {
             ),
             child: Text(
               '$count',
-              style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: AppColors.textOnYellow),
+              style: const TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+                color: AppColors.textOnYellow,
+              ),
             ),
           ),
         ],
@@ -524,12 +891,18 @@ class _AdminTaskCard extends StatelessWidget {
   final bool isAdmin;
   final VoidCallback onComplete;
   final VoidCallback onDelete;
+  final List<String> Function(TaskAttachment) resolveAttachmentUrls;
+  final ValueChanged<TaskAttachment> onAttachmentTap;
+  final VoidCallback? onAddAttachment;
 
   const _AdminTaskCard({
     required this.task,
     required this.isAdmin,
     required this.onComplete,
     required this.onDelete,
+    required this.resolveAttachmentUrls,
+    required this.onAttachmentTap,
+    this.onAddAttachment,
   });
 
   Color get _statusColor {
@@ -639,7 +1012,10 @@ class _AdminTaskCard extends StatelessWidget {
                 ),
               ),
               Container(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 4,
+                ),
                 decoration: BoxDecoration(
                   color: _statusColor.withValues(alpha: 0.15),
                   borderRadius: BorderRadius.circular(12),
@@ -661,7 +1037,10 @@ class _AdminTaskCard extends StatelessWidget {
             const SizedBox(height: 4),
             Text(
               task.rpttaskInfo!,
-              style: const TextStyle(fontSize: 13, color: AppColors.textSecondary),
+              style: const TextStyle(
+                fontSize: 13,
+                color: AppColors.textSecondary,
+              ),
               maxLines: 2,
               overflow: TextOverflow.ellipsis,
             ),
@@ -672,12 +1051,20 @@ class _AdminTaskCard extends StatelessWidget {
             const SizedBox(height: 4),
             Row(
               children: [
-                Icon(Icons.sticky_note_2_outlined, size: 14, color: Colors.grey[500]),
+                Icon(
+                  Icons.sticky_note_2_outlined,
+                  size: 14,
+                  color: Colors.grey[500],
+                ),
                 const SizedBox(width: 4),
                 Expanded(
                   child: Text(
                     task.note!,
-                    style: TextStyle(fontSize: 12, color: Colors.grey[600], fontStyle: FontStyle.italic),
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: Colors.grey[600],
+                      fontStyle: FontStyle.italic,
+                    ),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                   ),
@@ -695,7 +1082,10 @@ class _AdminTaskCard extends StatelessWidget {
               const SizedBox(width: 4),
               Text(
                 task.timeWindowText,
-                style: const TextStyle(fontSize: 12, color: AppColors.textSecondary),
+                style: const TextStyle(
+                  fontSize: 12,
+                  color: AppColors.textSecondary,
+                ),
               ),
             ],
           ),
@@ -705,19 +1095,33 @@ class _AdminTaskCard extends StatelessWidget {
           // User + team info
           Row(
             children: [
-              const Icon(Icons.person_outline, size: 14, color: AppColors.textLight),
+              const Icon(
+                Icons.person_outline,
+                size: 14,
+                color: AppColors.textLight,
+              ),
               const SizedBox(width: 4),
               Text(
                 'User: ${task.username}',
-                style: const TextStyle(fontSize: 12, color: AppColors.textSecondary),
+                style: const TextStyle(
+                  fontSize: 12,
+                  color: AppColors.textSecondary,
+                ),
               ),
               if (task.familyName != null) ...[
                 const SizedBox(width: 12),
-                const Icon(Icons.group_outlined, size: 14, color: AppColors.textLight),
+                const Icon(
+                  Icons.group_outlined,
+                  size: 14,
+                  color: AppColors.textLight,
+                ),
                 const SizedBox(width: 4),
                 Text(
                   'Team: ${task.familyName}',
-                  style: const TextStyle(fontSize: 12, color: AppColors.textSecondary),
+                  style: const TextStyle(
+                    fontSize: 12,
+                    color: AppColors.textSecondary,
+                  ),
                 ),
               ],
             ],
@@ -729,6 +1133,74 @@ class _AdminTaskCard extends StatelessWidget {
             Text(
               task.rpttaskType,
               style: const TextStyle(fontSize: 11, color: AppColors.textLight),
+            ),
+          ],
+
+          // Attachments (completed tasks)
+          if (task.isCompleted) ...[
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                const Icon(
+                  Icons.perm_media_outlined,
+                  size: 14,
+                  color: AppColors.textLight,
+                ),
+                const SizedBox(width: 4),
+                const Text(
+                  'Media',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: AppColors.textSecondary,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 6),
+            SizedBox(
+              height: 52,
+              child: ListView(
+                scrollDirection: Axis.horizontal,
+                children: [
+                  ...task.attachments.map((a) {
+                    final urls = resolveAttachmentUrls(a);
+                    return Padding(
+                      padding: const EdgeInsets.only(right: 8),
+                      child: GestureDetector(
+                        onTap: () => onAttachmentTap(a),
+                        child: ClipRRect(
+                          borderRadius: BorderRadius.circular(8),
+                          child: Container(
+                            width: 52,
+                            height: 52,
+                            color: Colors.grey.shade200,
+                            child: a.isVideo
+                                ? _VideoThumb(urlCandidates: urls)
+                                : _AttachmentThumb(urlCandidates: urls),
+                          ),
+                        ),
+                      ),
+                    );
+                  }),
+                  if (onAddAttachment != null)
+                    GestureDetector(
+                      onTap: onAddAttachment,
+                      child: Container(
+                        width: 52,
+                        height: 52,
+                        decoration: BoxDecoration(
+                          border: Border.all(color: AppColors.surfaceLight),
+                          borderRadius: BorderRadius.circular(8),
+                          color: Colors.white,
+                        ),
+                        child: const Icon(
+                          Icons.add,
+                          color: AppColors.textSecondary,
+                        ),
+                      ),
+                    ),
+                ],
+              ),
             ),
           ],
 
@@ -752,6 +1224,301 @@ class _AdminTaskCard extends StatelessWidget {
             ),
           ],
         ],
+      ),
+    );
+  }
+}
+
+class _AttachmentThumb extends StatefulWidget {
+  final List<String> urlCandidates;
+
+  const _AttachmentThumb({required this.urlCandidates});
+
+  @override
+  State<_AttachmentThumb> createState() => _AttachmentThumbState();
+}
+
+class _AttachmentThumbState extends State<_AttachmentThumb> {
+  int _index = 0;
+
+  @override
+  Widget build(BuildContext context) {
+    if (widget.urlCandidates.isEmpty) {
+      return const Icon(
+        Icons.broken_image_outlined,
+        color: AppColors.textLight,
+      );
+    }
+    final url = widget.urlCandidates[_index];
+    return Image.network(
+      url,
+      fit: BoxFit.cover,
+      errorBuilder: (context, error, stackTrace) {
+        if (_index < widget.urlCandidates.length - 1) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (!mounted) return;
+            setState(() => _index += 1);
+          });
+        }
+        return const Icon(
+          Icons.broken_image_outlined,
+          color: AppColors.textLight,
+        );
+      },
+    );
+  }
+}
+
+class _VideoThumb extends StatelessWidget {
+  final List<String> urlCandidates;
+
+  const _VideoThumb({required this.urlCandidates});
+
+  @override
+  Widget build(BuildContext context) {
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        _AttachmentThumb(urlCandidates: urlCandidates),
+        Center(
+          child: Icon(
+            Icons.play_circle_fill,
+            color: Colors.white.withValues(alpha: 0.92),
+            size: 20,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _ImagePreviewDialog extends StatefulWidget {
+  final List<String> urlCandidates;
+  final ValueChanged<String> onDownload;
+
+  const _ImagePreviewDialog({
+    required this.urlCandidates,
+    required this.onDownload,
+  });
+
+  @override
+  State<_ImagePreviewDialog> createState() => _ImagePreviewDialogState();
+}
+
+class _ImagePreviewDialogState extends State<_ImagePreviewDialog> {
+  int _index = 0;
+
+  @override
+  Widget build(BuildContext context) {
+    final hasUrl = widget.urlCandidates.isNotEmpty;
+    final url = hasUrl ? widget.urlCandidates[_index] : '';
+    return Dialog(
+      insetPadding: const EdgeInsets.all(16),
+      child: GestureDetector(
+        onLongPress: hasUrl ? () => widget.onDownload(url) : null,
+        child: Stack(
+          children: [
+            InteractiveViewer(
+              minScale: 0.5,
+              maxScale: 4,
+              child: hasUrl
+                  ? Image.network(
+                      url,
+                      fit: BoxFit.contain,
+                      errorBuilder: (context, error, stackTrace) {
+                        if (_index < widget.urlCandidates.length - 1) {
+                          WidgetsBinding.instance.addPostFrameCallback((_) {
+                            if (!mounted) return;
+                            setState(() => _index += 1);
+                          });
+                        }
+                        return const Center(
+                          child: Padding(
+                            padding: EdgeInsets.all(24),
+                            child: Text('Failed to load image'),
+                          ),
+                        );
+                      },
+                    )
+                  : const Center(
+                      child: Padding(
+                        padding: EdgeInsets.all(24),
+                        child: Text('No image URL'),
+                      ),
+                    ),
+            ),
+            Positioned(
+              top: 8,
+              right: 8,
+              child: IconButton(
+                onPressed: () => Navigator.of(context).pop(),
+                icon: const Icon(Icons.close),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _VideoPreviewDialog extends StatefulWidget {
+  final List<String> urlCandidates;
+  final ValueChanged<String> onDownload;
+
+  const _VideoPreviewDialog({
+    required this.urlCandidates,
+    required this.onDownload,
+  });
+
+  @override
+  State<_VideoPreviewDialog> createState() => _VideoPreviewDialogState();
+}
+
+class _VideoPreviewDialogState extends State<_VideoPreviewDialog> {
+  VideoPlayerController? _controller;
+  int _index = 0;
+  bool _ready = false;
+  String? _error;
+  String? _tempVideoPath;
+
+  @override
+  void initState() {
+    super.initState();
+    _initController();
+  }
+
+  Future<void> _initController() async {
+    // First pass: try direct network playback.
+    while (_index < widget.urlCandidates.length) {
+      final url = widget.urlCandidates[_index];
+      final c = VideoPlayerController.networkUrl(Uri.parse(url));
+      try {
+        await c.initialize();
+        if (!mounted) return;
+        setState(() {
+          _controller = c;
+          _ready = true;
+          _error = null;
+        });
+        return;
+      } catch (_) {
+        await c.dispose();
+        _index += 1;
+      }
+    }
+
+    // Fallback: download and play from local temp file (robust on iOS when
+    // server-side byte-range streaming is not available).
+    for (var i = 0; i < widget.urlCandidates.length; i++) {
+      final localPath = await _downloadVideoToTemp(widget.urlCandidates[i]);
+      if (localPath == null) continue;
+      final c = VideoPlayerController.file(File(localPath));
+      try {
+        await c.initialize();
+        if (!mounted) return;
+        setState(() {
+          _controller = c;
+          _ready = true;
+          _error = null;
+          _index = i;
+          _tempVideoPath = localPath;
+        });
+        return;
+      } catch (_) {
+        await c.dispose();
+      }
+    }
+
+    if (!mounted) return;
+    setState(() {
+      _ready = false;
+      _error = 'Failed to load video';
+    });
+  }
+
+  Future<String?> _downloadVideoToTemp(String url) async {
+    try {
+      final tempDir = await getTemporaryDirectory();
+      final tempPath =
+          '${tempDir.path}/preview_${DateTime.now().microsecondsSinceEpoch}.mp4';
+      await Dio().download(url, tempPath);
+      final file = File(tempPath);
+      if (!file.existsSync() || file.lengthSync() <= 0) return null;
+      return tempPath;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  @override
+  void dispose() {
+    _controller?.dispose();
+    final tempPath = _tempVideoPath;
+    if (tempPath != null) {
+      final f = File(tempPath);
+      if (f.existsSync()) {
+        f.deleteSync();
+      }
+    }
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Dialog(
+      insetPadding: const EdgeInsets.all(16),
+      child: GestureDetector(
+        onLongPress: _ready && _controller != null
+            ? () => widget.onDownload(widget.urlCandidates[_index])
+            : null,
+        child: AspectRatio(
+          aspectRatio: (_ready && _controller != null)
+              ? _controller!.value.aspectRatio
+              : 16 / 9,
+          child: Stack(
+            children: [
+              Positioned.fill(
+                child: _error != null
+                    ? Center(child: Text(_error!))
+                    : _ready && _controller != null
+                    ? VideoPlayer(_controller!)
+                    : const Center(child: CircularProgressIndicator()),
+              ),
+              if (_ready && _controller != null)
+                Positioned.fill(
+                  child: Center(
+                    child: IconButton(
+                      iconSize: 52,
+                      color: Colors.white,
+                      onPressed: () {
+                        setState(() {
+                          if (_controller!.value.isPlaying) {
+                            _controller!.pause();
+                          } else {
+                            _controller!.play();
+                          }
+                        });
+                      },
+                      icon: Icon(
+                        _controller!.value.isPlaying
+                            ? Icons.pause_circle_filled
+                            : Icons.play_circle_filled,
+                      ),
+                    ),
+                  ),
+                ),
+              Positioned(
+                top: 8,
+                right: 8,
+                child: IconButton(
+                  onPressed: () => Navigator.of(context).pop(),
+                  icon: const Icon(Icons.close),
+                ),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }

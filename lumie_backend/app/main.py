@@ -118,6 +118,8 @@ app.add_middleware(
 uploads_dir = Path(__file__).resolve().parent.parent / "uploads"
 uploads_dir.mkdir(parents=True, exist_ok=True)
 app.mount("/uploads", StaticFiles(directory=uploads_dir), name="uploads")
+# Mirror under /api/v1/uploads for environments that proxy only /api/v1.
+app.mount("/api/v1/uploads", StaticFiles(directory=uploads_dir), name="uploads_api_v1")
 
 # Include API routes
 app.include_router(auth_router, prefix="/api/v1")

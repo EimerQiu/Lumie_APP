@@ -4,6 +4,7 @@
 /// and admin actions (complete/delete any member's task).
 
 import 'package:flutter/foundation.dart';
+import 'dart:io';
 import 'package:timezone/timezone.dart' as tz;
 import '../../../core/services/task_service.dart';
 import '../../../core/services/team_service.dart';
@@ -108,17 +109,22 @@ class AdminTasksProvider extends ChangeNotifier {
       if (_isAdmin) {
         // Admin: Fetch members for each admin team
         for (final team in adminTeams) {
-          final membersResponse = await _teamService.getTeamMembers(team.teamId);
+          final membersResponse = await _teamService.getTeamMembers(
+            team.teamId,
+          );
           for (final member in membersResponse.members) {
-            if (member.status == MemberStatus.member && !seenEmails.contains(member.email)) {
+            if (member.status == MemberStatus.member &&
+                !seenEmails.contains(member.email)) {
               seenEmails.add(member.email);
-              chips.add(TeamMemberChip(
-                userId: member.userId,
-                name: member.name,
-                email: member.email,
-                teamId: team.teamId,
-                teamName: team.name,
-              ));
+              chips.add(
+                TeamMemberChip(
+                  userId: member.userId,
+                  name: member.name,
+                  email: member.email,
+                  teamId: team.teamId,
+                  teamName: team.name,
+                ),
+              );
             }
           }
         }
@@ -261,6 +267,8 @@ class AdminTasksProvider extends ChangeNotifier {
           rpttaskId: t.rpttaskId,
           rpttaskName: t.rpttaskName,
           rpttaskInfo: t.rpttaskInfo,
+          note: t.note,
+          attachments: t.attachments,
           rpttaskType: t.rpttaskType,
           rpttaskList: t.rpttaskList,
           smallTaskId: t.smallTaskId,
@@ -284,6 +292,8 @@ class AdminTasksProvider extends ChangeNotifier {
           rpttaskId: t.rpttaskId,
           rpttaskName: t.rpttaskName,
           rpttaskInfo: t.rpttaskInfo,
+          note: t.note,
+          attachments: t.attachments,
           rpttaskType: t.rpttaskType,
           rpttaskList: t.rpttaskList,
           smallTaskId: t.smallTaskId,
@@ -295,6 +305,19 @@ class AdminTasksProvider extends ChangeNotifier {
       return t;
     }).toList();
     notifyListeners();
+  }
+
+  Future<void> uploadTaskAttachments({
+    required String taskId,
+    required List<File> files,
+    void Function(int sent, int total)? onSendProgress,
+  }) async {
+    await _taskService.uploadTaskAttachments(
+      taskId: taskId,
+      files: files,
+      onSendProgress: onSendProgress,
+    );
+    await loadTasks(email: _filterEmail);
   }
 
   /// Admin delete a task

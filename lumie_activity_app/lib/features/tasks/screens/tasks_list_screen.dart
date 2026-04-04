@@ -447,8 +447,7 @@ class _TaskCompleteDialogState extends State<_TaskCompleteDialog> {
 
   bool _isWorking = false;
   String _stageLabel = '';
-  double _compressProgress = 0;
-  double _uploadProgress = 0;
+  double _progress = 0;
 
   @override
   void initState() {
@@ -547,7 +546,9 @@ class _TaskCompleteDialogState extends State<_TaskCompleteDialog> {
   }
 
   Future<File> _compressVideoToLimit(File source) async {
-    if (source.lengthSync() <= _maxVideoBytes) return source;
+    final lowerPath = source.path.toLowerCase();
+    final isMp4 = lowerPath.endsWith('.mp4');
+    if (source.lengthSync() <= _maxVideoBytes && isMp4) return source;
 
     File? lastCompressed;
     final qualities = [
@@ -573,6 +574,9 @@ class _TaskCompleteDialogState extends State<_TaskCompleteDialog> {
         lastCompressed.lengthSync() <= _maxVideoBytes) {
       return lastCompressed;
     }
+    if (source.lengthSync() <= _maxVideoBytes) {
+      return source;
+    }
     throw Exception(
       'Video is still larger than 5MB after compression. Please choose a shorter video.',
     );
@@ -584,14 +588,14 @@ class _TaskCompleteDialogState extends State<_TaskCompleteDialog> {
     for (var i = 0; i < _media.length; i++) {
       final item = _media[i];
       setState(() {
-        _stageLabel = 'Compressing ${i + 1}/${_media.length}';
+        _stageLabel = 'Compression ${i + 1}/${_media.length}';
       });
       final compressed = item.isVideo
           ? await _compressVideoToLimit(item.file)
           : await _compressImageToLimit(item.file);
       result.add(compressed);
       setState(() {
-        _compressProgress = (i + 1) / _media.length;
+        _progress = ((i + 1) / _media.length) * 0.7;
       });
     }
     return result;
@@ -599,11 +603,11 @@ class _TaskCompleteDialogState extends State<_TaskCompleteDialog> {
 
   Future<void> _onComplete() async {
     if (_isWorking) return;
+    final hasMedia = _media.isNotEmpty;
     setState(() {
       _isWorking = true;
-      _stageLabel = 'Preparing...';
-      _compressProgress = 0;
-      _uploadProgress = 0;
+      _stageLabel = hasMedia ? 'Preparing...' : '';
+      _progress = 0;
     });
 
     try {
@@ -615,14 +619,14 @@ class _TaskCompleteDialogState extends State<_TaskCompleteDialog> {
 
       final compressedFiles = await _compressAll();
       if (compressedFiles.isNotEmpty) {
-        setState(() => _stageLabel = 'Uploading...');
+        setState(() => _stageLabel = 'Upload...');
         await provider.uploadTaskAttachments(
           taskId: widget.task.taskId,
           files: compressedFiles,
           onSendProgress: (sent, total) {
             if (!mounted || total <= 0) return;
             setState(() {
-              _uploadProgress = sent / total;
+              _progress = 0.7 + ((sent / total) * 0.3);
             });
           },
         );
@@ -834,7 +838,7 @@ class _TaskCompleteDialogState extends State<_TaskCompleteDialog> {
                     ),
                   ),
                 ),
-              if (_isWorking) ...[
+              if (_isWorking && _media.isNotEmpty) ...[
                 const SizedBox(height: 8),
                 Text(
                   _stageLabel,
@@ -845,16 +849,10 @@ class _TaskCompleteDialogState extends State<_TaskCompleteDialog> {
                 ),
                 const SizedBox(height: 8),
                 LinearProgressIndicator(
-                  value: _compressProgress > 0 ? _compressProgress : null,
+                  value: _progress > 0 ? _progress : null,
                 ),
                 const SizedBox(height: 6),
-                Text('Compression ${(100 * _compressProgress).round()}%'),
-                const SizedBox(height: 10),
-                LinearProgressIndicator(
-                  value: _uploadProgress > 0 ? _uploadProgress : null,
-                ),
-                const SizedBox(height: 6),
-                Text('Upload ${(100 * _uploadProgress).round()}%'),
+                Text('${(100 * _progress).round()}%'),
               ],
               const SizedBox(height: 16),
               Row(

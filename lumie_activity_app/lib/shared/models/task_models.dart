@@ -88,6 +88,7 @@ class Task {
   final TaskStatus status;
   final String? taskInfo;
   final String? note;
+  final List<TaskAttachment> attachments;
   final DateTime? completedAt;
   final int extensionCount;
   final DateTime createdAt;
@@ -106,6 +107,7 @@ class Task {
     required this.status,
     this.taskInfo,
     this.note,
+    this.attachments = const [],
     this.completedAt,
     this.extensionCount = 0,
     required this.createdAt,
@@ -126,14 +128,17 @@ class Task {
       status: TaskStatus.fromString(json['status'] as String),
       taskInfo: json['task_info'] as String?,
       note: json['note'] as String?,
+      attachments:
+          (json['attachments'] as List?)
+              ?.map((a) => TaskAttachment.fromJson(a as Map<String, dynamic>))
+              .toList() ??
+          const [],
       completedAt: json['completed_at'] != null
           ? DateTime.parse(_ensureUtcSuffix(json['completed_at'] as String))
           : null,
       extensionCount: json['extension_count'] as int? ?? 0,
-      createdAt:
-          DateTime.parse(_ensureUtcSuffix(json['created_at'] as String)),
-      updatedAt:
-          DateTime.parse(_ensureUtcSuffix(json['updated_at'] as String)),
+      createdAt: DateTime.parse(_ensureUtcSuffix(json['created_at'] as String)),
+      updatedAt: DateTime.parse(_ensureUtcSuffix(json['updated_at'] as String)),
     );
   }
 
@@ -151,6 +156,7 @@ class Task {
       'status': status.name,
       'task_info': taskInfo,
       'note': note,
+      'attachments': attachments.map((a) => a.toJson()).toList(),
       'completed_at': completedAt?.toIso8601String(),
       'extension_count': extensionCount,
       'created_at': createdAt.toIso8601String(),
@@ -164,8 +170,12 @@ class Task {
     try {
       final now = DateTime.now();
       // Parse UTC times and convert to local
-      final open = DateTime.parse(openDatetime.replaceAll(' ', 'T') + 'Z').toLocal();
-      final close = DateTime.parse(closeDatetime.replaceAll(' ', 'T') + 'Z').toLocal();
+      final open = DateTime.parse(
+        openDatetime.replaceAll(' ', 'T') + 'Z',
+      ).toLocal();
+      final close = DateTime.parse(
+        closeDatetime.replaceAll(' ', 'T') + 'Z',
+      ).toLocal();
 
       if (now.isBefore(open)) return 0.0;
       if (now.isAfter(close)) return 1.0;
@@ -190,7 +200,9 @@ class Task {
   bool get isActuallyOverdue {
     try {
       final now = DateTime.now();
-      final close = DateTime.parse(closeDatetime.replaceAll(' ', 'T') + 'Z').toLocal();
+      final close = DateTime.parse(
+        closeDatetime.replaceAll(' ', 'T') + 'Z',
+      ).toLocal();
       return now.isAfter(close);
     } catch (_) {
       return false;
@@ -200,10 +212,16 @@ class Task {
   /// Formatted time window display (UTC→local conversion)
   String get timeWindowText {
     try {
-      final open = DateTime.parse('${openDatetime.replaceAll(' ', 'T')}Z').toLocal();
-      final close = DateTime.parse('${closeDatetime.replaceAll(' ', 'T')}Z').toLocal();
-      final openStr = '${open.hour.toString().padLeft(2, '0')}:${open.minute.toString().padLeft(2, '0')}';
-      final closeStr = '${close.hour.toString().padLeft(2, '0')}:${close.minute.toString().padLeft(2, '0')}';
+      final open = DateTime.parse(
+        '${openDatetime.replaceAll(' ', 'T')}Z',
+      ).toLocal();
+      final close = DateTime.parse(
+        '${closeDatetime.replaceAll(' ', 'T')}Z',
+      ).toLocal();
+      final openStr =
+          '${open.hour.toString().padLeft(2, '0')}:${open.minute.toString().padLeft(2, '0')}';
+      final closeStr =
+          '${close.hour.toString().padLeft(2, '0')}:${close.minute.toString().padLeft(2, '0')}';
       return '$openStr - $closeStr';
     } catch (_) {}
     return '$openDatetime - $closeDatetime';
@@ -217,10 +235,7 @@ class TaskListResponse {
   final List<Task> tasks;
   final int total;
 
-  const TaskListResponse({
-    required this.tasks,
-    required this.total,
-  });
+  const TaskListResponse({required this.tasks, required this.total});
 
   factory TaskListResponse.fromJson(Map<String, dynamic> json) {
     return TaskListResponse(
@@ -305,10 +320,8 @@ class RepeatTaskTemplate {
           .map((tw) => TimeWindow.fromJson(tw as Map<String, dynamic>))
           .toList(),
       createdBy: json['created_by'] as String,
-      createdAt:
-          DateTime.parse(_ensureUtcSuffix(json['created_at'] as String)),
-      updatedAt:
-          DateTime.parse(_ensureUtcSuffix(json['updated_at'] as String)),
+      createdAt: DateTime.parse(_ensureUtcSuffix(json['created_at'] as String)),
+      updatedAt: DateTime.parse(_ensureUtcSuffix(json['updated_at'] as String)),
     );
   }
 
@@ -332,16 +345,12 @@ class TemplateListResponse {
   final List<RepeatTaskTemplate> templates;
   final int total;
 
-  const TemplateListResponse({
-    required this.templates,
-    required this.total,
-  });
+  const TemplateListResponse({required this.templates, required this.total});
 
   factory TemplateListResponse.fromJson(Map<String, dynamic> json) {
     return TemplateListResponse(
       templates: (json['templates'] as List)
-          .map((t) =>
-              RepeatTaskTemplate.fromJson(t as Map<String, dynamic>))
+          .map((t) => RepeatTaskTemplate.fromJson(t as Map<String, dynamic>))
           .toList(),
       total: json['total'] as int,
     );
@@ -385,6 +394,7 @@ class AdminTaskData {
   final String rpttaskName;
   final String? rpttaskInfo;
   final String? note;
+  final List<TaskAttachment> attachments;
   final String rpttaskType;
   final List<RptTaskItem> rpttaskList;
   final String? smallTaskId;
@@ -404,6 +414,7 @@ class AdminTaskData {
     required this.rpttaskName,
     this.rpttaskInfo,
     this.note,
+    this.attachments = const [],
     required this.rpttaskType,
     this.rpttaskList = const [],
     this.smallTaskId,
@@ -425,8 +436,14 @@ class AdminTaskData {
       rpttaskName: json['rpttask_name'] as String,
       rpttaskInfo: json['rpttask_info'] as String?,
       note: json['note'] as String?,
+      attachments:
+          (json['attachments'] as List?)
+              ?.map((a) => TaskAttachment.fromJson(a as Map<String, dynamic>))
+              .toList() ??
+          const [],
       rpttaskType: json['rpttask_type'] as String,
-      rpttaskList: (json['rpttask_list'] as List?)
+      rpttaskList:
+          (json['rpttask_list'] as List?)
               ?.map((e) => RptTaskItem.fromJson(e as Map<String, dynamic>))
               .toList() ??
           [],
@@ -445,16 +462,90 @@ class AdminTaskData {
   /// Formatted time window for display (UTC→local conversion)
   String get timeWindowText {
     try {
-      final open = DateTime.parse('${openDatetime.replaceAll(' ', 'T')}Z').toLocal();
-      final close = DateTime.parse('${closeDatetime.replaceAll(' ', 'T')}Z').toLocal();
+      final open = DateTime.parse(
+        '${openDatetime.replaceAll(' ', 'T')}Z',
+      ).toLocal();
+      final close = DateTime.parse(
+        '${closeDatetime.replaceAll(' ', 'T')}Z',
+      ).toLocal();
       String fmt(DateTime dt) {
-        final date = '${dt.year}-${dt.month.toString().padLeft(2, '0')}-${dt.day.toString().padLeft(2, '0')}';
-        final time = '${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
+        final date =
+            '${dt.year}-${dt.month.toString().padLeft(2, '0')}-${dt.day.toString().padLeft(2, '0')}';
+        final time =
+            '${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
         return '$date $time';
       }
+
       return '${fmt(open)} - ${fmt(close)}';
     } catch (_) {}
     return '$openDatetime - $closeDatetime';
+  }
+}
+
+class TaskAttachment {
+  final String attachmentId;
+  final String filename;
+  final String mediaType; // image | video
+  final String contentType;
+  final int sizeBytes;
+  final String path;
+  final String url;
+  final String? thumbnailPath;
+  final String? thumbnailUrl;
+  final String? playbackPath;
+  final String? playbackUrl;
+  final String uploadedAt;
+
+  const TaskAttachment({
+    required this.attachmentId,
+    required this.filename,
+    required this.mediaType,
+    required this.contentType,
+    required this.sizeBytes,
+    required this.path,
+    required this.url,
+    this.thumbnailPath,
+    this.thumbnailUrl,
+    this.playbackPath,
+    this.playbackUrl,
+    required this.uploadedAt,
+  });
+
+  bool get isVideo => mediaType == 'video';
+  bool get isImage => mediaType == 'image';
+
+  factory TaskAttachment.fromJson(Map<String, dynamic> json) {
+    return TaskAttachment(
+      attachmentId: json['attachment_id'] as String? ?? '',
+      filename: json['filename'] as String? ?? '',
+      mediaType: json['media_type'] as String? ?? 'image',
+      contentType: json['content_type'] as String? ?? '',
+      sizeBytes: json['size_bytes'] as int? ?? 0,
+      path: json['path'] as String? ?? '',
+      url: json['url'] as String? ?? '',
+      thumbnailPath: json['thumbnail_path'] as String?,
+      thumbnailUrl: json['thumbnail_url'] as String?,
+      playbackPath: json['playback_path'] as String?,
+      playbackUrl: json['playback_url'] as String?,
+      uploadedAt: json['uploaded_at'] as String? ?? '',
+    );
+  }
+
+  Map<String, dynamic> toJson() {
+    return {
+      'attachment_id': attachmentId,
+      'filename': filename,
+      'media_type': mediaType,
+      'content_type': contentType,
+      'size_bytes': sizeBytes,
+      'path': path,
+      'url': url,
+      'thumbnail_path': thumbnailPath,
+      'thumbnail_url': thumbnailUrl,
+      'playback_path': playbackPath,
+      'playback_url': playbackUrl,
+      'uploaded_at': uploadedAt,
+    };
   }
 }
 
@@ -516,7 +607,9 @@ class AiTip {
   factory AiTip.fromJson(Map<String, dynamic> json) {
     return AiTip(
       tip: json['tip'] as String,
-      taskStats: AiTaskStats.fromJson(json['task_stats'] as Map<String, dynamic>),
+      taskStats: AiTaskStats.fromJson(
+        json['task_stats'] as Map<String, dynamic>,
+      ),
     );
   }
 }

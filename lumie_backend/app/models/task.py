@@ -161,6 +161,7 @@ class AdminTaskData(BaseModel):
     rpttask_name: str
     rpttask_info: Optional[str] = None
     note: Optional[str] = None
+    attachments: List[dict] = Field(default_factory=list)
     rpttask_type: str
     rpttask_list: List[RptTaskItem] = []
     small_task_id: Optional[str] = None
