@@ -41,9 +41,16 @@ class SleepProvider extends ChangeNotifier {
       final session = results[0] as SleepSession?;
       // Guard: only surface ring-sourced sessions with actual sleep time.
       // If the backend returns something synthetic or empty, treat as no data.
+      // Only show data if the ring was worn last night (wake time within 36 h).
+      // If the most recent session is older, the user didn't wear the ring last
+      // night and we should show the no-data state rather than stale data.
+      final isRecent = session != null &&
+          DateTime.now().toUtc().difference(session.wakeTime.toUtc()).inHours <=
+              36;
       if (session != null &&
           session.source == 'ring' &&
-          session.totalSleepTime.inMinutes > 0) {
+          session.totalSleepTime.inMinutes > 0 &&
+          isRecent) {
         _latestSleep = session;
       } else {
         _latestSleep = null;

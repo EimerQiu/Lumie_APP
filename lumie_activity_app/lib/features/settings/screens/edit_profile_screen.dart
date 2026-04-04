@@ -19,6 +19,7 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
   final _formKey = GlobalKey<FormState>();
   final _profileService = ProfileService();
 
+  final _ageController = TextEditingController();
   final _heightCmController = TextEditingController();
   final _heightFtController = TextEditingController();
   final _heightInController = TextEditingController();
@@ -57,6 +58,10 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
       _weightController.text = profile.weight!.value.toStringAsFixed(1);
     }
 
+    if (profile.age != null) {
+      _ageController.text = profile.age!.toString();
+    }
+
     if (profile.advisorName != null) {
       _advisorController.text = profile.advisorName!;
     }
@@ -64,6 +69,7 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
 
   @override
   void dispose() {
+    _ageController.dispose();
     _heightCmController.dispose();
     _heightFtController.dispose();
     _heightInController.dispose();
@@ -92,7 +98,10 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
       final w = double.tryParse(_weightController.text);
       if (w != null) weight = WeightData(value: w, unit: _weightUnit);
 
+      final age = int.tryParse(_ageController.text.trim());
+
       await _profileService.updateProfile(
+        age: age,
         height: height,
         weight: weight,
         advisorName: _advisorController.text.trim().isEmpty
@@ -140,6 +149,35 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
               ),
               const SizedBox(height: 16),
             ],
+
+            // ── Age ─────────────────────────────────────────────────────────
+            GradientCard(
+              gradient: AppColors.cardGradient,
+              margin: EdgeInsets.zero,
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text('Age', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: AppColors.textPrimary)),
+                  const SizedBox(height: 12),
+                  AuthTextField(
+                    controller: _ageController,
+                    label: 'Age (years)',
+                    hint: 'e.g. 15',
+                    keyboardType: TextInputType.number,
+                    prefixIcon: Icons.cake_outlined,
+                    validator: (v) {
+                      if (v == null || v.trim().isEmpty) return null;
+                      final n = int.tryParse(v.trim());
+                      if (n == null || n < 1 || n > 120) return 'Enter a valid age';
+                      return null;
+                    },
+                  ),
+                ],
+              ),
+            ),
+
+            const SizedBox(height: 16),
 
             // ── Height ──────────────────────────────────────────────────────
             GradientCard(

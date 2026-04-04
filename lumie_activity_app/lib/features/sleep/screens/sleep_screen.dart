@@ -246,7 +246,7 @@ class _SleepScreenState extends State<SleepScreen> {
               ),
               const Spacer(),
               Text(
-                _formatDateTime(session.wakeTime),
+                _formatFullDate(session.bedtime),
                 style: TextStyle(
                   fontSize: 12,
                   color: AppColors.textOnYellow.withValues(alpha: 0.8),
@@ -423,13 +423,10 @@ class _SleepScreenState extends State<SleepScreen> {
     );
   }
 
-  String _formatDateTime(DateTime dt) {
-    final now = DateTime.now();
-    final today = DateTime(now.year, now.month, now.day);
-    final date = DateTime(dt.year, dt.month, dt.day);
-    if (date == today) return 'Today';
-    if (date == today.subtract(const Duration(days: 1))) return 'Yesterday';
-    return '${dt.month}/${dt.day}';
+  String _formatFullDate(DateTime dt) {
+    const weekdays = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    return '${weekdays[dt.weekday - 1]}, ${months[dt.month - 1]} ${dt.day}';
   }
 
   String _formatTime(DateTime dt) {
