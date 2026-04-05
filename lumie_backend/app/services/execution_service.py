@@ -454,6 +454,11 @@ async def _complete_job(
             session_id = job.get("session_id") or "default"
             user_id = job.get("user_id", "")
             prompt = job.get("prompt", "")
+
+            # Skip chat history and dayprint logging for proactive runs
+            if session_id == "proactive":
+                return
+
             if summary and user_id:
                 from .chat_history_service import save_message
                 await save_message(

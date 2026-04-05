@@ -1,12 +1,13 @@
-"""Proactive Advisor Service — flat skill architecture.
+"""Proactive Advisor Service — skill-driven execution architecture.
 
-New design (v2):
-  1. All proactive-eligible assessment skills run in parallel each round.
-  2. Assessment results are persisted in proactive_information_rounds collection.
-  3. LLM gets: current round results + last round results + today's dayprint + last nudge.
-  4. LLM decides whether to nudge (no deterministic guardrails).
-  5. If LLM says no: fall back to LLM-ranked 15-day dayprint topics.
-  6. Audit records persisted for observability.
+New design (v3):
+  1. All proactive-eligible assessment skills run in parallel each round via execution service.
+  2. Skills are executed dynamically by reading markdown and generating code — no hardcoded assessments.
+  3. Raw execution results are persisted in proactive_information_rounds collection.
+  4. LLM gets: current round results + last round results + today's dayprint + last nudge.
+  5. LLM decides whether to nudge (no deterministic guardrails, no hardcoded scores).
+  6. If LLM says no: fall back to LLM-ranked 15-day dayprint topics.
+  7. Audit records persisted for observability.
 
 Skills are flat and unsorted by domain — all assessment skills run, sorted by priority.
 """
@@ -22,14 +23,14 @@ from zoneinfo import ZoneInfo
 
 from ..core.config import settings
 from ..core.database import get_database
-from ..models.proactive import ProactiveSkillResult
+from ..models.proactive import ProactiveSkillData
 from ..services.capability_service import get_user_enabled_capability_ids
 from ..services.chat_history_service import save_message
 from ..services.notification_service import queue_checkin_notification
+from ..services.skill_registry_service import skill_registry, SkillIndexItem
 from . import proactive_audit_service as audit
 from .llm_client import chat_completion
 from .proactive_skill_selector import select_proactive_skills
-from .proactive_skills import DOMAIN_ASSESSMENTS
 
 logger = logging.getLogger(__name__)
 
@@ -39,28 +40,101 @@ _DECISION_MODEL = settings.PALEBLUEDOT_MODEL
 _INTERNAL_CAP_ID = "lumie_internal_data"
 
 
-# ── Assessment execution ────────────────────────────────────────────────────
+# ── Skill execution ────────────────────────────────────────────────────────
 
-async def _run_single_assessment(assess_fn, db, user_id: str, now_utc: datetime) -> ProactiveSkillResult | None:
-    """Run a single assessment with fault isolation."""
-    try:
-        return await assess_fn(db, user_id, now_utc)
-    except Exception as e:
-        fn_name = getattr(assess_fn, "__module__", "unknown")
-        logger.error("Assessment %s failed for user=%s: %s", fn_name, user_id, e, exc_info=True)
+async def _load_proactive_credential(db, user_id: str, skill: SkillIndexItem) -> dict | None:
+    """Load credential for a skill, or provision lumie_internal_data automatically."""
+    if not skill.requires_credentials:
         return None
+    cred_id = skill.shared_credential_id
+    if cred_id:
+        return await db.advisor_skill_credentials.find_one(
+            {"credential_id": cred_id, "user_id": user_id}, {"_id": 0}
+        )
+    # lumie_internal_data: auto-provision (no external credential needed)
+    return {"type": "lumie_internal_data"}
 
 
-async def _run_all_assessments(
+async def _run_skill_for_proactive(
     db,
     user_id: str,
-    now_utc: datetime,
-    assessment_fns: list,
-) -> list[ProactiveSkillResult]:
-    """Run selected assessment modules concurrently with fault isolation."""
-    tasks = [_run_single_assessment(fn, db, user_id, now_utc) for fn in assessment_fns]
-    raw_results = await asyncio.gather(*tasks)
-    return [r for r in raw_results if r is not None]
+    skill: SkillIndexItem,
+    user_context: dict,
+) -> ProactiveSkillData:
+    """Run one skill via execution service, return raw data."""
+    from .execution_service import create_execution_job, run_execution_job
+
+    try:
+        skill_full_text = skill_registry.load_skill_full_text(skill.skill_id)
+        credential = await _load_proactive_credential(db, user_id, skill)
+
+        job_id = await create_execution_job(
+            user_id=user_id,
+            session_id="proactive",
+            skill=skill,
+            prompt=f"[Proactive check] {skill.summary}",
+        )
+
+        await run_execution_job(
+            job_id=job_id,
+            skill=skill,
+            skill_full_text=skill_full_text or "",
+            credential=credential,
+            user_context=user_context,
+        )
+
+        job_doc = await db.execution_jobs.find_one({"job_id": job_id}, {"_id": 0})
+        if not job_doc:
+            return ProactiveSkillData(
+                skill_id=skill.skill_id,
+                domain=skill.proactive_domain or "unknown",
+                priority=skill.proactive_priority,
+                execution_status="failed",
+                summary="Job record not found",
+            )
+
+        result = job_doc.get("result") or {}
+        status = job_doc.get("status", "failed")
+
+        return ProactiveSkillData(
+            skill_id=skill.skill_id,
+            domain=skill.proactive_domain or "unknown",
+            priority=skill.proactive_priority,
+            execution_status=status,
+            data=result.get("data") or {},
+            summary=result.get("summary", ""),
+        )
+    except Exception as e:
+        logger.error("Skill %s failed for user=%s: %s", skill.skill_id, user_id, e, exc_info=True)
+        return ProactiveSkillData(
+            skill_id=skill.skill_id,
+            domain=skill.proactive_domain or "unknown",
+            priority=skill.proactive_priority,
+            execution_status="failed",
+            summary=f"Execution error: {str(e)[:100]}",
+        )
+
+
+async def _run_all_skills_for_proactive(
+    db, user_id: str, skills: list[SkillIndexItem], user_context: dict
+) -> list[ProactiveSkillData]:
+    """Run all selected skills concurrently with fault isolation."""
+    tasks = [_run_skill_for_proactive(db, user_id, skill, user_context) for skill in skills]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    out = []
+    for skill, result in zip(skills, results):
+        if isinstance(result, Exception):
+            logger.error("Skill %s exception: %s", skill.skill_id, result)
+            out.append(ProactiveSkillData(
+                skill_id=skill.skill_id,
+                domain=skill.proactive_domain or "unknown",
+                priority=skill.proactive_priority,
+                execution_status="failed",
+                summary=f"Exception: {str(result)[:100]}",
+            ))
+        else:
+            out.append(result)
+    return out
 
 
 def _canonicalize(text: str) -> str:
@@ -78,28 +152,25 @@ def _canonicalize(text: str) -> str:
 def _build_concern_key(
     domain: str,
     _reason: str,
-    skill_result: ProactiveSkillResult | None,
+    skill_data: ProactiveSkillData | None,
 ) -> str:
     """Build a semantic concern fingerprint (not wording-based)."""
-    signals = (skill_result.signals if skill_result else [])[:3]
-    canonical_signals = [_canonicalize(s) for s in signals if s]
-    canonical_action = _canonicalize((skill_result.recommended_actions or [""])[0] if skill_result else "")
+    # For v3, concern key is simpler: just based on domain and reason
     payload = {
         "domain": _canonicalize(domain),
-        "signals": sorted([s for s in canonical_signals if s]),
-        "action": canonical_action,
+        "reason": _canonicalize(_reason),
     }
     raw = json.dumps(payload, sort_keys=True, ensure_ascii=True)
     digest = hashlib.sha1(raw.encode("utf-8")).hexdigest()[:16]
     return f"{payload['domain']}:{digest}"
 
 
-def _find_skill_by_domain(skill_results: list[ProactiveSkillResult], domain: str | None) -> ProactiveSkillResult | None:
+def _find_skill_by_domain(skill_data_list: list[ProactiveSkillData], domain: str | None) -> ProactiveSkillData | None:
     if not domain:
         return None
-    for r in skill_results:
-        if r.domain == domain:
-            return r
+    for s in skill_data_list:
+        if s.domain == domain:
+            return s
     return None
 
 
@@ -266,35 +337,30 @@ def _build_decision_prompt(
     role: str,
     icd10: str,
     local_time_str: str,
-    skill_results: list[ProactiveSkillResult],
-    priority_map: dict[str, int],
+    skill_data: list[ProactiveSkillData],
     last_round_results: list[dict],
     today_dayprint: dict | None,
     last_nudge_str: str,
 ) -> tuple[str, str]:
-    """Build compact system + user prompt from structured assessment results.
+    """Build compact system + user prompt from raw skill execution data.
 
     Args:
         user_name, role, icd10, local_time_str: user context
-        skill_results: current round assessment results
-        priority_map: {domain → priority_score}
-        last_round_results: previous round assessment results (for comparison)
+        skill_data: current round skill execution results
+        last_round_results: previous round results (for comparison)
         today_dayprint: today's dayprint data (if available)
         last_nudge_str: description of last nudge
     """
-    # Serialize current round skill results with priority scores
+    # Serialize current round skill data with priority embedded
     current_results_for_llm = []
-    for r in skill_results:
-        priority = priority_map.get(r.domain, 0)
+    for s in skill_data:
         current_results_for_llm.append({
-            "skill_id": r.skill_id,
-            "domain": r.domain,
-            "priority": priority,
-            "status": r.status.value,
-            "summary": r.summary,
-            "score": r.score,
-            "signals": r.signals,
-            "recommended_actions": r.recommended_actions,
+            "skill_id": s.skill_id,
+            "domain": s.domain,
+            "priority": s.priority,
+            "execution_status": s.execution_status,
+            "summary": s.summary,
+            "data": s.data,
         })
 
     condition_str = f" with condition code {icd10}" if icd10 else ""
@@ -302,15 +368,16 @@ def _build_decision_prompt(
     system_prompt = (
         f"You are a proactive health advisor for {user_name}, a {role}{condition_str}.\n"
         f"Current local time: {local_time_str}.\n\n"
-        "You are in PROACTIVE MODE. You are reviewing structured assessment results to decide "
+        "You are in PROACTIVE MODE. You are reviewing skill execution data to decide "
         "whether to send a nudge notification.\n\n"
         "DECISION POLICY:\n"
-        "1. Review all current assessment results. Higher priority scores indicate more important skills.\n"
-        "2. Look for concerns: scores >= 0.3 are actionable, >= 0.7 are urgent.\n"
-        "3. Consider trends from the previous round (if available).\n"
-        "4. Check today's dayprint for context (if available).\n"
-        "5. Only nudge if genuinely worth addressing NOW. Avoid minor or speculative concerns.\n"
-        "6. Prefer personalized, grounded concerns over vague ones.\n\n"
+        "1. Review all current skill data. Higher priority values indicate more important skills.\n"
+        "2. Focus on data from successfully-executed skills (execution_status='success').\n"
+        "3. Look for concrete concerns in the raw data (not scores — use your judgment).\n"
+        "4. Consider trends from the previous round (if available).\n"
+        "5. Check today's dayprint for context (if available).\n"
+        "6. Only nudge if genuinely worth addressing NOW. Avoid minor or speculative concerns.\n"
+        "7. Prefer personalized, grounded concerns over vague ones.\n\n"
         f"Nudge history: {last_nudge_str}\n\n"
         "Respond with valid JSON only — no markdown, no explanation:\n"
         '{"should_nudge": true|false, "message": "<friendly nudge message ≤120 chars, or null>", '
@@ -394,54 +461,43 @@ async def run_proactive_check(user_id: str) -> dict:
 
     logger.info("Proactive[%s]: run_id=%s round_id=%s capabilities=%s", user_id, run_id, round_id, sorted(enabled_cap_ids))
 
-    # ── 3. Select and run proactive assessments (enabled capabilities only) ──
+    # ── 3. Select and run proactive skills (enabled capabilities only) ──
     selected_skills = select_proactive_skills(enabled_cap_ids)
     if not selected_skills:
         logger.warning("Proactive[%s]: no proactive skills selected", user_id)
         return {"nudged": False, "message": None, "reason": "no_proactive_skills_selected"}
 
-    # Build domain → priority map for LLM context
-    priority_map = {skill.proactive_domain: skill.proactive_priority for skill in selected_skills if skill.proactive_domain}
-
-    # Map skills to assessment functions
-    assessment_fns = []
-    for skill in selected_skills:
-        domain = skill.proactive_domain or ""
-        fn = DOMAIN_ASSESSMENTS.get(domain)
-        if fn is None:
-            logger.warning(
-                "Proactive[%s]: selected skill %s has unmapped domain=%s",
-                user_id,
-                skill.skill_id,
-                domain,
-            )
-            continue
-        assessment_fns.append(fn)
-
-    if not assessment_fns:
-        logger.warning("Proactive[%s]: no mapped assessment functions for selected proactive skills", user_id)
-        return {"nudged": False, "message": None, "reason": "no_mapped_proactive_assessments"}
-
-    # Run all assessments concurrently (fault-isolated)
-    skill_results = await _run_all_assessments(db, user_id, now_utc, assessment_fns)
     logger.info(
         "Proactive[%s]: selected proactive skills=%s",
         user_id,
         [(s.skill_id, s.proactive_domain, s.proactive_priority) for s in selected_skills],
     )
+
+    # Build user context for execution
+    user_context = {
+        "name": user_name,
+        "role": role,
+        "icd10_code": icd10,
+        "timezone": user_timezone,
+        "advisor_name": "Lumie",
+    }
+
+    # Run all skills concurrently via execution service (fault-isolated)
+    skill_data = await _run_all_skills_for_proactive(db, user_id, selected_skills, user_context)
+
     logger.info(
-        "Proactive[%s]: %d assessment results: %s",
+        "Proactive[%s]: %d skill results: %s",
         user_id,
-        len(skill_results),
-        [(r.skill_id, r.status.value, r.score) for r in skill_results],
+        len(skill_data),
+        [(s.skill_id, s.execution_status) for s in skill_data],
     )
 
-    if not skill_results:
-        logger.warning("Proactive[%s]: all assessments failed — skip", user_id)
-        return {"nudged": False, "message": None, "reason": "all_assessments_failed"}
+    if not skill_data:
+        logger.warning("Proactive[%s]: all skills failed — skip", user_id)
+        return {"nudged": False, "message": None, "reason": "all_skills_failed"}
 
     # ── 3.5. Save information round for this proactive run ─────────────────
-    await audit.save_round_record(db, round_id, user_id, now_utc, skill_results)
+    await audit.save_round_record(db, round_id, user_id, now_utc, skill_data)
 
     # ── 4. Fetch last nudge, last round, and today's dayprint ───────────────
     checkin_doc = await db.advisor_checkins.find_one({"user_id": user_id})
@@ -501,8 +557,7 @@ async def run_proactive_check(user_id: str) -> dict:
         role=role,
         icd10=icd10,
         local_time_str=local_time_str,
-        skill_results=skill_results,
-        priority_map=priority_map,
+        skill_data=skill_data,
         last_round_results=last_round_results,
         today_dayprint=today_dayprint,
         last_nudge_str=last_nudge_str,
@@ -554,11 +609,11 @@ async def run_proactive_check(user_id: str) -> dict:
     sent_topic_keys = set(daily_sent_topics)
 
     selected_domain = result.get("primary_domain")
-    if not selected_domain and skill_results:
-        selected_domain = max(skill_results, key=lambda r: r.score).domain
+    if not selected_domain and skill_data:
+        selected_domain = max(skill_data, key=lambda s: s.priority).domain
 
-    selected_skill = _find_skill_by_domain(skill_results, selected_domain)
-    concern_key = _build_concern_key(selected_domain or "unknown", reason, selected_skill)
+    selected_skill_data = _find_skill_by_domain(skill_data, selected_domain)
+    concern_key = _build_concern_key(selected_domain or "unknown", reason, selected_skill_data)
     selected_topic_key = ""
 
     # Check for same-day duplicate concern
@@ -625,12 +680,12 @@ async def run_proactive_check(user_id: str) -> dict:
 
         # Build structured last_nudge for next run context
         evidence_summary = {
-            r.domain: {
-                "score": r.score,
-                "status": r.status.value,
-                "top_signal": r.signals[0] if r.signals else None,
+            s.domain: {
+                "execution_status": s.execution_status,
+                "priority": s.priority,
+                "summary": s.summary,
             }
-            for r in skill_results
+            for s in skill_data
         }
 
         await db.advisor_checkins.update_one(
@@ -668,7 +723,7 @@ async def run_proactive_check(user_id: str) -> dict:
 
     # ── 8. Audit ────────────────────────────────────────────────────────────
     await audit.save_run_record(
-        db, run_id, user_id, now_utc, skill_results, decision_data, delivery_data, round_id,
+        db, run_id, user_id, now_utc, skill_data, decision_data, delivery_data, round_id,
     )
 
     return {"nudged": should_nudge, "message": message, "reason": reason}

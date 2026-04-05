@@ -1,16 +1,16 @@
 """Proactive Audit Service — persists structured run records and information rounds.
 
 Persists:
-  - proactive_information_rounds — one record per round (all skill results fetched in that round)
+  - proactive_information_rounds — one record per round (all skill data fetched in that round)
   - proactive_runs         — one record per run (timing, selected skills, delivery)
-  - proactive_skill_results — one record per skill result per run
+  - proactive_skill_results — one record per skill execution per run
   - proactive_decisions     — one record per LLM decision per run
 """
 import logging
 from datetime import datetime, timezone
 
 from ..models.proactive import (
-    ProactiveSkillResult,
+    ProactiveSkillData,
 )
 
 logger = logging.getLogger(__name__)
@@ -21,18 +21,18 @@ async def save_round_record(
     round_id: str,
     user_id: str,
     created_at: datetime,
-    skill_results: list[ProactiveSkillResult],
+    skill_data: list[ProactiveSkillData],
 ) -> None:
-    """Persist information round — snapshot of all skill results fetched in one round."""
+    """Persist information round — snapshot of all skill data fetched in one round."""
     try:
         round_doc = {
             "round_id": round_id,
             "user_id": user_id,
             "created_at": created_at.isoformat(),
-            "skill_results": [r.model_dump() for r in skill_results],
+            "skill_data": [s.model_dump() for s in skill_data],
         }
         await db.proactive_information_rounds.insert_one(round_doc)
-        logger.info("Proactive round: round_id=%s user=%s skills=%d", round_id, user_id, len(skill_results))
+        logger.info("Proactive round: round_id=%s user=%s skills=%d", round_id, user_id, len(skill_data))
     except Exception as e:
         logger.error("Failed to save proactive round round_id=%s user=%s: %s", round_id, user_id, e)
 
@@ -52,7 +52,7 @@ async def save_run_record(
     run_id: str,
     user_id: str,
     started_at: datetime,
-    skill_results: list[ProactiveSkillResult],
+    skill_data: list[ProactiveSkillData],
     decision: dict | None,
     delivery: dict | None = None,
     round_id: str | None = None,
@@ -68,19 +68,19 @@ async def save_run_record(
             "started_at": started_at.isoformat(),
             "finished_at": finished_at,
             "round_id": round_id,
-            "selected_skills": [r.skill_id for r in skill_results],
+            "selected_skills": [s.skill_id for s in skill_data],
             "delivery_result": delivery or {},
         }
         await db.proactive_runs.insert_one(run_doc)
 
-        # 2. proactive_skill_results — one doc per skill per run
-        if skill_results:
+        # 2. proactive_skill_results — one doc per skill execution per run
+        if skill_data:
             skill_docs = []
-            for r in skill_results:
-                doc = r.model_dump()
+            for s in skill_data:
+                doc = s.model_dump()
                 doc["run_id"] = run_id
                 doc["user_id"] = user_id
-                doc["assessed_at"] = finished_at
+                doc["executed_at"] = finished_at
                 skill_docs.append(doc)
             await db.proactive_skill_results.insert_many(skill_docs)
 
@@ -94,7 +94,7 @@ async def save_run_record(
             }
             await db.proactive_decisions.insert_one(decision_doc)
 
-        logger.info("Proactive audit: run_id=%s user=%s skills=%d", run_id, user_id, len(skill_results))
+        logger.info("Proactive audit: run_id=%s user=%s skills=%d", run_id, user_id, len(skill_data))
     except Exception as e:
         logger.error("Failed to save proactive audit run_id=%s user=%s: %s", run_id, user_id, e)
 

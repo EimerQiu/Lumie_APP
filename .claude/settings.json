@@ -17,7 +17,9 @@
       "Bash(sed -n '71,74p' /Users/ciline/Documents/development/projects/Lumie_APP/lumie_backend/app/skills/system/lumie_internal/ring_live_measure.md)",
       "Bash(sed -n '106,111p' /Users/ciline/Documents/development/projects/Lumie_APP/lumie_backend/app/skills/system/lumie_internal/ring_live_measure.md)",
       "Bash(find /Users/ciline/Documents/development/projects/Lumie_APP/lumie_backend/app/skills -name *.md)",
-      "Read(//dev/**)"
+      "Read(//dev/**)",
+      "Bash(find /Users/ciline/Documents/development/projects/Lumie_APP/lumie_backend/app/skills -name \"*.md\" -type f ! -exec grep -q \"proactive_eligible: true\" {} \\\\; -print)",
+      "Bash(python -m py_compile lumie_backend/app/services/proactive_advisor_service.py lumie_backend/app/services/proactive_audit_service.py lumie_backend/app/services/execution_service.py lumie_backend/app/models/proactive.py)"
     ],
     "additionalDirectories": [
       "/Users/ciline/.claude",
