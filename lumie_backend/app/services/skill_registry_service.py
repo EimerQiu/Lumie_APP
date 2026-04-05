@@ -28,6 +28,20 @@ REQUIRED_FIELDS = {
 # ── Data structures ──────────────────────────────────────────────────────────
 
 @dataclass
+class SkillDependencyCall:
+    """A single call to a dependent skill with specific parameters."""
+    skill_id: str
+    params: dict  # e.g., {"domain": "sleep"}
+
+
+@dataclass
+class SkillDependency:
+    """Dependency specification for a skill."""
+    skill_id: str
+    calls: list[SkillDependencyCall]  # Multiple calls with different params
+
+
+@dataclass
 class SkillIndexItem:
     skill_id: str
     title: str
@@ -49,6 +63,8 @@ class SkillIndexItem:
     proactive_domain: Optional[str] = None   # sleep|activity|medication|recovery|dayprint|team_followup|decision
     proactive_priority: int = 0
     proactive_mode: Optional[str] = None     # assessment|decision
+    # Skill dependencies (for DAG execution)
+    dependencies: list[SkillDependency] = field(default_factory=list)
     status: str = "indexed"
     file_path: str = ""
     last_error: Optional[str] = None
@@ -162,6 +178,28 @@ class SkillRegistry:
         if isinstance(keywords, str):
             keywords = [k.strip() for k in keywords.split(",")]
 
+        # Parse dependencies (optional)
+        dependencies = []
+        deps_raw = fm.get("dependencies", [])
+        if deps_raw:
+            for dep in deps_raw:
+                if isinstance(dep, dict):
+                    dep_skill_id = dep.get("skill_id")
+                    if dep_skill_id:
+                        calls = []
+                        calls_raw = dep.get("calls", [])
+                        for call in calls_raw:
+                            if isinstance(call, dict):
+                                calls.append(SkillDependencyCall(
+                                    skill_id=dep_skill_id,
+                                    params=call,
+                                ))
+                        if calls:
+                            dependencies.append(SkillDependency(
+                                skill_id=dep_skill_id,
+                                calls=calls,
+                            ))
+
         return SkillIndexItem(
             skill_id=fm["skill_id"],
             title=fm["title"],
@@ -182,6 +220,7 @@ class SkillRegistry:
             proactive_domain=fm.get("proactive_domain"),
             proactive_priority=int(fm.get("proactive_priority", 0)),
             proactive_mode=fm.get("proactive_mode"),
+            dependencies=dependencies,
             status="indexed",
             file_path=str(fpath),
         )

@@ -48,14 +48,30 @@ def build_lumie_db_execution_prompt(
     target_user_id: str,
     user_context: dict,
     history_summary: str = "",
+    previous_results: Optional[dict] = None,
 ) -> str:
     """Build the prompt for generating a lumie_db Python query script.
 
     The generated script will be executed by lumie_db_connector.
+
+    Args:
+        previous_results: Dict of skill_id -> ProactiveSkillData from prior tiers in DAG.
     """
     schema = _load_schema()
     glossary = _load_glossary()
     timezone = user_context.get("timezone", "UTC")
+
+    # Format previous results for context if available
+    prev_results_section = ""
+    if previous_results:
+        import json
+        prev_results_section = f"""
+## Previous Skill Results (from DAG execution)
+
+These are the raw results from skills executed in prior tiers. Use them as context:
+
+{json.dumps({k: v.data if hasattr(v, 'data') else v for k, v in previous_results.items()}, indent=2, default=str)}
+"""
 
     return f"""You are generating a Python async script to query Lumie's MongoDB database.
 
@@ -77,6 +93,8 @@ def build_lumie_db_execution_prompt(
 
 ## User Request
 {user_request}
+
+{prev_results_section}
 
 {f"## Conversation Context (summary)" + chr(10) + history_summary if history_summary else ""}
 

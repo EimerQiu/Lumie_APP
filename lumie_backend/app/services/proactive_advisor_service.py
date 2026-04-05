@@ -163,6 +163,146 @@ async def _run_all_skills_for_proactive(
     return out
 
 
+async def _run_skills_with_dependencies(
+    db,
+    user_id: str,
+    skills: list[SkillIndexItem],
+    user_context: dict,
+) -> list[ProactiveSkillData]:
+    """Run skills respecting DAG dependencies.
+
+    Skills with dependencies are organized into tiers:
+    - Tier 0: Skills with no dependencies (run in parallel)
+    - Tier N: Skills whose all dependencies are in tiers 0..N-1
+
+    Returns: List of ProactiveSkillData (one per original skill)
+    """
+    from .execution_service import _build_skill_dag, _topological_sort
+
+    # Build DAG and compute tiers
+    try:
+        dag = await _build_skill_dag(skills)
+        tiers = await _topological_sort(dag)
+    except ValueError as e:
+        logger.error("DAG error: %s", e)
+        # Fall back to parallel execution (ignore dependencies)
+        return await _run_all_skills_for_proactive(db, user_id, skills, user_context)
+
+    results_by_skill_id = {}
+    all_results = []
+
+    # Execute each tier
+    for tier_idx, tier_skill_ids in enumerate(tiers):
+        tier_skills = [s for s in skills if s.skill_id in tier_skill_ids]
+        logger.info(f"Proactive[{user_id}]: Tier {tier_idx} ({len(tier_skills)} skills)")
+
+        # Run all skills in tier in parallel
+        tasks = [
+            _run_skill_for_proactive_with_context(
+                db, user_id, skill, user_context,
+                context=results_by_skill_id,
+            )
+            for skill in tier_skills
+        ]
+        tier_results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        # Collect results
+        for skill, result in zip(tier_skills, tier_results):
+            if isinstance(result, Exception):
+                logger.error("Skill %s exception in tier %d: %s", skill.skill_id, tier_idx, result)
+                result_data = ProactiveSkillData(
+                    skill_id=skill.skill_id,
+                    domain=skill.proactive_domain or "unknown",
+                    priority=skill.proactive_priority,
+                    execution_status="failed",
+                    summary=f"Exception: {str(result)[:100]}",
+                )
+            else:
+                result_data = result
+
+            results_by_skill_id[skill.skill_id] = result_data
+            all_results.append(result_data)
+
+    return all_results
+
+
+async def _run_skill_for_proactive_with_context(
+    db,
+    user_id: str,
+    skill: SkillIndexItem,
+    user_context: dict,
+    context: dict = None,
+) -> ProactiveSkillData:
+    """Run one skill via execution service with access to previous results.
+
+    Args:
+        context: Dict of skill_id -> ProactiveSkillData from prior tiers.
+    """
+    from .execution_service import create_execution_job, run_execution_job
+
+    try:
+        skill_full_text = skill_registry.load_skill_full_text(skill.skill_id)
+        credential = await _load_proactive_credential(db, user_id, skill)
+
+        # If credential is required but missing, skip execution
+        if skill.requires_credentials and not credential:
+            logger.info("Skill %s skipped: required credential not found or missing ping", skill.skill_id)
+            return ProactiveSkillData(
+                skill_id=skill.skill_id,
+                domain=skill.proactive_domain or "unknown",
+                priority=skill.proactive_priority,
+                execution_status="no_data",
+                summary="Credential not configured",
+            )
+
+        job_id = await create_execution_job(
+            user_id=user_id,
+            session_id="proactive",
+            skill=skill,
+            prompt=f"[Proactive check] {skill.summary}",
+        )
+
+        await run_execution_job(
+            job_id=job_id,
+            skill=skill,
+            skill_full_text=skill_full_text or "",
+            credential=credential,
+            user_context=user_context,
+            previous_results=context,  # ← Pass previous tier results
+        )
+
+        job_doc = await db.execution_jobs.find_one({"job_id": job_id}, {"_id": 0})
+        if not job_doc:
+            return ProactiveSkillData(
+                skill_id=skill.skill_id,
+                domain=skill.proactive_domain or "unknown",
+                priority=skill.proactive_priority,
+                execution_status="failed",
+                summary="Job record not found",
+            )
+
+        result = job_doc.get("result") or {}
+        status = job_doc.get("status", "failed")
+
+        return ProactiveSkillData(
+            skill_id=skill.skill_id,
+            domain=skill.proactive_domain or "unknown",
+            priority=skill.proactive_priority,
+            execution_status=status,
+            data=result.get("data") or {},
+            summary=result.get("summary", ""),
+        )
+    except Exception as e:
+        logger.error("Skill %s failed for user=%s: %s", skill.skill_id, user_id, e, exc_info=True)
+        return ProactiveSkillData(
+            skill_id=skill.skill_id,
+            domain=skill.proactive_domain or "unknown",
+            priority=skill.proactive_priority,
+            execution_status="failed",
+            summary=f"Execution error: {str(e)[:100]}",
+        )
+
+
 def _canonicalize(text: str) -> str:
     """Canonicalize a text fragment to compare semantic repetition."""
     t = (text or "").lower().strip()
@@ -508,8 +648,8 @@ async def run_proactive_check(user_id: str) -> dict:
         "advisor_name": "Lumie",
     }
 
-    # Run all skills concurrently via execution service (fault-isolated)
-    skill_data = await _run_all_skills_for_proactive(db, user_id, selected_skills, user_context)
+    # Run all skills with DAG dependency resolution (fault-isolated)
+    skill_data = await _run_skills_with_dependencies(db, user_id, selected_skills, user_context)
 
     logger.info(
         "Proactive[%s]: %d skill results: %s",

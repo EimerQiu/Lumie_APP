@@ -33,6 +33,49 @@ _semaphore = asyncio.Semaphore(3)
 MAX_RETRIES = 2
 
 
+# ── DAG (Directed Acyclic Graph) Utilities ───────────────────────────────────
+
+async def _build_skill_dag(skills: list[SkillIndexItem]) -> dict[str, list[str]]:
+    """Build DAG: skill_id → list of dependent skill_ids.
+
+    Returns: {skill_id: [dependent_skill_ids]}
+    """
+    dag = {}
+    for skill in skills:
+        dag[skill.skill_id] = []
+        for dep in skill.dependencies:
+            dag[skill.skill_id].append(dep.skill_id)
+    return dag
+
+
+async def _topological_sort(dag: dict[str, list[str]]) -> list[list[str]]:
+    """Return tiers: [[tier_0_skills], [tier_1_skills], ...].
+
+    Tier N contains skills whose all dependencies are in tiers 0..N-1.
+    Raises ValueError if circular dependency detected.
+    """
+    tiers = []
+    processed = set()
+
+    while len(processed) < len(dag):
+        tier = []
+        for skill_id, deps in dag.items():
+            if skill_id not in processed:
+                # Check if all dependencies are already processed
+                if all(dep in processed for dep in deps):
+                    tier.append(skill_id)
+
+        if not tier:
+            # No skills can be added → circular dependency
+            unprocessed = [sid for sid in dag if sid not in processed]
+            raise ValueError(f"Circular dependency or missing skill detected: {unprocessed}")
+
+        tiers.append(tier)
+        processed.update(tier)
+
+    return tiers
+
+
 # ── Job creation ─────────────────────────────────────────────────────────────
 
 async def create_execution_job(
@@ -83,12 +126,17 @@ async def run_execution_job(
     credential: Optional[dict],
     user_context: dict,
     history_summary: str = "",
+    previous_results: Optional[dict] = None,
 ) -> None:
-    """Execute a job asynchronously with semaphore-controlled concurrency."""
+    """Execute a job asynchronously with semaphore-controlled concurrency.
+
+    Args:
+        previous_results: Dict of skill_id -> ProactiveSkillData from prior tiers in DAG.
+    """
     async with _semaphore:
         await _execute_job(
             job_id, skill, skill_full_text, credential,
-            user_context, history_summary,
+            user_context, history_summary, previous_results,
         )
 
 
@@ -99,6 +147,7 @@ async def _execute_job(
     credential: Optional[dict],
     user_context: dict,
     history_summary: str,
+    previous_results: Optional[dict] = None,
 ) -> None:
     """Internal job execution pipeline."""
     db = get_database()
@@ -129,7 +178,7 @@ async def _execute_job(
         if skill.runtime_type == "lumie_db":
             await _execute_lumie_db(
                 db, job_id, job, skill, skill_full_text,
-                credential, user_context, history_summary,
+                credential, user_context, history_summary, previous_results,
             )
         elif skill.runtime_type == "browser":
             await _execute_browser(
@@ -156,8 +205,13 @@ async def _execute_lumie_db(
     db, job_id: str, job: dict, skill: SkillIndexItem,
     skill_full_text: str, credential: Optional[dict],
     user_context: dict, history_summary: str,
+    previous_results: Optional[dict] = None,
 ) -> None:
-    """Generate a Python script and execute it via lumie_db_connector."""
+    """Generate a Python script and execute it via lumie_db_connector.
+
+    Args:
+        previous_results: Dict of skill_id -> ProactiveSkillData from prior tiers in DAG.
+    """
     user_id = job["user_id"]
     target_user_id = job.get("target_user_id", user_id)
     prompt = job["prompt"]
@@ -181,6 +235,7 @@ async def _execute_lumie_db(
             target_user_id=target_user_id,
             user_context=user_context,
             history_summary=history_summary,
+            previous_results=previous_results,
         )
 
         # If retrying, include the error context
