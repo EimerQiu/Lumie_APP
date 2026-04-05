@@ -43,16 +43,31 @@ _INTERNAL_CAP_ID = "lumie_internal_data"
 # ── Skill execution ────────────────────────────────────────────────────────
 
 async def _load_proactive_credential(db, user_id: str, skill: SkillIndexItem) -> dict | None:
-    """Load credential for a skill, or provision lumie_internal_data automatically."""
+    """Load credential for a skill from the database.
+
+    For lumie_internal_data skills, credentials are auto-generated on capability enable.
+    Returns None if credential is missing or has no ping token.
+    """
     if not skill.requires_credentials:
         return None
-    cred_id = skill.shared_credential_id
-    if cred_id:
-        return await db.advisor_skill_credentials.find_one(
-            {"credential_id": cred_id, "user_id": user_id}, {"_id": 0}
-        )
-    # lumie_internal_data: auto-provision (no external credential needed)
-    return {"type": "lumie_internal_data"}
+
+    # Look up credential by user_id + skill_id (works for both lumie_internal and external)
+    cred = await db.advisor_skill_credentials.find_one(
+        {"user_id": user_id, "skill_id": skill.skill_id},
+        {"_id": 0}
+    )
+
+    if not cred:
+        logger.warning("Skill %s requires credential but none found for user %s", skill.skill_id, user_id)
+        return None
+
+    # For skills that require ping validation, ensure ping exists
+    if cred.get("ping"):
+        return cred
+
+    # Credential exists but no ping - cannot execute
+    logger.warning("Skill %s has credential but missing ping for user %s", skill.skill_id, user_id)
+    return None
 
 
 async def _run_skill_for_proactive(
@@ -67,6 +82,17 @@ async def _run_skill_for_proactive(
     try:
         skill_full_text = skill_registry.load_skill_full_text(skill.skill_id)
         credential = await _load_proactive_credential(db, user_id, skill)
+
+        # If credential is required but missing, skip execution
+        if skill.requires_credentials and not credential:
+            logger.info("Skill %s skipped: required credential not found or missing ping", skill.skill_id)
+            return ProactiveSkillData(
+                skill_id=skill.skill_id,
+                domain=skill.proactive_domain or "unknown",
+                priority=skill.proactive_priority,
+                execution_status="no_data",
+                summary="Credential not configured",
+            )
 
         job_id = await create_execution_job(
             user_id=user_id,
