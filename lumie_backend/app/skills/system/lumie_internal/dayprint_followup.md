@@ -84,9 +84,9 @@ This skill helps the proactive advisor detect:
 - `summary`: Brief description (3rd person, includes user's name)
 - `session_id`: Which advisor session detected this
 
-**These are the "重点关注" (priority concern) markers!**
+**These are the priority concern markers!**
 - Scan for `important_insight` events first
-- Weight by category: urgent > health_concern > medication > symptom > emotional
+- Weight by category: urgent > family > health_concern > emotional > symptom > medication
 - If same category appears on 2+ days → strong follow-up signal
 
 # Execution Plan
