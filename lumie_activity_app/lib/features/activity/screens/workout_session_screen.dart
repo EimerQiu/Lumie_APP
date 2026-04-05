@@ -19,7 +19,15 @@ import '../../../shared/models/workout_plan_models.dart';
 
 // ─── Session state ─────────────────────────────────────────────────────────
 
-enum _SessionState { preview, activeSet, rest, complete }
+enum _SessionState { preview, demo, activeSet, rest, complete }
+
+/// Named joint keys for stick-figure poses (normalized 0.0–1.0 coordinates).
+/// Front view: head, neck, lShoulder, rShoulder, lElbow, rElbow, lWrist,
+///   rWrist, lHip, rHip, lKnee, rKnee, lAnkle, rAnkle
+/// Side view:  head, neck, shoulder, elbow, wrist, hip, knee, ankle
+typedef _PoseMap = Map<String, Offset>;
+
+enum _StickFigureView { front, side }
 
 /// Which side of the body faces the camera for this set.
 enum _CameraOrientation { front, leftSide, rightSide }
@@ -35,7 +43,8 @@ class WorkoutSessionScreen extends StatefulWidget {
   State<WorkoutSessionScreen> createState() => _WorkoutSessionScreenState();
 }
 
-class _WorkoutSessionScreenState extends State<WorkoutSessionScreen> {
+class _WorkoutSessionScreenState extends State<WorkoutSessionScreen>
+    with TickerProviderStateMixin {
   // ── Camera ────────────────────────────────────────────────────────────────
   CameraController? _cameraController;
   bool _cameraInitialized = false;
@@ -101,6 +110,12 @@ class _WorkoutSessionScreenState extends State<WorkoutSessionScreen> {
   DateTime? _repStartTime; // when the down-phase was first entered
   DateTime? _lastPoseTime; // tracks 5-second pause for phase reset
 
+  // ── Demo / Stick-figure animation ─────────────────────────────────────────
+  late final AnimationController _demoController;
+  int _demoLoopCount = 0;        // 0-based; display as +1; triggers transition at 3
+  int _pipLoopCount = 0;         // no setState; PiP lunge leg alternation only
+  bool _demoPipExpanded = false; // tap-to-expand PiP overlay
+
   static const int _minRepMillis = 1000; // minimum ms for a valid rep cycle
   static const int _pauseResetSeconds = 5; // idle pause resets phase
 
@@ -148,6 +163,99 @@ class _WorkoutSessionScreenState extends State<WorkoutSessionScreen> {
 
   Exercise get _currentExercise => widget.workoutPlan.exercises[_exerciseIndex];
 
+  // ── Stick-figure keyframes (normalized 0.0–1.0) ────────────────────────────
+
+  static const _squatStand = <String, Offset>{
+    'head':      Offset(0.50, 0.07),
+    'neck':      Offset(0.50, 0.15),
+    'lShoulder': Offset(0.36, 0.22),
+    'rShoulder': Offset(0.64, 0.22),
+    'lElbow':    Offset(0.30, 0.36),
+    'rElbow':    Offset(0.70, 0.36),
+    'lWrist':    Offset(0.34, 0.50),
+    'rWrist':    Offset(0.66, 0.50),
+    'lHip':      Offset(0.42, 0.52),
+    'rHip':      Offset(0.58, 0.52),
+    'lKnee':     Offset(0.42, 0.71),
+    'rKnee':     Offset(0.58, 0.71),
+    'lAnkle':    Offset(0.42, 0.93),
+    'rAnkle':    Offset(0.58, 0.93),
+  };
+
+  static const _squatBottom = <String, Offset>{
+    'head':      Offset(0.50, 0.21),
+    'neck':      Offset(0.50, 0.29),
+    'lShoulder': Offset(0.37, 0.35),
+    'rShoulder': Offset(0.63, 0.35),
+    'lElbow':    Offset(0.27, 0.50),
+    'rElbow':    Offset(0.73, 0.50),
+    'lWrist':    Offset(0.30, 0.62),
+    'rWrist':    Offset(0.70, 0.62),
+    'lHip':      Offset(0.40, 0.66),
+    'rHip':      Offset(0.60, 0.66),
+    'lKnee':     Offset(0.33, 0.74),
+    'rKnee':     Offset(0.67, 0.74),
+    'lAnkle':    Offset(0.42, 0.93),
+    'rAnkle':    Offset(0.58, 0.93),
+  };
+
+  static const _pushUpTop = <String, Offset>{
+    'head':     Offset(0.10, 0.34),
+    'neck':     Offset(0.18, 0.40),
+    'shoulder': Offset(0.26, 0.46),
+    'elbow':    Offset(0.30, 0.62),
+    'wrist':    Offset(0.23, 0.72),
+    'hip':      Offset(0.57, 0.48),
+    'knee':     Offset(0.74, 0.50),
+    'ankle':    Offset(0.88, 0.52),
+  };
+
+  static const _pushUpBottom = <String, Offset>{
+    'head':     Offset(0.10, 0.51),
+    'neck':     Offset(0.18, 0.57),
+    'shoulder': Offset(0.26, 0.63),
+    'elbow':    Offset(0.38, 0.69),
+    'wrist':    Offset(0.23, 0.74),
+    'hip':      Offset(0.57, 0.66),
+    'knee':     Offset(0.74, 0.68),
+    'ankle':    Offset(0.88, 0.70),
+  };
+
+  // Lunge standing = squat standing (same upright front-view position).
+  static const _lungeLeftBottom = <String, Offset>{
+    'head':      Offset(0.50, 0.09),
+    'neck':      Offset(0.50, 0.17),
+    'lShoulder': Offset(0.36, 0.24),
+    'rShoulder': Offset(0.64, 0.24),
+    'lElbow':    Offset(0.30, 0.37),
+    'rElbow':    Offset(0.70, 0.37),
+    'lWrist':    Offset(0.34, 0.50),
+    'rWrist':    Offset(0.66, 0.50),
+    'lHip':      Offset(0.44, 0.56),
+    'rHip':      Offset(0.56, 0.56),
+    'lKnee':     Offset(0.38, 0.72),
+    'rKnee':     Offset(0.57, 0.84),
+    'lAnkle':    Offset(0.34, 0.88),
+    'rAnkle':    Offset(0.60, 0.96),
+  };
+
+  static const _lungeRightBottom = <String, Offset>{
+    'head':      Offset(0.50, 0.09),
+    'neck':      Offset(0.50, 0.17),
+    'lShoulder': Offset(0.36, 0.24),
+    'rShoulder': Offset(0.64, 0.24),
+    'lElbow':    Offset(0.30, 0.37),
+    'rElbow':    Offset(0.70, 0.37),
+    'lWrist':    Offset(0.34, 0.50),
+    'rWrist':    Offset(0.66, 0.50),
+    'lHip':      Offset(0.44, 0.56),
+    'rHip':      Offset(0.56, 0.56),
+    'lKnee':     Offset(0.43, 0.84),
+    'rKnee':     Offset(0.62, 0.72),
+    'lAnkle':    Offset(0.40, 0.96),
+    'rAnkle':    Offset(0.66, 0.88),
+  };
+
   // ── Lifecycle ─────────────────────────────────────────────────────────────
 
   @override
@@ -155,6 +263,11 @@ class _WorkoutSessionScreenState extends State<WorkoutSessionScreen> {
     super.initState();
     _initPoseDetector();
     _initCamera();
+    _demoController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 2800),
+    );
+    _demoController.addStatusListener(_onDemoAnimationStatus);
   }
 
   void _initPoseDetector() {
@@ -196,6 +309,7 @@ class _WorkoutSessionScreenState extends State<WorkoutSessionScreen> {
     _restTimer?.cancel();
     _poseDetector?.close();
     _cameraController?.dispose();
+    _demoController.dispose();
     super.dispose();
   }
 
@@ -204,6 +318,7 @@ class _WorkoutSessionScreenState extends State<WorkoutSessionScreen> {
   void _onCameraFrame(CameraImage image) async {
     if (_isProcessingFrame) return;
     if (_state == _SessionState.complete) return;
+    if (_state == _SessionState.demo) return; // camera not used during demo
     _isProcessingFrame = true;
     try {
       final inputImage = _toInputImage(image);
@@ -1019,6 +1134,49 @@ class _WorkoutSessionScreenState extends State<WorkoutSessionScreen> {
 
   // ── Helpers ────────────────────────────────────────────────────────────────
 
+  /// Returns the interpolated stick-figure pose for the current animation tick.
+  /// [t] is the raw controller value (0.0–1.0 linear).
+  /// [loopIdx] controls lunge leg alternation (even=left, odd=right).
+  _PoseMap _getDemoPose(double t, int loopIdx) {
+    // Map t: 0→0.5 descend (phase 0→1), 0.5→1.0 ascend (phase 1→0)
+    final double raw = t <= 0.5 ? t / 0.5 : (1.0 - t) / 0.5;
+    final double phase = Curves.easeInOut.transform(raw); // 0=top, 1=bottom
+
+    switch (_currentExercise.poseType) {
+      case PoseType.squat:
+        return _lerpPose(_squatStand, _squatBottom, phase);
+      case PoseType.pushup:
+        return _lerpPose(_pushUpTop, _pushUpBottom, phase);
+      case PoseType.lunge:
+        final bottom = loopIdx.isEven ? _lungeLeftBottom : _lungeRightBottom;
+        return _lerpPose(_squatStand, bottom, phase);
+      default:
+        return _lerpPose(_squatStand, _squatBottom, phase);
+    }
+  }
+
+  /// Linearly interpolates every joint between two pose maps.
+  static _PoseMap _lerpPose(_PoseMap a, _PoseMap b, double t) => {
+    for (final key in a.keys) key: Offset.lerp(a[key]!, b[key]!, t)!,
+  };
+
+  String _beginnerCue(PoseType type) {
+    switch (type) {
+      case PoseType.squat:
+        return 'Feet shoulder-width apart · bend knees until thighs are parallel to the floor · drive through heels';
+      case PoseType.pushup:
+        return 'Keep your body in a straight line · lower your chest slowly · elbows at 45°';
+      case PoseType.lunge:
+        return 'Step forward · front knee over ankle · lower back knee toward the floor';
+      case PoseType.curl:
+        return 'Keep elbows tucked · curl all the way up · lower with control';
+      case PoseType.shoulderPress:
+        return 'Core tight · press directly overhead · lower with control';
+      case PoseType.generic:
+        return 'Controlled movement · full range of motion · breathe steadily';
+    }
+  }
+
   void _setFeedback(String message, bool good,
       [Set<PoseLandmarkType> bad = const {}]) {
     if (_formFeedback == message &&
@@ -1112,6 +1270,40 @@ class _WorkoutSessionScreenState extends State<WorkoutSessionScreen> {
     _advanceAfterRest();
   }
 
+  // ── Demo animation ────────────────────────────────────────────────────────
+
+  void _onDemoAnimationStatus(AnimationStatus status) {
+    if (!mounted || status != AnimationStatus.completed) return;
+    if (_state == _SessionState.demo) {
+      final next = _demoLoopCount + 1;
+      if (next >= 3) {
+        // All 3 loops done → activate camera, shrink to PiP
+        setState(() {
+          _state = _SessionState.activeSet;
+          _demoLoopCount = 0;
+        });
+        _demoController.repeat();
+      } else {
+        setState(() => _demoLoopCount = next);
+        _demoController.forward(from: 0.0);
+      }
+    } else if (_state == _SessionState.activeSet) {
+      // PiP mode — keep looping; increment without setState to avoid rebuilds.
+      _pipLoopCount++;
+      // repeat() was already called; no explicit restart needed.
+    }
+  }
+
+  void _skipDemo() {
+    _demoController.stop();
+    if (!mounted) return;
+    setState(() {
+      _state = _SessionState.activeSet;
+      _demoLoopCount = 0;
+    });
+    _demoController.repeat();
+  }
+
   void _advanceAfterRest() {
     if (!mounted) return;
     final isLastSet = _setIndex >= _currentExercise.sets - 1;
@@ -1133,10 +1325,13 @@ class _WorkoutSessionScreenState extends State<WorkoutSessionScreen> {
       _orientation = _CameraOrientation.front;
       _orientationLocked = false;
       _orientationFrameCount = 0;
-      _state = _SessionState.activeSet;
+      _demoLoopCount = 0;
+      _demoPipExpanded = false;
+      _state = _SessionState.demo;   // full 3-loop demo before every set
     });
     _resetFrontBaseline();
     _wasInFrame = false;
+    _demoController.forward(from: 0.0);
   }
 
   void _endSession() {
@@ -1158,6 +1353,8 @@ class _WorkoutSessionScreenState extends State<WorkoutSessionScreen> {
     switch (_state) {
       case _SessionState.preview:
         return _buildPreview();
+      case _SessionState.demo:
+        return _buildDemo();
       case _SessionState.activeSet:
         return _buildActiveSet();
       case _SessionState.rest:
@@ -1277,8 +1474,14 @@ class _WorkoutSessionScreenState extends State<WorkoutSessionScreen> {
               SizedBox(
                 width: double.infinity,
                 child: ElevatedButton(
-                  onPressed: () =>
-                      setState(() => _state = _SessionState.activeSet),
+                  onPressed: () {
+                    setState(() {
+                      _demoLoopCount = 0;
+                      _demoPipExpanded = false;
+                      _state = _SessionState.demo;
+                    });
+                    _demoController.forward(from: 0.0);
+                  },
                   style: ElevatedButton.styleFrom(
                     backgroundColor: AppColors.primaryLemonDark,
                     padding: const EdgeInsets.symmetric(vertical: 18),
@@ -1300,6 +1503,108 @@ class _WorkoutSessionScreenState extends State<WorkoutSessionScreen> {
           ),
         ),
       ],
+    );
+  }
+
+  // ── Demo view ──────────────────────────────────────────────────────────────
+
+  Widget _buildDemo() {
+    final exercise = _currentExercise;
+    final isSide = exercise.poseType == PoseType.pushup;
+    final cue = _beginnerCue(exercise.poseType);
+    return AnimatedBuilder(
+      animation: _demoController,
+      builder: (context, _) {
+        final pose = _getDemoPose(_demoController.value, _demoLoopCount);
+        return Container(
+          color: const Color(0xFF0D0D1A),
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              // Stick figure — centred in a portrait aspect-ratio canvas
+              Center(
+                child: AspectRatio(
+                  aspectRatio: 0.65,
+                  child: CustomPaint(
+                    painter: _StickFigurePainter(pose: pose, view: isSide
+                        ? _StickFigureView.side
+                        : _StickFigureView.front),
+                  ),
+                ),
+              ),
+              // Loop counter — top left
+              Positioned(
+                top: 20,
+                left: 16,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 12, vertical: 6),
+                  decoration: BoxDecoration(
+                    color: Colors.white12,
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: Text(
+                    'Demo ${_demoLoopCount + 1}/3',
+                    style: const TextStyle(
+                      color: Colors.white70,
+                      fontSize: 13,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                ),
+              ),
+              // Exercise name — top centre
+              Positioned(
+                top: 22,
+                left: 72,
+                right: 16,
+                child: Text(
+                  exercise.name,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 20,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ),
+              // Beginner cue — lower centre
+              Positioned(
+                bottom: 100,
+                left: 32,
+                right: 32,
+                child: Text(
+                  cue,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                    color: Colors.white70,
+                    fontSize: 14,
+                    height: 1.45,
+                  ),
+                ),
+              ),
+              // Skip button
+              Positioned(
+                bottom: 44,
+                left: 32,
+                right: 32,
+                child: TextButton(
+                  onPressed: _skipDemo,
+                  child: const Text(
+                    'Skip Demo',
+                    style: TextStyle(
+                      color: Colors.white38,
+                      fontSize: 16,
+                      decoration: TextDecoration.underline,
+                      decorationColor: Colors.white38,
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
     );
   }
 
@@ -1427,6 +1732,52 @@ class _WorkoutSessionScreenState extends State<WorkoutSessionScreen> {
               ),
             ],
           ),
+        ),
+        // ── Demo PiP — stick-figure mini window (top-right) ──────────────────
+        AnimatedBuilder(
+          animation: _demoController,
+          builder: (context, _) {
+            final pipPose = _getDemoPose(_demoController.value, _pipLoopCount);
+            final isSide = exercise.poseType == PoseType.pushup;
+            final painter = _StickFigurePainter(
+              pose: pipPose,
+              view: isSide ? _StickFigureView.side : _StickFigureView.front,
+            );
+            if (_demoPipExpanded) {
+              // Full-screen overlay — tap to collapse
+              return Positioned.fill(
+                child: GestureDetector(
+                  onTap: () => setState(() => _demoPipExpanded = false),
+                  child: Container(
+                    color: const Color(0xCC0D0D1A),
+                    child: Center(
+                      child: AspectRatio(
+                        aspectRatio: 0.65,
+                        child: CustomPaint(painter: painter),
+                      ),
+                    ),
+                  ),
+                ),
+              );
+            }
+            // Compact PiP — tap to expand
+            return Positioned(
+              top: 80,   // below exercise info bar (~70 px)
+              right: 16,
+              child: GestureDetector(
+                onTap: () => setState(() => _demoPipExpanded = true),
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(10),
+                  child: Container(
+                    width: 88,
+                    height: 118,
+                    color: const Color(0xE60D0D1A),
+                    child: CustomPaint(painter: painter),
+                  ),
+                ),
+              ),
+            );
+          },
         ),
       ],
     );
@@ -1851,6 +2202,90 @@ class _PosePainter extends CustomPainter {
   @override
   bool shouldRepaint(_PosePainter old) =>
       old.pose != pose || old.badLandmarks != badLandmarks;
+}
+
+// ─── Stick-figure demo painter ────────────────────────────────────────────────
+
+class _StickFigurePainter extends CustomPainter {
+  final _PoseMap pose;
+  final _StickFigureView view;
+
+  // Bone connections for front-view (bilateral) figures.
+  static const _frontBones = [
+    ('head',      'neck'),
+    ('neck',      'lShoulder'),
+    ('neck',      'rShoulder'),
+    ('lShoulder', 'rShoulder'),
+    ('lShoulder', 'lElbow'),
+    ('lElbow',    'lWrist'),
+    ('rShoulder', 'rElbow'),
+    ('rElbow',    'rWrist'),
+    ('lShoulder', 'lHip'),
+    ('rShoulder', 'rHip'),
+    ('lHip',      'rHip'),
+    ('lHip',      'lKnee'),
+    ('lKnee',     'lAnkle'),
+    ('rHip',      'rKnee'),
+    ('rKnee',     'rAnkle'),
+  ];
+
+  // Bone connections for side-view (push-up) figures.
+  static const _sideBones = [
+    ('head',     'neck'),
+    ('neck',     'shoulder'),
+    ('shoulder', 'elbow'),
+    ('elbow',    'wrist'),
+    ('neck',     'hip'),
+    ('hip',      'knee'),
+    ('knee',     'ankle'),
+  ];
+
+  const _StickFigurePainter({required this.pose, required this.view});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final bonePaint = Paint()
+      ..color = Colors.white
+      ..strokeWidth = 3.0
+      ..strokeCap = StrokeCap.round
+      ..style = PaintingStyle.stroke;
+
+    final jointPaint = Paint()
+      ..color = const Color(0xFFFFD700) // amber-yellow
+      ..style = PaintingStyle.fill;
+
+    // Converts normalised joint offset to canvas pixel position.
+    Offset px(String key) {
+      final o = pose[key]!;
+      return Offset(o.dx * size.width, o.dy * size.height);
+    }
+
+    final bones = view == _StickFigureView.front ? _frontBones : _sideBones;
+
+    // Draw bones (white lines).
+    for (final (a, b) in bones) {
+      if (!pose.containsKey(a) || !pose.containsKey(b)) continue;
+      canvas.drawLine(px(a), px(b), bonePaint);
+    }
+
+    // Draw joints (yellow filled circles) for every key except head.
+    for (final key in pose.keys) {
+      if (key == 'head') continue;
+      canvas.drawCircle(px(key), 5.0, jointPaint);
+    }
+
+    // Draw head as a white hollow circle (ring + dark fill).
+    if (pose.containsKey('head')) {
+      final c = px('head');
+      canvas.drawCircle(c, 11.0,
+          Paint()..color = Colors.white..style = PaintingStyle.fill);
+      canvas.drawCircle(c, 8.0,
+          Paint()..color = const Color(0xFF0D0D1A)..style = PaintingStyle.fill);
+    }
+  }
+
+  @override
+  bool shouldRepaint(_StickFigurePainter old) => true;
 }
 
 // ─── Stat widget for complete view ────────────────────────────────────────────
