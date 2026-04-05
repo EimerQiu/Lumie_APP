@@ -93,7 +93,8 @@ class _WorkoutSessionScreenState extends State<WorkoutSessionScreen>
   double _baselineKneeSepAcc = 0;
   double _baselineShoulderSepAcc = 0;
   int _baselineSampleCount = 0;
-  int _baselineShoulderHipSampleCount = 0; // shoulder+hip-only samples (for push-up)
+  int _baselineShoulderHipSampleCount =
+      0; // shoulder+hip-only samples (for push-up)
   bool _frontBaselineCaptured = false;
   bool _frontFullBaselineCaptured = false; // shoulder+hip+knee all captured
   // Finalized baseline values.
@@ -112,8 +113,8 @@ class _WorkoutSessionScreenState extends State<WorkoutSessionScreen>
 
   // ── Demo / Stick-figure animation ─────────────────────────────────────────
   late final AnimationController _demoController;
-  int _demoLoopCount = 0;        // 0-based; display as +1; triggers transition at 3
-  int _pipLoopCount = 0;         // no setState; PiP lunge leg alternation only
+  int _demoLoopCount = 0; // 0-based; display as +1; triggers transition at 3
+  int _pipLoopCount = 0; // no setState; PiP lunge leg alternation only
   bool _demoPipExpanded = false; // tap-to-expand PiP overlay
 
   static const int _minRepMillis = 1000; // minimum ms for a valid rep cycle
@@ -132,31 +133,44 @@ class _WorkoutSessionScreenState extends State<WorkoutSessionScreen>
   // Required landmarks per exercise type — ≥ 50% must have likelihood ≥ 0.4.
   static const Map<PoseType, List<PoseLandmarkType>> _requiredLandmarks = {
     PoseType.squat: [
-      PoseLandmarkType.leftHip, PoseLandmarkType.leftKnee,
-      PoseLandmarkType.leftAnkle, PoseLandmarkType.rightHip,
-      PoseLandmarkType.rightKnee, PoseLandmarkType.rightAnkle,
+      PoseLandmarkType.leftHip,
+      PoseLandmarkType.leftKnee,
+      PoseLandmarkType.leftAnkle,
+      PoseLandmarkType.rightHip,
+      PoseLandmarkType.rightKnee,
+      PoseLandmarkType.rightAnkle,
     ],
     PoseType.lunge: [
-      PoseLandmarkType.leftHip, PoseLandmarkType.leftKnee,
-      PoseLandmarkType.leftAnkle, PoseLandmarkType.rightHip,
-      PoseLandmarkType.rightKnee, PoseLandmarkType.rightAnkle,
+      PoseLandmarkType.leftHip,
+      PoseLandmarkType.leftKnee,
+      PoseLandmarkType.leftAnkle,
+      PoseLandmarkType.rightHip,
+      PoseLandmarkType.rightKnee,
+      PoseLandmarkType.rightAnkle,
     ],
     PoseType.pushup: [
-      PoseLandmarkType.leftShoulder, PoseLandmarkType.leftElbow,
-      PoseLandmarkType.leftWrist, PoseLandmarkType.rightShoulder,
-      PoseLandmarkType.rightElbow, PoseLandmarkType.rightWrist,
-      PoseLandmarkType.leftHip, PoseLandmarkType.rightHip,
+      PoseLandmarkType.leftShoulder,
+      PoseLandmarkType.leftElbow,
+      PoseLandmarkType.leftWrist,
+      PoseLandmarkType.rightShoulder,
+      PoseLandmarkType.rightElbow,
+      PoseLandmarkType.rightWrist,
+      PoseLandmarkType.leftHip,
+      PoseLandmarkType.rightHip,
     ],
     PoseType.curl: [
-      PoseLandmarkType.rightShoulder, PoseLandmarkType.rightElbow,
+      PoseLandmarkType.rightShoulder,
+      PoseLandmarkType.rightElbow,
       PoseLandmarkType.rightWrist,
     ],
     PoseType.shoulderPress: [
-      PoseLandmarkType.rightShoulder, PoseLandmarkType.rightElbow,
+      PoseLandmarkType.rightShoulder,
+      PoseLandmarkType.rightElbow,
       PoseLandmarkType.rightWrist,
     ],
     PoseType.generic: [
-      PoseLandmarkType.rightShoulder, PoseLandmarkType.rightHip,
+      PoseLandmarkType.rightShoulder,
+      PoseLandmarkType.rightHip,
       PoseLandmarkType.rightKnee,
     ],
   };
@@ -166,94 +180,94 @@ class _WorkoutSessionScreenState extends State<WorkoutSessionScreen>
   // ── Stick-figure keyframes (normalized 0.0–1.0) ────────────────────────────
 
   static const _squatStand = <String, Offset>{
-    'head':      Offset(0.50, 0.07),
-    'neck':      Offset(0.50, 0.15),
+    'head': Offset(0.50, 0.07),
+    'neck': Offset(0.50, 0.15),
     'lShoulder': Offset(0.36, 0.22),
     'rShoulder': Offset(0.64, 0.22),
-    'lElbow':    Offset(0.30, 0.36),
-    'rElbow':    Offset(0.70, 0.36),
-    'lWrist':    Offset(0.34, 0.50),
-    'rWrist':    Offset(0.66, 0.50),
-    'lHip':      Offset(0.42, 0.52),
-    'rHip':      Offset(0.58, 0.52),
-    'lKnee':     Offset(0.42, 0.71),
-    'rKnee':     Offset(0.58, 0.71),
-    'lAnkle':    Offset(0.42, 0.93),
-    'rAnkle':    Offset(0.58, 0.93),
+    'lElbow': Offset(0.30, 0.36),
+    'rElbow': Offset(0.70, 0.36),
+    'lWrist': Offset(0.34, 0.50),
+    'rWrist': Offset(0.66, 0.50),
+    'lHip': Offset(0.42, 0.52),
+    'rHip': Offset(0.58, 0.52),
+    'lKnee': Offset(0.42, 0.71),
+    'rKnee': Offset(0.58, 0.71),
+    'lAnkle': Offset(0.42, 0.93),
+    'rAnkle': Offset(0.58, 0.93),
   };
 
   static const _squatBottom = <String, Offset>{
-    'head':      Offset(0.50, 0.21),
-    'neck':      Offset(0.50, 0.29),
+    'head': Offset(0.50, 0.21),
+    'neck': Offset(0.50, 0.29),
     'lShoulder': Offset(0.37, 0.35),
     'rShoulder': Offset(0.63, 0.35),
-    'lElbow':    Offset(0.27, 0.50),
-    'rElbow':    Offset(0.73, 0.50),
-    'lWrist':    Offset(0.30, 0.62),
-    'rWrist':    Offset(0.70, 0.62),
-    'lHip':      Offset(0.40, 0.66),
-    'rHip':      Offset(0.60, 0.66),
-    'lKnee':     Offset(0.33, 0.74),
-    'rKnee':     Offset(0.67, 0.74),
-    'lAnkle':    Offset(0.42, 0.93),
-    'rAnkle':    Offset(0.58, 0.93),
+    'lElbow': Offset(0.27, 0.50),
+    'rElbow': Offset(0.73, 0.50),
+    'lWrist': Offset(0.30, 0.62),
+    'rWrist': Offset(0.70, 0.62),
+    'lHip': Offset(0.40, 0.66),
+    'rHip': Offset(0.60, 0.66),
+    'lKnee': Offset(0.33, 0.74),
+    'rKnee': Offset(0.67, 0.74),
+    'lAnkle': Offset(0.42, 0.93),
+    'rAnkle': Offset(0.58, 0.93),
   };
 
   static const _pushUpTop = <String, Offset>{
-    'head':     Offset(0.10, 0.34),
-    'neck':     Offset(0.18, 0.40),
+    'head': Offset(0.10, 0.34),
+    'neck': Offset(0.18, 0.40),
     'shoulder': Offset(0.26, 0.46),
-    'elbow':    Offset(0.30, 0.62),
-    'wrist':    Offset(0.23, 0.72),
-    'hip':      Offset(0.57, 0.48),
-    'knee':     Offset(0.74, 0.50),
-    'ankle':    Offset(0.88, 0.52),
+    'elbow': Offset(0.30, 0.62),
+    'wrist': Offset(0.23, 0.72),
+    'hip': Offset(0.57, 0.48),
+    'knee': Offset(0.74, 0.50),
+    'ankle': Offset(0.88, 0.52),
   };
 
   static const _pushUpBottom = <String, Offset>{
-    'head':     Offset(0.10, 0.51),
-    'neck':     Offset(0.18, 0.57),
+    'head': Offset(0.10, 0.51),
+    'neck': Offset(0.18, 0.57),
     'shoulder': Offset(0.26, 0.63),
-    'elbow':    Offset(0.38, 0.69),
-    'wrist':    Offset(0.23, 0.74),
-    'hip':      Offset(0.57, 0.66),
-    'knee':     Offset(0.74, 0.68),
-    'ankle':    Offset(0.88, 0.70),
+    'elbow': Offset(0.38, 0.69),
+    'wrist': Offset(0.23, 0.74),
+    'hip': Offset(0.57, 0.66),
+    'knee': Offset(0.74, 0.68),
+    'ankle': Offset(0.88, 0.70),
   };
 
   // Lunge standing = squat standing (same upright front-view position).
   static const _lungeLeftBottom = <String, Offset>{
-    'head':      Offset(0.50, 0.09),
-    'neck':      Offset(0.50, 0.17),
+    'head': Offset(0.50, 0.09),
+    'neck': Offset(0.50, 0.17),
     'lShoulder': Offset(0.36, 0.24),
     'rShoulder': Offset(0.64, 0.24),
-    'lElbow':    Offset(0.30, 0.37),
-    'rElbow':    Offset(0.70, 0.37),
-    'lWrist':    Offset(0.34, 0.50),
-    'rWrist':    Offset(0.66, 0.50),
-    'lHip':      Offset(0.44, 0.56),
-    'rHip':      Offset(0.56, 0.56),
-    'lKnee':     Offset(0.38, 0.72),
-    'rKnee':     Offset(0.57, 0.84),
-    'lAnkle':    Offset(0.34, 0.88),
-    'rAnkle':    Offset(0.60, 0.96),
+    'lElbow': Offset(0.30, 0.37),
+    'rElbow': Offset(0.70, 0.37),
+    'lWrist': Offset(0.34, 0.50),
+    'rWrist': Offset(0.66, 0.50),
+    'lHip': Offset(0.44, 0.56),
+    'rHip': Offset(0.56, 0.56),
+    'lKnee': Offset(0.38, 0.72),
+    'rKnee': Offset(0.57, 0.84),
+    'lAnkle': Offset(0.34, 0.88),
+    'rAnkle': Offset(0.60, 0.96),
   };
 
   static const _lungeRightBottom = <String, Offset>{
-    'head':      Offset(0.50, 0.09),
-    'neck':      Offset(0.50, 0.17),
+    'head': Offset(0.50, 0.09),
+    'neck': Offset(0.50, 0.17),
     'lShoulder': Offset(0.36, 0.24),
     'rShoulder': Offset(0.64, 0.24),
-    'lElbow':    Offset(0.30, 0.37),
-    'rElbow':    Offset(0.70, 0.37),
-    'lWrist':    Offset(0.34, 0.50),
-    'rWrist':    Offset(0.66, 0.50),
-    'lHip':      Offset(0.44, 0.56),
-    'rHip':      Offset(0.56, 0.56),
-    'lKnee':     Offset(0.43, 0.84),
-    'rKnee':     Offset(0.62, 0.72),
-    'lAnkle':    Offset(0.40, 0.96),
-    'rAnkle':    Offset(0.66, 0.88),
+    'lElbow': Offset(0.30, 0.37),
+    'rElbow': Offset(0.70, 0.37),
+    'lWrist': Offset(0.34, 0.50),
+    'rWrist': Offset(0.66, 0.50),
+    'lHip': Offset(0.44, 0.56),
+    'rHip': Offset(0.56, 0.56),
+    'lKnee': Offset(0.43, 0.84),
+    'rKnee': Offset(0.62, 0.72),
+    'lAnkle': Offset(0.40, 0.96),
+    'rAnkle': Offset(0.66, 0.88),
   };
 
   // ── Lifecycle ─────────────────────────────────────────────────────────────
@@ -417,8 +431,10 @@ class _WorkoutSessionScreenState extends State<WorkoutSessionScreen>
     final lm = pose.landmarks;
     final ls = lm[PoseLandmarkType.leftShoulder];
     final rs = lm[PoseLandmarkType.rightShoulder];
-    if (ls == null || rs == null ||
-        ls.likelihood < 0.4 || rs.likelihood < 0.4) {
+    if (ls == null ||
+        rs == null ||
+        ls.likelihood < 0.4 ||
+        rs.likelihood < 0.4) {
       return _CameraOrientation.front;
     }
     // Wide shoulder separation → front view.
@@ -429,18 +445,28 @@ class _WorkoutSessionScreenState extends State<WorkoutSessionScreen>
     double leftSum = 0, rightSum = 0;
     int leftN = 0, rightN = 0;
     for (final t in [
-      PoseLandmarkType.leftShoulder, PoseLandmarkType.leftHip,
-      PoseLandmarkType.leftKnee, PoseLandmarkType.leftAnkle,
+      PoseLandmarkType.leftShoulder,
+      PoseLandmarkType.leftHip,
+      PoseLandmarkType.leftKnee,
+      PoseLandmarkType.leftAnkle,
     ]) {
       final l = lm[t];
-      if (l != null) { leftSum += l.likelihood; leftN++; }
+      if (l != null) {
+        leftSum += l.likelihood;
+        leftN++;
+      }
     }
     for (final t in [
-      PoseLandmarkType.rightShoulder, PoseLandmarkType.rightHip,
-      PoseLandmarkType.rightKnee, PoseLandmarkType.rightAnkle,
+      PoseLandmarkType.rightShoulder,
+      PoseLandmarkType.rightHip,
+      PoseLandmarkType.rightKnee,
+      PoseLandmarkType.rightAnkle,
     ]) {
       final l = lm[t];
-      if (l != null) { rightSum += l.likelihood; rightN++; }
+      if (l != null) {
+        rightSum += l.likelihood;
+        rightN++;
+      }
     }
     final leftAvg = leftN > 0 ? leftSum / leftN : 0.0;
     final rightAvg = rightN > 0 ? rightSum / rightN : 0.0;
@@ -477,7 +503,9 @@ class _WorkoutSessionScreenState extends State<WorkoutSessionScreen>
       if (_orientationFrameCount >= _orientationLockFrames) {
         _orientationLocked = true;
         // Finalize if any shoulder+hip samples collected
-        if (_baselineShoulderHipSampleCount > 0) { _finalizeFrontBaseline(); }
+        if (_baselineShoulderHipSampleCount > 0) {
+          _finalizeFrontBaseline();
+        }
       }
       // Still allow rep detection while sampling; orientation will converge.
     } else if (_repDown) {
@@ -533,23 +561,28 @@ class _WorkoutSessionScreenState extends State<WorkoutSessionScreen>
     final lh = lm[PoseLandmarkType.leftHip];
     final rh = lm[PoseLandmarkType.rightHip];
     if (ls == null || rs == null || lh == null || rh == null) return;
-    if (ls.likelihood < 0.4 || rs.likelihood < 0.4 ||
-        lh.likelihood < 0.4 || rh.likelihood < 0.4) return;
+    if (ls.likelihood < 0.4 ||
+        rs.likelihood < 0.4 ||
+        lh.likelihood < 0.4 ||
+        rh.likelihood < 0.4)
+      return;
 
     // Shoulder+hip tier — always sample (needed for push-up and all exercises)
     _baselineShoulderMidYAcc += (ls.y + rs.y) / 2;
-    _baselineHipMidYAcc      += (lh.y + rh.y) / 2;
-    _baselineShoulderSepAcc  += (ls.x - rs.x).abs();
+    _baselineHipMidYAcc += (lh.y + rh.y) / 2;
+    _baselineShoulderSepAcc += (ls.x - rs.x).abs();
     _baselineShoulderHipSampleCount++;
 
     // Full tier — knees required for squat/lunge
     final lk = lm[PoseLandmarkType.leftKnee];
     final rk = lm[PoseLandmarkType.rightKnee];
-    if (lk != null && rk != null &&
-        lk.likelihood >= 0.4 && rk.likelihood >= 0.4) {
-      _baselineKneeLeftYAcc  += lk.y;
+    if (lk != null &&
+        rk != null &&
+        lk.likelihood >= 0.4 &&
+        rk.likelihood >= 0.4) {
+      _baselineKneeLeftYAcc += lk.y;
       _baselineKneeRightYAcc += rk.y;
-      _baselineKneeSepAcc    += (lk.x - rk.x).abs();
+      _baselineKneeSepAcc += (lk.x - rk.x).abs();
       _baselineSampleCount++;
     }
   }
@@ -559,16 +592,16 @@ class _WorkoutSessionScreenState extends State<WorkoutSessionScreen>
     if (_baselineShoulderHipSampleCount > 0) {
       final n = _baselineShoulderHipSampleCount.toDouble();
       _baselineShoulderMidY = _baselineShoulderMidYAcc / n;
-      _baselineHipMidY      = _baselineHipMidYAcc / n;
-      _baselineShoulderSep  = _baselineShoulderSepAcc / n;
+      _baselineHipMidY = _baselineHipMidYAcc / n;
+      _baselineShoulderSep = _baselineShoulderSepAcc / n;
       _frontBaselineCaptured = true;
     }
     // Finalize full tier — knees required for squat/lunge
     if (_baselineSampleCount > 0) {
       final n = _baselineSampleCount.toDouble();
-      _baselineKneeLeftY  = _baselineKneeLeftYAcc / n;
+      _baselineKneeLeftY = _baselineKneeLeftYAcc / n;
       _baselineKneeRightY = _baselineKneeRightYAcc / n;
-      _baselineKneeSep    = _baselineKneeSepAcc / n;
+      _baselineKneeSep = _baselineKneeSepAcc / n;
       _frontFullBaselineCaptured = true;
     }
   }
@@ -586,40 +619,54 @@ class _WorkoutSessionScreenState extends State<WorkoutSessionScreen>
     double? leftKnee, rightKnee;
     switch (_orientation) {
       case _CameraOrientation.leftSide:
-        final a = _angle(lm[PoseLandmarkType.leftHip],
-            lm[PoseLandmarkType.leftKnee], lm[PoseLandmarkType.leftAnkle]);
+        final a = _angle(
+          lm[PoseLandmarkType.leftHip],
+          lm[PoseLandmarkType.leftKnee],
+          lm[PoseLandmarkType.leftAnkle],
+        );
         if (a == null) return;
         leftKnee = rightKnee = a;
       case _CameraOrientation.rightSide:
-        final a = _angle(lm[PoseLandmarkType.rightHip],
-            lm[PoseLandmarkType.rightKnee], lm[PoseLandmarkType.rightAnkle]);
+        final a = _angle(
+          lm[PoseLandmarkType.rightHip],
+          lm[PoseLandmarkType.rightKnee],
+          lm[PoseLandmarkType.rightAnkle],
+        );
         if (a == null) return;
         leftKnee = rightKnee = a;
       case _CameraOrientation.front:
-        leftKnee = _angle(lm[PoseLandmarkType.leftHip],
-            lm[PoseLandmarkType.leftKnee], lm[PoseLandmarkType.leftAnkle]);
-        rightKnee = _angle(lm[PoseLandmarkType.rightHip],
-            lm[PoseLandmarkType.rightKnee], lm[PoseLandmarkType.rightAnkle]);
+        leftKnee = _angle(
+          lm[PoseLandmarkType.leftHip],
+          lm[PoseLandmarkType.leftKnee],
+          lm[PoseLandmarkType.leftAnkle],
+        );
+        rightKnee = _angle(
+          lm[PoseLandmarkType.rightHip],
+          lm[PoseLandmarkType.rightKnee],
+          lm[PoseLandmarkType.rightAnkle],
+        );
         if (leftKnee == null || rightKnee == null) return;
     }
 
     final avgKnee = (leftKnee + rightKnee) / 2;
     final atDepth = leftKnee <= 100 && rightKnee <= 100;
-    final atTop   = leftKnee >= 155 && rightKnee >= 155;
+    final atTop = leftKnee >= 155 && rightKnee >= 155;
 
     // Torso lean: approximate angle of spine from vertical in image plane.
     // Use visible-side landmarks based on orientation.
     bool torsoOk = true;
     final useLeft = _orientation != _CameraOrientation.rightSide;
     final useRight = _orientation != _CameraOrientation.leftSide;
-    final lHip = useLeft  ? lm[PoseLandmarkType.leftHip]      : null;
-    final rHip = useRight ? lm[PoseLandmarkType.rightHip]     : null;
-    final lSh  = useLeft  ? lm[PoseLandmarkType.leftShoulder]  : null;
-    final rSh  = useRight ? lm[PoseLandmarkType.rightShoulder] : null;
-    final hipRef      = lHip ?? rHip;
-    final shoulderRef = lSh  ?? rSh;
-    if (hipRef != null && shoulderRef != null &&
-        hipRef.likelihood >= 0.4 && shoulderRef.likelihood >= 0.4) {
+    final lHip = useLeft ? lm[PoseLandmarkType.leftHip] : null;
+    final rHip = useRight ? lm[PoseLandmarkType.rightHip] : null;
+    final lSh = useLeft ? lm[PoseLandmarkType.leftShoulder] : null;
+    final rSh = useRight ? lm[PoseLandmarkType.rightShoulder] : null;
+    final hipRef = lHip ?? rHip;
+    final shoulderRef = lSh ?? rSh;
+    if (hipRef != null &&
+        shoulderRef != null &&
+        hipRef.likelihood >= 0.4 &&
+        shoulderRef.likelihood >= 0.4) {
       final dx = (shoulderRef.x - hipRef.x).abs();
       final dy = (hipRef.y - shoulderRef.y).abs();
       final lean = dy > 0 ? atan(dx / dy) * 180 / pi : 90.0;
@@ -628,18 +675,22 @@ class _WorkoutSessionScreenState extends State<WorkoutSessionScreen>
 
     // Knee-over-ankle tracking (only reliable in front view).
     bool kneesTracking = true;
-    if (_orientation == _CameraOrientation.front &&
-        _imageSize != Size.zero) {
-      final lKneeLm  = lm[PoseLandmarkType.leftKnee];
+    if (_orientation == _CameraOrientation.front && _imageSize != Size.zero) {
+      final lKneeLm = lm[PoseLandmarkType.leftKnee];
       final lAnkleLm = lm[PoseLandmarkType.leftAnkle];
-      final rKneeLm  = lm[PoseLandmarkType.rightKnee];
+      final rKneeLm = lm[PoseLandmarkType.rightKnee];
       final rAnkleLm = lm[PoseLandmarkType.rightAnkle];
-      if (lKneeLm != null && lAnkleLm != null &&
-          rKneeLm != null && rAnkleLm != null &&
-          lKneeLm.likelihood >= 0.4 && lAnkleLm.likelihood >= 0.4 &&
-          rKneeLm.likelihood >= 0.4 && rAnkleLm.likelihood >= 0.4) {
+      if (lKneeLm != null &&
+          lAnkleLm != null &&
+          rKneeLm != null &&
+          rAnkleLm != null &&
+          lKneeLm.likelihood >= 0.4 &&
+          lAnkleLm.likelihood >= 0.4 &&
+          rKneeLm.likelihood >= 0.4 &&
+          rAnkleLm.likelihood >= 0.4) {
         final threshold = _imageSize.width * 0.10;
-        kneesTracking = (lKneeLm.x - lAnkleLm.x).abs() <= threshold &&
+        kneesTracking =
+            (lKneeLm.x - lAnkleLm.x).abs() <= threshold &&
             (rKneeLm.x - rAnkleLm.x).abs() <= threshold;
       }
     }
@@ -662,17 +713,22 @@ class _WorkoutSessionScreenState extends State<WorkoutSessionScreen>
     // Feedback + red-highlight affected joints.
     if (!torsoOk) {
       _setFeedback('Keep your chest up', false, {
-        PoseLandmarkType.leftShoulder, PoseLandmarkType.rightShoulder,
-        PoseLandmarkType.leftHip, PoseLandmarkType.rightHip,
+        PoseLandmarkType.leftShoulder,
+        PoseLandmarkType.rightShoulder,
+        PoseLandmarkType.leftHip,
+        PoseLandmarkType.rightHip,
       });
     } else if (!kneesTracking) {
       _setFeedback('Keep your knees over your toes', false, {
-        PoseLandmarkType.leftKnee, PoseLandmarkType.leftAnkle,
-        PoseLandmarkType.rightKnee, PoseLandmarkType.rightAnkle,
+        PoseLandmarkType.leftKnee,
+        PoseLandmarkType.leftAnkle,
+        PoseLandmarkType.rightKnee,
+        PoseLandmarkType.rightAnkle,
       });
     } else if (!atDepth && avgKnee < 155 && avgKnee > 100) {
       _setFeedback('Lower your hips more', false, {
-        PoseLandmarkType.leftKnee, PoseLandmarkType.rightKnee,
+        PoseLandmarkType.leftKnee,
+        PoseLandmarkType.rightKnee,
       });
     } else if (atDepth) {
       _setFeedback('Good depth — drive through your heels', true);
@@ -693,11 +749,18 @@ class _WorkoutSessionScreenState extends State<WorkoutSessionScreen>
     final rh = lm[PoseLandmarkType.rightHip];
     final lk = lm[PoseLandmarkType.leftKnee];
     final rk = lm[PoseLandmarkType.rightKnee];
-    if (ls == null || rs == null || lh == null || rh == null ||
-        lk == null || rk == null ||
-        ls.likelihood < 0.4 || rs.likelihood < 0.4 ||
-        lh.likelihood < 0.4 || rh.likelihood < 0.4 ||
-        lk.likelihood < 0.4 || rk.likelihood < 0.4) {
+    if (ls == null ||
+        rs == null ||
+        lh == null ||
+        rh == null ||
+        lk == null ||
+        rk == null ||
+        ls.likelihood < 0.4 ||
+        rs.likelihood < 0.4 ||
+        lh.likelihood < 0.4 ||
+        rh.likelihood < 0.4 ||
+        lk.likelihood < 0.4 ||
+        rk.likelihood < 0.4) {
       _setFeedback('Make sure your full body is visible to the camera', false);
       return;
     }
@@ -705,17 +768,19 @@ class _WorkoutSessionScreenState extends State<WorkoutSessionScreen>
     final h = _imageSize.height;
     final w = _imageSize.width;
     final shoulderMidY = (ls.y + rs.y) / 2;
-    final hipMidY      = (lh.y + rh.y) / 2;
-    final kneeSep      = (lk.x - rk.x).abs();
+    final hipMidY = (lh.y + rh.y) / 2;
+    final kneeSep = (lk.x - rk.x).abs();
 
     final shoulderDrop = shoulderMidY - _baselineShoulderMidY;
-    final hipDrop      = hipMidY - _baselineHipMidY;
-    final kneeExpand   = kneeSep - _baselineKneeSep;
+    final hipDrop = hipMidY - _baselineHipMidY;
+    final kneeExpand = kneeSep - _baselineKneeSep;
 
-    final atDepth = shoulderDrop >= 0.15 * h &&
+    final atDepth =
+        shoulderDrop >= 0.15 * h &&
         hipDrop >= 0.10 * h &&
         kneeExpand >= 0.05 * w;
-    final atTop = shoulderMidY <= _baselineShoulderMidY + 0.05 * h &&
+    final atTop =
+        shoulderMidY <= _baselineShoulderMidY + 0.05 * h &&
         hipMidY <= _baselineHipMidY + 0.05 * h;
 
     // Optional supporting signal: knee angle when confidence is sufficient
@@ -723,8 +788,11 @@ class _WorkoutSessionScreenState extends State<WorkoutSessionScreen>
     final ra = lm[PoseLandmarkType.rightAnkle];
     final lKneeAngle = _angle(lh, lk, la);
     final rKneeAngle = _angle(rh, rk, ra);
-    final kneeAngleConfirmsDepth = lKneeAngle != null && rKneeAngle != null &&
-        lKneeAngle <= 100 && rKneeAngle <= 100;
+    final kneeAngleConfirmsDepth =
+        lKneeAngle != null &&
+        rKneeAngle != null &&
+        lKneeAngle <= 100 &&
+        rKneeAngle <= 100;
 
     // Torso lean check.
     bool torsoOk = true;
@@ -735,11 +803,13 @@ class _WorkoutSessionScreenState extends State<WorkoutSessionScreen>
 
     // Knee-over-ankle (front view).
     bool kneesTracking = true;
-    if (la != null && ra != null &&
-        la.likelihood >= 0.4 && ra.likelihood >= 0.4) {
+    if (la != null &&
+        ra != null &&
+        la.likelihood >= 0.4 &&
+        ra.likelihood >= 0.4) {
       final threshold = w * 0.10;
-      kneesTracking = (lk.x - la.x).abs() <= threshold &&
-          (rk.x - ra.x).abs() <= threshold;
+      kneesTracking =
+          (lk.x - la.x).abs() <= threshold && (rk.x - ra.x).abs() <= threshold;
     }
 
     if (!_repDown && atDepth) {
@@ -758,13 +828,17 @@ class _WorkoutSessionScreenState extends State<WorkoutSessionScreen>
 
     if (!torsoOk) {
       _setFeedback('Keep your chest up', false, {
-        PoseLandmarkType.leftShoulder, PoseLandmarkType.rightShoulder,
-        PoseLandmarkType.leftHip, PoseLandmarkType.rightHip,
+        PoseLandmarkType.leftShoulder,
+        PoseLandmarkType.rightShoulder,
+        PoseLandmarkType.leftHip,
+        PoseLandmarkType.rightHip,
       });
     } else if (!kneesTracking) {
       _setFeedback('Keep your knees over your toes', false, {
-        PoseLandmarkType.leftKnee, PoseLandmarkType.leftAnkle,
-        PoseLandmarkType.rightKnee, PoseLandmarkType.rightAnkle,
+        PoseLandmarkType.leftKnee,
+        PoseLandmarkType.leftAnkle,
+        PoseLandmarkType.rightKnee,
+        PoseLandmarkType.rightAnkle,
       });
     } else if (atDepth) {
       _setFeedback('Good depth — drive through your heels', true);
@@ -772,7 +846,8 @@ class _WorkoutSessionScreenState extends State<WorkoutSessionScreen>
       _setFeedback('Good depth — drive through your heels', true);
     } else if (shoulderDrop >= 0.05 * h) {
       _setFeedback('Lower your hips more', false, {
-        PoseLandmarkType.leftKnee, PoseLandmarkType.rightKnee,
+        PoseLandmarkType.leftKnee,
+        PoseLandmarkType.rightKnee,
       });
     } else {
       _setFeedback('Good form ✓', true);
@@ -792,16 +867,28 @@ class _WorkoutSessionScreenState extends State<WorkoutSessionScreen>
     double? elbowA, elbowB;
     switch (_orientation) {
       case _CameraOrientation.leftSide:
-        elbowA = elbowB = _angle(lm[PoseLandmarkType.leftShoulder],
-            lm[PoseLandmarkType.leftElbow], lm[PoseLandmarkType.leftWrist]);
+        elbowA = elbowB = _angle(
+          lm[PoseLandmarkType.leftShoulder],
+          lm[PoseLandmarkType.leftElbow],
+          lm[PoseLandmarkType.leftWrist],
+        );
       case _CameraOrientation.rightSide:
-        elbowA = elbowB = _angle(lm[PoseLandmarkType.rightShoulder],
-            lm[PoseLandmarkType.rightElbow], lm[PoseLandmarkType.rightWrist]);
+        elbowA = elbowB = _angle(
+          lm[PoseLandmarkType.rightShoulder],
+          lm[PoseLandmarkType.rightElbow],
+          lm[PoseLandmarkType.rightWrist],
+        );
       case _CameraOrientation.front:
-        final l = _angle(lm[PoseLandmarkType.leftShoulder],
-            lm[PoseLandmarkType.leftElbow], lm[PoseLandmarkType.leftWrist]);
-        final r = _angle(lm[PoseLandmarkType.rightShoulder],
-            lm[PoseLandmarkType.rightElbow], lm[PoseLandmarkType.rightWrist]);
+        final l = _angle(
+          lm[PoseLandmarkType.leftShoulder],
+          lm[PoseLandmarkType.leftElbow],
+          lm[PoseLandmarkType.leftWrist],
+        );
+        final r = _angle(
+          lm[PoseLandmarkType.rightShoulder],
+          lm[PoseLandmarkType.rightElbow],
+          lm[PoseLandmarkType.rightWrist],
+        );
         elbowA = l ?? r;
         elbowB = r ?? l;
     }
@@ -809,22 +896,25 @@ class _WorkoutSessionScreenState extends State<WorkoutSessionScreen>
 
     final avgElbow = (elbowA + elbowB) / 2;
     final atDown = elbowA <= 90 && elbowB <= 90;
-    final atUp   = elbowA >= 155 && elbowB >= 155;
+    final atUp = elbowA >= 155 && elbowB >= 155;
 
     // Body alignment: shoulder → hip → ankle (~180°). Use visible side.
     bool bodyAligned = true;
     PoseLandmark? shoulder, hip, ankle;
     if (_orientation != _CameraOrientation.rightSide) {
       shoulder = lm[PoseLandmarkType.leftShoulder];
-      hip      = lm[PoseLandmarkType.leftHip];
-      ankle    = lm[PoseLandmarkType.leftAnkle];
+      hip = lm[PoseLandmarkType.leftHip];
+      ankle = lm[PoseLandmarkType.leftAnkle];
     } else {
       shoulder = lm[PoseLandmarkType.rightShoulder];
-      hip      = lm[PoseLandmarkType.rightHip];
-      ankle    = lm[PoseLandmarkType.rightAnkle];
+      hip = lm[PoseLandmarkType.rightHip];
+      ankle = lm[PoseLandmarkType.rightAnkle];
     }
-    if (shoulder != null && hip != null && ankle != null &&
-        shoulder.likelihood >= 0.4 && hip.likelihood >= 0.4 &&
+    if (shoulder != null &&
+        hip != null &&
+        ankle != null &&
+        shoulder.likelihood >= 0.4 &&
+        hip.likelihood >= 0.4 &&
         ankle.likelihood >= 0.4) {
       final a = _angle(shoulder, hip, ankle);
       if (a != null) bodyAligned = a >= 160;
@@ -847,11 +937,13 @@ class _WorkoutSessionScreenState extends State<WorkoutSessionScreen>
 
     if (!bodyAligned) {
       _setFeedback('Keep your body straight', false, {
-        PoseLandmarkType.leftHip, PoseLandmarkType.rightHip,
+        PoseLandmarkType.leftHip,
+        PoseLandmarkType.rightHip,
       });
     } else if (!atDown && avgElbow < 155 && avgElbow > 90) {
       _setFeedback('Lower your chest more', false, {
-        PoseLandmarkType.leftElbow, PoseLandmarkType.rightElbow,
+        PoseLandmarkType.leftElbow,
+        PoseLandmarkType.rightElbow,
       });
     } else if (atDown) {
       _setFeedback('Good depth — push back up', true);
@@ -868,8 +960,10 @@ class _WorkoutSessionScreenState extends State<WorkoutSessionScreen>
     final lm = pose.landmarks;
     final ls = lm[PoseLandmarkType.leftShoulder];
     final rs = lm[PoseLandmarkType.rightShoulder];
-    if (ls == null || rs == null ||
-        ls.likelihood < 0.4 || rs.likelihood < 0.4) {
+    if (ls == null ||
+        rs == null ||
+        ls.likelihood < 0.4 ||
+        rs.likelihood < 0.4) {
       _setFeedback('Make sure your full body is visible to the camera', false);
       return;
     }
@@ -888,31 +982,34 @@ class _WorkoutSessionScreenState extends State<WorkoutSessionScreen>
     final shoulderCompressing = shoulderCompression >= 0.03;
 
     // Supporting signal: elbow angle
-    final lElbow = _angle(ls, lm[PoseLandmarkType.leftElbow],
-        lm[PoseLandmarkType.leftWrist]);
-    final rElbow = _angle(rs, lm[PoseLandmarkType.rightElbow],
-        lm[PoseLandmarkType.rightWrist]);
-    final elbowConfirmsDown = (lElbow != null && lElbow <= 90) ||
-        (rElbow != null && rElbow <= 90);
+    final lElbow = _angle(
+      ls,
+      lm[PoseLandmarkType.leftElbow],
+      lm[PoseLandmarkType.leftWrist],
+    );
+    final rElbow = _angle(
+      rs,
+      lm[PoseLandmarkType.rightElbow],
+      lm[PoseLandmarkType.rightWrist],
+    );
+    final elbowConfirmsDown =
+        (lElbow != null && lElbow <= 90) || (rElbow != null && rElbow <= 90);
 
-    // Body alignment: nose, shoulder midpoint, and hip midpoint should be
+    // Body alignment: shoulder midpoint and hip midpoint should be
     // vertically aligned within 10% horizontal drift.
     bool bodyAligned = true;
-    final nose = lm[PoseLandmarkType.nose];
-    final lh   = lm[PoseLandmarkType.leftHip];
-    final rh   = lm[PoseLandmarkType.rightHip];
-    if (lh != null && rh != null &&
-        lh.likelihood >= 0.4 && rh.likelihood >= 0.4) {
+    final lh = lm[PoseLandmarkType.leftHip];
+    final rh = lm[PoseLandmarkType.rightHip];
+    if (lh != null &&
+        rh != null &&
+        lh.likelihood >= 0.4 &&
+        rh.likelihood >= 0.4) {
       final hipMidX = (lh.x + rh.x) / 2;
-      final hipOffset = (hipMidX - shoulderMidX).abs();
-      bodyAligned = hipOffset <= 0.10 * w;
-      if (bodyAligned && nose != null && nose.likelihood >= 0.4) {
-        bodyAligned = (nose.x - shoulderMidX).abs() <= 0.10 * w;
-      }
+      bodyAligned = (hipMidX - shoulderMidX).abs() <= 0.10 * w;
     }
 
     final atDown = shoulderDrop >= 0.10 * h && bodyAligned;
-    final atUp   = shoulderMidY <= _baselineShoulderMidY + 0.05 * h;
+    final atUp = shoulderMidY <= _baselineShoulderMidY + 0.05 * h;
 
     if (!_repDown && atDown) {
       _repDown = true;
@@ -930,7 +1027,8 @@ class _WorkoutSessionScreenState extends State<WorkoutSessionScreen>
 
     if (!bodyAligned) {
       _setFeedback('Keep your body straight', false, {
-        PoseLandmarkType.leftHip, PoseLandmarkType.rightHip,
+        PoseLandmarkType.leftHip,
+        PoseLandmarkType.rightHip,
       });
     } else if (atDown) {
       _setFeedback('Good depth — push back up', true);
@@ -938,7 +1036,8 @@ class _WorkoutSessionScreenState extends State<WorkoutSessionScreen>
       _setFeedback('Good depth — push back up', true);
     } else if (shoulderDrop >= 0.03 * h) {
       _setFeedback('Lower your chest more', false, {
-        PoseLandmarkType.leftElbow, PoseLandmarkType.rightElbow,
+        PoseLandmarkType.leftElbow,
+        PoseLandmarkType.rightElbow,
       });
     } else {
       _setFeedback('Good form ✓', true);
@@ -956,26 +1055,34 @@ class _WorkoutSessionScreenState extends State<WorkoutSessionScreen>
 
     // Both knees always checked regardless of orientation — in a lunge both
     // legs are visible even from the side.
-    final leftKnee = _angle(lm[PoseLandmarkType.leftHip],
-        lm[PoseLandmarkType.leftKnee], lm[PoseLandmarkType.leftAnkle]);
-    final rightKnee = _angle(lm[PoseLandmarkType.rightHip],
-        lm[PoseLandmarkType.rightKnee], lm[PoseLandmarkType.rightAnkle]);
+    final leftKnee = _angle(
+      lm[PoseLandmarkType.leftHip],
+      lm[PoseLandmarkType.leftKnee],
+      lm[PoseLandmarkType.leftAnkle],
+    );
+    final rightKnee = _angle(
+      lm[PoseLandmarkType.rightHip],
+      lm[PoseLandmarkType.rightKnee],
+      lm[PoseLandmarkType.rightAnkle],
+    );
     if (leftKnee == null || rightKnee == null) return;
 
     final eitherAtDepth = leftKnee <= 100 || rightKnee <= 100;
-    final bothAtTop     = leftKnee >= 155 && rightKnee >= 155;
+    final bothAtTop = leftKnee >= 155 && rightKnee >= 155;
 
     // Torso lean check (visible-side landmarks).
     bool torsoOk = true;
-    final useLeft  = _orientation != _CameraOrientation.rightSide;
-    final hipRef      = useLeft
+    final useLeft = _orientation != _CameraOrientation.rightSide;
+    final hipRef = useLeft
         ? lm[PoseLandmarkType.leftHip]
         : lm[PoseLandmarkType.rightHip];
     final shoulderRef = useLeft
         ? lm[PoseLandmarkType.leftShoulder]
         : lm[PoseLandmarkType.rightShoulder];
-    if (hipRef != null && shoulderRef != null &&
-        hipRef.likelihood >= 0.4 && shoulderRef.likelihood >= 0.4) {
+    if (hipRef != null &&
+        shoulderRef != null &&
+        hipRef.likelihood >= 0.4 &&
+        shoulderRef.likelihood >= 0.4) {
       final dx = (shoulderRef.x - hipRef.x).abs();
       final dy = (hipRef.y - shoulderRef.y).abs();
       final lean = dy > 0 ? atan(dx / dy) * 180 / pi : 90.0;
@@ -1001,15 +1108,18 @@ class _WorkoutSessionScreenState extends State<WorkoutSessionScreen>
 
     if (!torsoOk) {
       _setFeedback('Keep your torso upright', false, {
-        PoseLandmarkType.leftShoulder, PoseLandmarkType.rightShoulder,
-        PoseLandmarkType.leftHip, PoseLandmarkType.rightHip,
+        PoseLandmarkType.leftShoulder,
+        PoseLandmarkType.rightShoulder,
+        PoseLandmarkType.leftHip,
+        PoseLandmarkType.rightHip,
       });
     } else if (_repDown && !bothAtTop) {
       final leg = _activeLungeLeg == 'L' ? 'Left' : 'Right';
       _setFeedback('Good — drive through your $leg heel', true);
     } else if (!eitherAtDepth && (leftKnee < 155 || rightKnee < 155)) {
       _setFeedback('Lower your hips more', false, {
-        PoseLandmarkType.leftKnee, PoseLandmarkType.rightKnee,
+        PoseLandmarkType.leftKnee,
+        PoseLandmarkType.rightKnee,
       });
     } else {
       _setFeedback('Good form ✓', true);
@@ -1026,33 +1136,41 @@ class _WorkoutSessionScreenState extends State<WorkoutSessionScreen>
     final rh = lm[PoseLandmarkType.rightHip];
     final lk = lm[PoseLandmarkType.leftKnee];
     final rk = lm[PoseLandmarkType.rightKnee];
-    if (lh == null || rh == null || lk == null || rk == null ||
-        lh.likelihood < 0.4 || rh.likelihood < 0.4 ||
-        lk.likelihood < 0.4 || rk.likelihood < 0.4) {
+    if (lh == null ||
+        rh == null ||
+        lk == null ||
+        rk == null ||
+        lh.likelihood < 0.4 ||
+        rh.likelihood < 0.4 ||
+        lk.likelihood < 0.4 ||
+        rk.likelihood < 0.4) {
       _setFeedback('Make sure your full body is visible to the camera', false);
       return;
     }
 
     final h = _imageSize.height;
-    final hipMidY      = (lh.y + rh.y) / 2;
-    final hipDrop      = hipMidY - _baselineHipMidY;
+    final hipMidY = (lh.y + rh.y) / 2;
+    final hipDrop = hipMidY - _baselineHipMidY;
     final leftKneeDrop = lk.y - _baselineKneeLeftY;
     final rightKneeDrop = rk.y - _baselineKneeRightY;
-    final maxKneeDrop  = max(leftKneeDrop, rightKneeDrop);
+    final maxKneeDrop = max(leftKneeDrop, rightKneeDrop);
 
     // Ankle Y separation as step-forward signal for active leg detection.
     final la = lm[PoseLandmarkType.leftAnkle];
     final ra = lm[PoseLandmarkType.rightAnkle];
 
     final eitherAtDepth = hipDrop >= 0.12 * h && maxKneeDrop >= 0.10 * h;
-    final bothAtTop = hipMidY <= _baselineHipMidY + 0.05 * h &&
+    final bothAtTop =
+        hipMidY <= _baselineHipMidY + 0.05 * h &&
         lk.y <= _baselineKneeLeftY + 0.05 * h &&
         rk.y <= _baselineKneeRightY + 0.05 * h;
 
     // Optional supporting signal: knee angle when confidence is sufficient
     final lKneeAngle = _angle(lh, lk, la);
     final rKneeAngle = _angle(rh, rk, ra);
-    final kneeAngleConfirmsDepth = lKneeAngle != null && rKneeAngle != null &&
+    final kneeAngleConfirmsDepth =
+        lKneeAngle != null &&
+        rKneeAngle != null &&
         (lKneeAngle <= 100 || rKneeAngle <= 100);
 
     // Torso lean check using left-side landmarks.
@@ -1071,8 +1189,10 @@ class _WorkoutSessionScreenState extends State<WorkoutSessionScreen>
       // Active leg = whichever knee dropped more; ankle separation is a
       // tiebreaker when confidence is sufficient.
       String activeLeg = leftKneeDrop >= rightKneeDrop ? 'L' : 'R';
-      if (la != null && ra != null &&
-          la.likelihood >= 0.4 && ra.likelihood >= 0.4) {
+      if (la != null &&
+          ra != null &&
+          la.likelihood >= 0.4 &&
+          ra.likelihood >= 0.4) {
         final ankleDiff = la.y - ra.y;
         if (ankleDiff.abs() >= 0.08 * h) {
           activeLeg = ankleDiff > 0 ? 'L' : 'R';
@@ -1093,17 +1213,22 @@ class _WorkoutSessionScreenState extends State<WorkoutSessionScreen>
 
     if (!torsoOk) {
       _setFeedback('Keep your torso upright', false, {
-        PoseLandmarkType.leftShoulder, PoseLandmarkType.rightShoulder,
-        PoseLandmarkType.leftHip, PoseLandmarkType.rightHip,
+        PoseLandmarkType.leftShoulder,
+        PoseLandmarkType.rightShoulder,
+        PoseLandmarkType.leftHip,
+        PoseLandmarkType.rightHip,
       });
     } else if (_repDown && !bothAtTop) {
       final leg = _activeLungeLeg == 'L' ? 'Left' : 'Right';
       _setFeedback('Good — drive through your $leg heel', true);
-    } else if (!eitherAtDepth && hipDrop >= 0.04 * h && kneeAngleConfirmsDepth) {
+    } else if (!eitherAtDepth &&
+        hipDrop >= 0.04 * h &&
+        kneeAngleConfirmsDepth) {
       _setFeedback('Good depth — drive down', true);
     } else if (!eitherAtDepth && hipDrop >= 0.04 * h) {
       _setFeedback('Lower your hips more', false, {
-        PoseLandmarkType.leftKnee, PoseLandmarkType.rightKnee,
+        PoseLandmarkType.leftKnee,
+        PoseLandmarkType.rightKnee,
       });
     } else {
       _setFeedback('Good form ✓', true);
@@ -1129,7 +1254,10 @@ class _WorkoutSessionScreenState extends State<WorkoutSessionScreen>
         _incrementRep();
       }
     }
-    _setFeedback(angle < thresh.$1 ? 'Good range of motion ✓' : 'Good form ✓', true);
+    _setFeedback(
+      angle < thresh.$1 ? 'Good range of motion ✓' : 'Good form ✓',
+      true,
+    );
   }
 
   // ── Helpers ────────────────────────────────────────────────────────────────
@@ -1177,8 +1305,11 @@ class _WorkoutSessionScreenState extends State<WorkoutSessionScreen>
     }
   }
 
-  void _setFeedback(String message, bool good,
-      [Set<PoseLandmarkType> bad = const {}]) {
+  void _setFeedback(
+    String message,
+    bool good, [
+    Set<PoseLandmarkType> bad = const {},
+  ]) {
     if (_formFeedback == message &&
         _formGood == good &&
         _badLandmarks.length == bad.length &&
@@ -1199,11 +1330,17 @@ class _WorkoutSessionScreenState extends State<WorkoutSessionScreen>
     switch (type) {
       case PoseType.curl:
       case PoseType.shoulderPress:
-        return _angle(lm[PoseLandmarkType.rightShoulder],
-            lm[PoseLandmarkType.rightElbow], lm[PoseLandmarkType.rightWrist]);
+        return _angle(
+          lm[PoseLandmarkType.rightShoulder],
+          lm[PoseLandmarkType.rightElbow],
+          lm[PoseLandmarkType.rightWrist],
+        );
       case PoseType.generic:
-        return _angle(lm[PoseLandmarkType.rightShoulder],
-            lm[PoseLandmarkType.rightHip], lm[PoseLandmarkType.rightKnee]);
+        return _angle(
+          lm[PoseLandmarkType.rightShoulder],
+          lm[PoseLandmarkType.rightHip],
+          lm[PoseLandmarkType.rightKnee],
+        );
       default:
         return null;
     }
@@ -1327,7 +1464,7 @@ class _WorkoutSessionScreenState extends State<WorkoutSessionScreen>
       _orientationFrameCount = 0;
       _demoLoopCount = 0;
       _demoPipExpanded = false;
-      _state = _SessionState.demo;   // full 3-loop demo before every set
+      _state = _SessionState.demo; // full 3-loop demo before every set
     });
     _resetFrontBaseline();
     _wasInFrame = false;
@@ -1526,9 +1663,12 @@ class _WorkoutSessionScreenState extends State<WorkoutSessionScreen>
                 child: AspectRatio(
                   aspectRatio: 0.65,
                   child: CustomPaint(
-                    painter: _StickFigurePainter(pose: pose, view: isSide
-                        ? _StickFigureView.side
-                        : _StickFigureView.front),
+                    painter: _StickFigurePainter(
+                      pose: pose,
+                      view: isSide
+                          ? _StickFigureView.side
+                          : _StickFigureView.front,
+                    ),
                   ),
                 ),
               ),
@@ -1538,7 +1678,9 @@ class _WorkoutSessionScreenState extends State<WorkoutSessionScreen>
                 left: 16,
                 child: Container(
                   padding: const EdgeInsets.symmetric(
-                      horizontal: 12, vertical: 6),
+                    horizontal: 12,
+                    vertical: 6,
+                  ),
                   decoration: BoxDecoration(
                     color: Colors.white12,
                     borderRadius: BorderRadius.circular(20),
@@ -1695,7 +1837,9 @@ class _WorkoutSessionScreenState extends State<WorkoutSessionScreen>
               if (_formFeedback.isNotEmpty)
                 Container(
                   padding: const EdgeInsets.symmetric(
-                      horizontal: 16, vertical: 7),
+                    horizontal: 16,
+                    vertical: 7,
+                  ),
                   decoration: BoxDecoration(
                     color: (_formGood ? AppColors.success : Colors.orange)
                         .withValues(alpha: 0.18),
@@ -1762,7 +1906,7 @@ class _WorkoutSessionScreenState extends State<WorkoutSessionScreen>
             }
             // Compact PiP — tap to expand
             return Positioned(
-              top: 80,   // below exercise info bar (~70 px)
+              top: 80, // below exercise info bar (~70 px)
               right: 16,
               child: GestureDetector(
                 onTap: () => setState(() => _demoPipExpanded = true),
@@ -2179,8 +2323,8 @@ class _PosePainter extends CustomPainter {
       final to = pose.landmarks[toType];
       if (from == null || to == null) continue;
       if (from.likelihood < 0.5 || to.likelihood < 0.5) continue;
-      final isBad = badLandmarks.contains(fromType) ||
-          badLandmarks.contains(toType);
+      final isBad =
+          badLandmarks.contains(fromType) || badLandmarks.contains(toType);
       canvas.drawLine(
         Offset(_tx(from.x, size), _ty(from.y, size)),
         Offset(_tx(to.x, size), _ty(to.y, size)),
@@ -2212,32 +2356,32 @@ class _StickFigurePainter extends CustomPainter {
 
   // Bone connections for front-view (bilateral) figures.
   static const _frontBones = [
-    ('head',      'neck'),
-    ('neck',      'lShoulder'),
-    ('neck',      'rShoulder'),
+    ('head', 'neck'),
+    ('neck', 'lShoulder'),
+    ('neck', 'rShoulder'),
     ('lShoulder', 'rShoulder'),
     ('lShoulder', 'lElbow'),
-    ('lElbow',    'lWrist'),
+    ('lElbow', 'lWrist'),
     ('rShoulder', 'rElbow'),
-    ('rElbow',    'rWrist'),
+    ('rElbow', 'rWrist'),
     ('lShoulder', 'lHip'),
     ('rShoulder', 'rHip'),
-    ('lHip',      'rHip'),
-    ('lHip',      'lKnee'),
-    ('lKnee',     'lAnkle'),
-    ('rHip',      'rKnee'),
-    ('rKnee',     'rAnkle'),
+    ('lHip', 'rHip'),
+    ('lHip', 'lKnee'),
+    ('lKnee', 'lAnkle'),
+    ('rHip', 'rKnee'),
+    ('rKnee', 'rAnkle'),
   ];
 
   // Bone connections for side-view (push-up) figures.
   static const _sideBones = [
-    ('head',     'neck'),
-    ('neck',     'shoulder'),
+    ('head', 'neck'),
+    ('neck', 'shoulder'),
     ('shoulder', 'elbow'),
-    ('elbow',    'wrist'),
-    ('neck',     'hip'),
-    ('hip',      'knee'),
-    ('knee',     'ankle'),
+    ('elbow', 'wrist'),
+    ('neck', 'hip'),
+    ('hip', 'knee'),
+    ('knee', 'ankle'),
   ];
 
   const _StickFigurePainter({required this.pose, required this.view});
@@ -2251,7 +2395,8 @@ class _StickFigurePainter extends CustomPainter {
       ..style = PaintingStyle.stroke;
 
     final jointPaint = Paint()
-      ..color = const Color(0xFFFFD700) // amber-yellow
+      ..color =
+          const Color(0xFFFFD700) // amber-yellow
       ..style = PaintingStyle.fill;
 
     // Converts normalised joint offset to canvas pixel position.
@@ -2277,10 +2422,20 @@ class _StickFigurePainter extends CustomPainter {
     // Draw head as a white hollow circle (ring + dark fill).
     if (pose.containsKey('head')) {
       final c = px('head');
-      canvas.drawCircle(c, 11.0,
-          Paint()..color = Colors.white..style = PaintingStyle.fill);
-      canvas.drawCircle(c, 8.0,
-          Paint()..color = const Color(0xFF0D0D1A)..style = PaintingStyle.fill);
+      canvas.drawCircle(
+        c,
+        11.0,
+        Paint()
+          ..color = Colors.white
+          ..style = PaintingStyle.fill,
+      );
+      canvas.drawCircle(
+        c,
+        8.0,
+        Paint()
+          ..color = const Color(0xFF0D0D1A)
+          ..style = PaintingStyle.fill,
+      );
     }
   }
 

@@ -479,7 +479,7 @@ class _SleepHistoryScreenState extends State<SleepHistoryScreen> {
             ],
           ),
           const SizedBox(height: 16),
-          SleepStageChart(session: session),
+          SleepTimelineChart(session: session),
           const SizedBox(height: 12),
           _buildStageRow('Light Sleep',
               session.getStagePercentage(SleepStage.light), AppColors.primaryLemon),
