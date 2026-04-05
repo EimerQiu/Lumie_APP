@@ -9,12 +9,14 @@ from .medication_assessment import assess as assess_medication
 from .recovery_assessment import assess as assess_recovery
 from .dayprint_followup_assessment import assess as assess_dayprint_followup
 from .team_member_followup_assessment import assess as assess_team_followup
+from .energy_assessment import assess as assess_energy
 
 ALL_ASSESSMENTS = [
     assess_sleep,
     assess_activity,
     assess_medication,
     assess_recovery,
+    assess_energy,
     assess_dayprint_followup,
     assess_team_followup,
 ]
@@ -24,6 +26,7 @@ DOMAIN_ASSESSMENTS = {
     "activity": assess_activity,
     "medication": assess_medication,
     "recovery": assess_recovery,
+    "energy": assess_energy,
     "dayprint": assess_dayprint_followup,
     "team_followup": assess_team_followup,
 }

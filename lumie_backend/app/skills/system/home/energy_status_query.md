@@ -13,6 +13,10 @@ tags: [energy, solar, powerwall, tesla, home, electricity, battery, ac, temperat
 keywords: [energy, solar, powerwall, battery, charge, tesla, model y, home power, electricity, ac, air conditioning, grid, indoor temperature, energy status, how much solar, battery level, is ac on, is charging, house power, exporting, importing, power usage]
 summary: Fetch real-time home energy status including solar generation, Powerwall battery level, home consumption, Tesla Model Y, AC unit, indoor temperatures, and grid import/export.
 allowed_connectors: [external_api_connector]
+proactive_eligible: true
+proactive_domain: energy
+proactive_priority: 55
+proactive_mode: assessment
 ---
 
 # Purpose
