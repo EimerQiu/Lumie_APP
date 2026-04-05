@@ -220,6 +220,7 @@ category_weight = {
     "health_concern": 4,
     "medication": 3,
     "symptom": 2,
+    "family": 2,  # Family concerns are important
     "emotional": 1,
     "other": 0
 }

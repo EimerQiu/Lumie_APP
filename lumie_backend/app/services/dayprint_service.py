@@ -149,11 +149,15 @@ async def log_advisor_chat(
             f"If this is the first message in a new session, replace_last MUST be false. "
             f"If YES (same topic, same session) → replace_last = true. If NO (new topic, new session, or no previous entries) → replace_last = false.\n"
             f"3. Is there something IMPORTANT in this exchange that warrants proactive follow-up? "
-            f"IMPORTANT = new/worsening symptom, pain or discomfort mentioned, medication concern (missed dose, side effect), "
-            f"emotional distress (feeling very bad, anxious, overwhelmed), or any urgent health signal. "
-            f"NOT important = greetings, general health questions, routine progress check-ins, encouragement. "
+            f"IMPORTANT topics include:\n"
+            f"  - Physical health: new/worsening symptom, pain or discomfort, feeling unwell, sickness, fever\n"
+            f"  - Medication concerns: missed dose, side effect, medication not helping\n"
+            f"  - Emotional/mental health: feeling very bad, anxious, overwhelmed, depressed, crying, distressed\n"
+            f"  - Family/social: family conflict, family health concerns, family stress\n"
+            f"  - Urgent signals: anything the user seems concerned about\n"
+            f"NOT important = greetings, general health questions, routine progress check-ins, encouragement, casual chat. "
             f"If important → set important = true, write a brief important_summary (1 sentence, 3rd person, use the user's name), "
-            f"and set category to one of: symptom, medication, emotional, health_concern, urgent, other. "
+            f"and set category to one of: symptom, medication, emotional, health_concern, family, urgent, other. "
             f"Also set important_replace_last = true ONLY if this important insight continues the SAME topic as the 'Last flagged important insight from this session' shown above, "
             f"or false if it is a new/different concern, a new session, or there was no previous insight.\n\n"
             f"Respond ONLY with valid JSON, no other text:\n"
@@ -180,6 +184,43 @@ async def log_advisor_chat(
         important_summary = parsed.get("important_summary", "")
         category = parsed.get("category", "other")
         important_replace_last = bool(parsed.get("important_replace_last", False))
+
+        # ── Keyword-based fallback: catch common patterns the LLM might miss ──
+        # This ensures family, emotional, and health concerns are always flagged
+        combined_text = f"{user_message} {reply}".lower()
+
+        # Keywords for different concern types
+        family_keywords = {"family", "mom", "dad", "mother", "father", "sister", "brother", "parent", "grandparent", "relative"}
+        emotional_keywords = {"sad", "depressed", "anxious", "stressed", "overwhelmed", "crying", "scared", "worried", "upset", "frustrated", "angry"}
+        sickness_keywords = {"sick", "unwell", "fever", "flu", "cold", "vomit", "nausea", "headache", "ache", "pain", "sore"}
+
+        has_family_topic = any(kw in combined_text for kw in family_keywords)
+        has_emotional_topic = any(kw in combined_text for kw in emotional_keywords)
+        has_sickness_topic = any(kw in combined_text for kw in sickness_keywords)
+
+        # If LLM missed but keywords detected, mark as important
+        if not is_important:
+            if has_family_topic:
+                is_important = True
+                category = "family"
+                important_summary = f"{name} mentioned a family-related concern."
+            elif has_emotional_topic:
+                is_important = True
+                category = "emotional"
+                important_summary = f"{name} expressed emotional distress or worry."
+            elif has_sickness_topic:
+                is_important = True
+                category = "symptom"
+                important_summary = f"{name} mentioned feeling unwell or being sick."
+
+        # If LLM did mark as important but we have a better category, update it
+        elif is_important and category == "other":
+            if has_family_topic:
+                category = "family"
+            elif has_emotional_topic:
+                category = "emotional"
+            elif has_sickness_topic:
+                category = "symptom"
 
         # ── Hard guard: never merge across sessions regardless of LLM output ──
         if is_new_session:
