@@ -75,7 +75,7 @@ This skill helps the proactive advisor detect:
 
 **`important_insight` events** are automatically created when the advisor detects:
 - New or worsening symptoms
-- Medication concerns (missed dose, side effect)
+- Medication concerns (side effect)
 - Emotional distress or health anxiety
 - Urgent health signals
 
@@ -213,26 +213,15 @@ unresolved_concerns.sort(
 ## Build response
 ```python
 # PRIORITY: important_insight events are more significant than advisor_chat mentions
-# Category weight: urgent > health_concern > medication > symptom > emotional > other
+# Separate by recurrence, let LLM decide based on category and pattern
 
-category_weight = {
-    "urgent": 5,
-    "health_concern": 4,
-    "medication": 3,
-    "symptom": 2,
-    "family": 2,  # Family concerns are important
-    "emotional": 1,
-    "other": 0
-}
-
-# Separate important_insights by recurrence
+# Separate important_insights by recurrence (no scoring)
 important_recurring = [
     {
         "category": cat,
         "occurrences": len(data["dates"]),
         "dates": sorted(set(data["dates"]), reverse=True),
-        "summaries": data["summaries"],
-        "weight": category_weight.get(cat, 0)
+        "latest_summary": data["summaries"][-1] if data["summaries"] else ""
     }
     for cat, data in important_insights.items()
     if len(set(data["dates"])) >= 2
@@ -241,17 +230,16 @@ important_recurring = [
 important_recent = [
     {
         "category": cat,
-        "dates": sorted(set(data["dates"]), reverse=True),
-        "summaries": data["summaries"],
-        "weight": category_weight.get(cat, 0)
+        "date": sorted(set(data["dates"]), reverse=True)[0],
+        "summary": data["summaries"][0] if data["summaries"] else ""
     }
     for cat, data in important_insights.items()
     if len(set(data["dates"])) == 1
 ]
 
-# Sort by weight (urgency)
-important_recurring.sort(key=lambda x: x["weight"], reverse=True)
-important_recent.sort(key=lambda x: x["weight"], reverse=True)
+# Sort by recurrence (not by weight) — let LLM judge importance
+important_recurring.sort(key=lambda x: x["occurrences"], reverse=True)
+important_recent.sort(key=lambda x: x["date"], reverse=True)
 
 # Also include non-important concerns (lower priority)
 other_recurring = [
@@ -270,25 +258,8 @@ _result = {
         + (f" and {len(important_recent)} recent flagged concerns" if important_recent else "")
         + (f" plus {len(other_recurring)} other recurring patterns" if other_recurring else "")
     ),
-    "important_insights_recurring": [
-        {
-            "category": c["category"],
-            "weight": c["weight"],
-            "occurrences": c["occurrences"],
-            "dates": c["dates"],
-            "latest_summary": c["summaries"][-1] if c["summaries"] else ""
-        }
-        for c in important_recurring[:5]
-    ],
-    "important_insights_recent": [
-        {
-            "category": c["category"],
-            "weight": c["weight"],
-            "date": c["dates"][0],
-            "summary": c["summaries"][0] if c["summaries"] else ""
-        }
-        for c in important_recent[:3]
-    ],
+    "important_insights_recurring": important_recurring[:5],
+    "important_insights_recent": important_recent[:3],
     "other_concerns_recurring": other_recurring[:3],
     "has_priority_signal": len(important_recurring) > 0 or len(important_recent) > 0
 }
@@ -296,18 +267,18 @@ _result = {
 
 # Proactive Decision Guidance
 
-**Return data structure prioritizes `important_insight` events (重点关注):**
+**Return data structure prioritizes `important_insight` events:**
 
 LLM receives:
 - `important_insights_recurring`: Flagged concerns appearing on 2+ days (HIGHEST PRIORITY)
-- `important_insights_recent`: Flagged concerns from last 10 days (HIGH PRIORITY)
+- `important_insights_recent`: Flagged concerns from last 15 days (HIGH PRIORITY)
 - `other_concerns_recurring`: Non-flagged patterns (lower priority)
 - `has_priority_signal`: Boolean for quick check
 
 **LLM should STRONGLY nudge if:**
-- `important_insights_recurring` is non-empty → User flagged same concern multiple times
-- Category weight >= 3 (`medication`, `health_concern`, `urgent`)
-- Dates show consistent pattern
+- `important_insights_recurring` is non-empty → User flagged same concern appearing 2+ days
+- Category is `medication`, `health_concern`, or `urgent` (high-priority categories)
+- Multiple days show the pattern
 
 **LLM should nudge if:**
 - `important_insights_recent` has items → Advisor detected and flagged concern recently
@@ -315,14 +286,14 @@ LLM receives:
 
 **LLM should NOT nudge if:**
 - `has_priority_signal` is false → No flagged concerns at all
-- Last mention > 10 days old
+- Last mention > 15 days old
 - Only very low-weight categories
 
 **Key context for LLM:**
 - **`important_insight` events are pre-screened by the advisor — they've already been deemed significant**
-- Weight = urgency level (0-5): urgent(5) > health_concern(4) > medication(3) > symptom(2) > emotional(1) > other(0)
-- Recurring important_insights should be weighted MUCH higher than other_concerns
-- LLM should combine with sleep/activity data for full context
+- Category indicates concern type, not a score: urgent > health_concern > medication > symptom > emotional > other
+- Recurring important_insights (2+ days) should be prioritized much higher than other_concerns
+- LLM should combine with sleep/activity data for full context and make holistic decision
 
 # Failure Handling
 - If `dayprints` collection empty for range: return summary "No dayprint data available"

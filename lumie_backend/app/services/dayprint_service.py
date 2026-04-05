@@ -190,7 +190,7 @@ async def log_advisor_chat(
         combined_text = f"{user_message} {reply}".lower()
 
         # Keywords for different concern types
-        family_keywords = {"family", "mom", "dad", "mother", "father", "sister", "brother", "parent", "grandparent", "relative"}
+        family_keywords = {"family", "mom", "dad", "mother", "father", "sister", "brother", "parent", "grandparent", "relative", "daughter", "son", "husband", "wife", "partner", "child", "kid", "baby"}
         emotional_keywords = {"sad", "depressed", "anxious", "stressed", "overwhelmed", "crying", "scared", "worried", "upset", "frustrated", "angry"}
         sickness_keywords = {"sick", "unwell", "fever", "flu", "cold", "vomit", "nausea", "headache", "ache", "pain", "sore"}
 

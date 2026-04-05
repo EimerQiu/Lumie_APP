@@ -9,7 +9,7 @@ target_system: lumie_db
 tags: [health, sleep, activity, hrv, rhr, medication, tasks, walk_test, comprehensive, overall, report]
 keywords: [health summary, recent condition, daughter health, overall health, how is she doing, how am I doing, weekly summary, health report, overall report, full report, comprehensive, everything, all health data, how have I been, how has she been, give me a summary]
 summary: Multi-domain health report combining sleep, activity, walk test, and medication adherence. Use only for broad "how am I doing overall" questions — for single-domain queries (just sleep, just activity, etc.) use health_data_query instead.
-proactive_eligible: true
+proactive_eligible: false
 proactive_domain: activity
 proactive_priority: 80
 proactive_mode: assessment
