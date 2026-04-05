@@ -1,6 +1,7 @@
 // Sleep data models for Lumie App
 
 /// Sleep stage enum
+/// Order here matches the visual timeline order (lightest → deepest).
 enum SleepStage {
   awake,
   light,
@@ -18,6 +19,31 @@ enum SleepStage {
       case SleepStage.rem:
         return 'REM';
     }
+  }
+}
+
+/// One ordered block in the sleep timeline (stage + time window).
+class SleepTimelineSegment {
+  final SleepStage stage;
+  /// Minutes elapsed from session bedtime when this block starts.
+  final int startOffsetMinutes;
+  final int durationMinutes;
+
+  const SleepTimelineSegment({
+    required this.stage,
+    required this.startOffsetMinutes,
+    required this.durationMinutes,
+  });
+
+  factory SleepTimelineSegment.fromJson(Map<String, dynamic> json) {
+    return SleepTimelineSegment(
+      stage: SleepStage.values.firstWhere(
+        (s) => s.name == json['stage'],
+        orElse: () => SleepStage.light,
+      ),
+      startOffsetMinutes: json['start_offset_minutes'] as int,
+      durationMinutes: json['duration_minutes'] as int,
+    );
   }
 }
 
@@ -69,6 +95,9 @@ class SleepSession {
   /// data and should be displayed to the user.
   final String source;
 
+  final List<SleepTimelineSegment> timelineSegments;
+  final int wakeCount;
+
   const SleepSession({
     required this.sessionId,
     required this.userId,
@@ -81,6 +110,8 @@ class SleepSession {
     required this.sleepQualityScore,
     required this.createdAt,
     this.source = 'ring',
+    this.timelineSegments = const [],
+    this.wakeCount = 0,
   });
 
   /// Get total time in bed (from bedtime to wake time)
@@ -134,6 +165,10 @@ class SleepSession {
       sleepQualityScore: (json['sleep_quality_score'] as num).toDouble(),
       createdAt: DateTime.parse(json['created_at'] as String),
       source: (json['source'] as String?) ?? 'ring',
+      timelineSegments: (json['timeline_segments'] as List? ?? [])
+          .map((s) => SleepTimelineSegment.fromJson(s as Map<String, dynamic>))
+          .toList(),
+      wakeCount: (json['wake_count'] as int?) ?? 0,
     );
   }
 

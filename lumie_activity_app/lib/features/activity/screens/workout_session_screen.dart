@@ -75,6 +75,28 @@ class _WorkoutSessionScreenState extends State<WorkoutSessionScreen> {
   int _orientationFrameCount = 0;
   static const _orientationLockFrames = 15;
 
+  // ── Front-view baselines (captured during orientation lock) ───────────────
+  // Accumulators — averaged over lock frames where orientation == front.
+  double _baselineShoulderMidYAcc = 0;
+  double _baselineHipMidYAcc = 0;
+  double _baselineKneeLeftYAcc = 0;
+  double _baselineKneeRightYAcc = 0;
+  double _baselineKneeSepAcc = 0;
+  double _baselineShoulderSepAcc = 0;
+  int _baselineSampleCount = 0;
+  int _baselineShoulderHipSampleCount = 0; // shoulder+hip-only samples (for push-up)
+  bool _frontBaselineCaptured = false;
+  bool _frontFullBaselineCaptured = false; // shoulder+hip+knee all captured
+  // Finalized baseline values.
+  double _baselineShoulderMidY = 0;
+  double _baselineHipMidY = 0;
+  double _baselineKneeLeftY = 0;
+  double _baselineKneeRightY = 0;
+  double _baselineKneeSep = 0;
+  double _baselineShoulderSep = 0;
+  // Tracks presence of person in frame for re-entry baseline reset.
+  bool _wasInFrame = false;
+
   // Timing guards.
   DateTime? _repStartTime; // when the down-phase was first entered
   DateTime? _lastPoseTime; // tracks 5-second pause for phase reset
@@ -205,6 +227,7 @@ class _WorkoutSessionScreenState extends State<WorkoutSessionScreen> {
         _currentPose = closest;
         _imageSize = Size(image.width.toDouble(), image.height.toDouble());
       });
+      if (!detected) _wasInFrame = false;
       if (_state == _SessionState.activeSet && closest != null) {
         _detectRep(closest);
       }
@@ -319,13 +342,27 @@ class _WorkoutSessionScreenState extends State<WorkoutSessionScreen> {
       return;
     }
 
+    // ── Frame re-entry → restart orientation lock and baseline sampling ─────
+    if (!_wasInFrame) {
+      _resetFrontBaseline();
+      _orientationLocked = false;
+      _orientationFrameCount = 0;
+      _wasInFrame = true;
+    }
+
     // ── Orientation lock ────────────────────────────────────────────────────
     // Sample orientation for the first N frames of each set, then lock it.
     if (!_orientationLocked) {
       _orientation = _detectOrientation(pose);
       _orientationFrameCount++;
+      // Sample front-view position baseline while the lock window is open.
+      if (_orientation == _CameraOrientation.front) {
+        _sampleFrontBaseline(pose, type);
+      }
       if (_orientationFrameCount >= _orientationLockFrames) {
         _orientationLocked = true;
+        // Finalize if any shoulder+hip samples collected
+        if (_baselineShoulderHipSampleCount > 0) { _finalizeFrontBaseline(); }
       }
       // Still allow rep detection while sampling; orientation will converge.
     } else if (_repDown) {
@@ -359,9 +396,75 @@ class _WorkoutSessionScreenState extends State<WorkoutSessionScreen> {
     }
   }
 
+  // ── Front-view baseline helpers ────────────────────────────────────────────
+
+  void _resetFrontBaseline() {
+    _baselineShoulderMidYAcc = 0;
+    _baselineHipMidYAcc = 0;
+    _baselineKneeLeftYAcc = 0;
+    _baselineKneeRightYAcc = 0;
+    _baselineKneeSepAcc = 0;
+    _baselineShoulderSepAcc = 0;
+    _baselineSampleCount = 0;
+    _baselineShoulderHipSampleCount = 0;
+    _frontBaselineCaptured = false;
+    _frontFullBaselineCaptured = false;
+  }
+
+  void _sampleFrontBaseline(Pose pose, PoseType type) {
+    final lm = pose.landmarks;
+    final ls = lm[PoseLandmarkType.leftShoulder];
+    final rs = lm[PoseLandmarkType.rightShoulder];
+    final lh = lm[PoseLandmarkType.leftHip];
+    final rh = lm[PoseLandmarkType.rightHip];
+    if (ls == null || rs == null || lh == null || rh == null) return;
+    if (ls.likelihood < 0.4 || rs.likelihood < 0.4 ||
+        lh.likelihood < 0.4 || rh.likelihood < 0.4) return;
+
+    // Shoulder+hip tier — always sample (needed for push-up and all exercises)
+    _baselineShoulderMidYAcc += (ls.y + rs.y) / 2;
+    _baselineHipMidYAcc      += (lh.y + rh.y) / 2;
+    _baselineShoulderSepAcc  += (ls.x - rs.x).abs();
+    _baselineShoulderHipSampleCount++;
+
+    // Full tier — knees required for squat/lunge
+    final lk = lm[PoseLandmarkType.leftKnee];
+    final rk = lm[PoseLandmarkType.rightKnee];
+    if (lk != null && rk != null &&
+        lk.likelihood >= 0.4 && rk.likelihood >= 0.4) {
+      _baselineKneeLeftYAcc  += lk.y;
+      _baselineKneeRightYAcc += rk.y;
+      _baselineKneeSepAcc    += (lk.x - rk.x).abs();
+      _baselineSampleCount++;
+    }
+  }
+
+  void _finalizeFrontBaseline() {
+    // Finalize shoulder+hip tier (needed for push-up)
+    if (_baselineShoulderHipSampleCount > 0) {
+      final n = _baselineShoulderHipSampleCount.toDouble();
+      _baselineShoulderMidY = _baselineShoulderMidYAcc / n;
+      _baselineHipMidY      = _baselineHipMidYAcc / n;
+      _baselineShoulderSep  = _baselineShoulderSepAcc / n;
+      _frontBaselineCaptured = true;
+    }
+    // Finalize full tier — knees required for squat/lunge
+    if (_baselineSampleCount > 0) {
+      final n = _baselineSampleCount.toDouble();
+      _baselineKneeLeftY  = _baselineKneeLeftYAcc / n;
+      _baselineKneeRightY = _baselineKneeRightYAcc / n;
+      _baselineKneeSep    = _baselineKneeSepAcc / n;
+      _frontFullBaselineCaptured = true;
+    }
+  }
+
   // ── Squat ──────────────────────────────────────────────────────────────────
 
   void _detectSquatRep(Pose pose) {
+    if (_orientation == _CameraOrientation.front) {
+      _detectSquatRepFront(pose);
+      return;
+    }
     final lm = pose.landmarks;
 
     // Pick knee angles based on locked orientation.
@@ -463,9 +566,111 @@ class _WorkoutSessionScreenState extends State<WorkoutSessionScreen> {
     }
   }
 
+  void _detectSquatRepFront(Pose pose) {
+    if (!_frontFullBaselineCaptured) {
+      _setFeedback('Stand still to calibrate', false);
+      return;
+    }
+    final lm = pose.landmarks;
+    final ls = lm[PoseLandmarkType.leftShoulder];
+    final rs = lm[PoseLandmarkType.rightShoulder];
+    final lh = lm[PoseLandmarkType.leftHip];
+    final rh = lm[PoseLandmarkType.rightHip];
+    final lk = lm[PoseLandmarkType.leftKnee];
+    final rk = lm[PoseLandmarkType.rightKnee];
+    if (ls == null || rs == null || lh == null || rh == null ||
+        lk == null || rk == null ||
+        ls.likelihood < 0.4 || rs.likelihood < 0.4 ||
+        lh.likelihood < 0.4 || rh.likelihood < 0.4 ||
+        lk.likelihood < 0.4 || rk.likelihood < 0.4) {
+      _setFeedback('Make sure your full body is visible to the camera', false);
+      return;
+    }
+
+    final h = _imageSize.height;
+    final w = _imageSize.width;
+    final shoulderMidY = (ls.y + rs.y) / 2;
+    final hipMidY      = (lh.y + rh.y) / 2;
+    final kneeSep      = (lk.x - rk.x).abs();
+
+    final shoulderDrop = shoulderMidY - _baselineShoulderMidY;
+    final hipDrop      = hipMidY - _baselineHipMidY;
+    final kneeExpand   = kneeSep - _baselineKneeSep;
+
+    final atDepth = shoulderDrop >= 0.15 * h &&
+        hipDrop >= 0.10 * h &&
+        kneeExpand >= 0.05 * w;
+    final atTop = shoulderMidY <= _baselineShoulderMidY + 0.05 * h &&
+        hipMidY <= _baselineHipMidY + 0.05 * h;
+
+    // Optional supporting signal: knee angle when confidence is sufficient
+    final la = lm[PoseLandmarkType.leftAnkle];
+    final ra = lm[PoseLandmarkType.rightAnkle];
+    final lKneeAngle = _angle(lh, lk, la);
+    final rKneeAngle = _angle(rh, rk, ra);
+    final kneeAngleConfirmsDepth = lKneeAngle != null && rKneeAngle != null &&
+        lKneeAngle <= 100 && rKneeAngle <= 100;
+
+    // Torso lean check.
+    bool torsoOk = true;
+    final dx = (ls.x - lh.x).abs();
+    final dy = (lh.y - ls.y).abs();
+    final lean = dy > 0 ? atan(dx / dy) * 180 / pi : 90.0;
+    torsoOk = lean <= 45;
+
+    // Knee-over-ankle (front view).
+    bool kneesTracking = true;
+    if (la != null && ra != null &&
+        la.likelihood >= 0.4 && ra.likelihood >= 0.4) {
+      final threshold = w * 0.10;
+      kneesTracking = (lk.x - la.x).abs() <= threshold &&
+          (rk.x - ra.x).abs() <= threshold;
+    }
+
+    if (!_repDown && atDepth) {
+      _repDown = true;
+      _repStartTime = DateTime.now();
+    } else if (_repDown && atTop) {
+      final elapsed = _repStartTime != null
+          ? DateTime.now().difference(_repStartTime!).inMilliseconds
+          : _minRepMillis;
+      if (elapsed >= _minRepMillis) {
+        _repDown = false;
+        _repStartTime = null;
+        _incrementRep();
+      }
+    }
+
+    if (!torsoOk) {
+      _setFeedback('Keep your chest up', false, {
+        PoseLandmarkType.leftShoulder, PoseLandmarkType.rightShoulder,
+        PoseLandmarkType.leftHip, PoseLandmarkType.rightHip,
+      });
+    } else if (!kneesTracking) {
+      _setFeedback('Keep your knees over your toes', false, {
+        PoseLandmarkType.leftKnee, PoseLandmarkType.leftAnkle,
+        PoseLandmarkType.rightKnee, PoseLandmarkType.rightAnkle,
+      });
+    } else if (atDepth) {
+      _setFeedback('Good depth — drive through your heels', true);
+    } else if (shoulderDrop >= 0.05 * h && kneeAngleConfirmsDepth) {
+      _setFeedback('Good depth — drive through your heels', true);
+    } else if (shoulderDrop >= 0.05 * h) {
+      _setFeedback('Lower your hips more', false, {
+        PoseLandmarkType.leftKnee, PoseLandmarkType.rightKnee,
+      });
+    } else {
+      _setFeedback('Good form ✓', true);
+    }
+  }
+
   // ── Push-Up ────────────────────────────────────────────────────────────────
 
   void _detectPushupRep(Pose pose) {
+    if (_orientation == _CameraOrientation.front) {
+      _detectPushupRepFront(pose);
+      return;
+    }
     final lm = pose.landmarks;
 
     // Elbow angle(s) based on orientation.
@@ -540,9 +745,98 @@ class _WorkoutSessionScreenState extends State<WorkoutSessionScreen> {
     }
   }
 
+  void _detectPushupRepFront(Pose pose) {
+    if (!_frontBaselineCaptured) {
+      _setFeedback('Get in plank position to calibrate', false);
+      return;
+    }
+    final lm = pose.landmarks;
+    final ls = lm[PoseLandmarkType.leftShoulder];
+    final rs = lm[PoseLandmarkType.rightShoulder];
+    if (ls == null || rs == null ||
+        ls.likelihood < 0.4 || rs.likelihood < 0.4) {
+      _setFeedback('Make sure your full body is visible to the camera', false);
+      return;
+    }
+
+    final h = _imageSize.height;
+    final w = _imageSize.width;
+    final shoulderMidY = (ls.y + rs.y) / 2;
+    final shoulderMidX = (ls.x + rs.x) / 2;
+    final shoulderDrop = shoulderMidY - _baselineShoulderMidY;
+
+    // Supporting signal: shoulder width compression
+    final shoulderSep = (ls.x - rs.x).abs();
+    final shoulderCompression = _baselineShoulderSep > 0
+        ? (_baselineShoulderSep - shoulderSep) / w
+        : 0.0;
+    final shoulderCompressing = shoulderCompression >= 0.03;
+
+    // Supporting signal: elbow angle
+    final lElbow = _angle(ls, lm[PoseLandmarkType.leftElbow],
+        lm[PoseLandmarkType.leftWrist]);
+    final rElbow = _angle(rs, lm[PoseLandmarkType.rightElbow],
+        lm[PoseLandmarkType.rightWrist]);
+    final elbowConfirmsDown = (lElbow != null && lElbow <= 90) ||
+        (rElbow != null && rElbow <= 90);
+
+    // Body alignment: nose, shoulder midpoint, and hip midpoint should be
+    // vertically aligned within 10% horizontal drift.
+    bool bodyAligned = true;
+    final nose = lm[PoseLandmarkType.nose];
+    final lh   = lm[PoseLandmarkType.leftHip];
+    final rh   = lm[PoseLandmarkType.rightHip];
+    if (lh != null && rh != null &&
+        lh.likelihood >= 0.4 && rh.likelihood >= 0.4) {
+      final hipMidX = (lh.x + rh.x) / 2;
+      final hipOffset = (hipMidX - shoulderMidX).abs();
+      bodyAligned = hipOffset <= 0.10 * w;
+      if (bodyAligned && nose != null && nose.likelihood >= 0.4) {
+        bodyAligned = (nose.x - shoulderMidX).abs() <= 0.10 * w;
+      }
+    }
+
+    final atDown = shoulderDrop >= 0.10 * h && bodyAligned;
+    final atUp   = shoulderMidY <= _baselineShoulderMidY + 0.05 * h;
+
+    if (!_repDown && atDown) {
+      _repDown = true;
+      _repStartTime = DateTime.now();
+    } else if (_repDown && atUp) {
+      final elapsed = _repStartTime != null
+          ? DateTime.now().difference(_repStartTime!).inMilliseconds
+          : _minRepMillis;
+      if (elapsed >= _minRepMillis) {
+        _repDown = false;
+        _repStartTime = null;
+        _incrementRep();
+      }
+    }
+
+    if (!bodyAligned) {
+      _setFeedback('Keep your body straight', false, {
+        PoseLandmarkType.leftHip, PoseLandmarkType.rightHip,
+      });
+    } else if (atDown) {
+      _setFeedback('Good depth — push back up', true);
+    } else if (shoulderDrop >= 0.03 * h && elbowConfirmsDown) {
+      _setFeedback('Good depth — push back up', true);
+    } else if (shoulderDrop >= 0.03 * h) {
+      _setFeedback('Lower your chest more', false, {
+        PoseLandmarkType.leftElbow, PoseLandmarkType.rightElbow,
+      });
+    } else {
+      _setFeedback('Good form ✓', true);
+    }
+  }
+
   // ── Lunge ──────────────────────────────────────────────────────────────────
 
   void _detectLungeRep(Pose pose) {
+    if (_orientation == _CameraOrientation.front) {
+      _detectLungeRepFront(pose);
+      return;
+    }
     final lm = pose.landmarks;
 
     // Both knees always checked regardless of orientation — in a lunge both
@@ -599,6 +893,100 @@ class _WorkoutSessionScreenState extends State<WorkoutSessionScreen> {
       final leg = _activeLungeLeg == 'L' ? 'Left' : 'Right';
       _setFeedback('Good — drive through your $leg heel', true);
     } else if (!eitherAtDepth && (leftKnee < 155 || rightKnee < 155)) {
+      _setFeedback('Lower your hips more', false, {
+        PoseLandmarkType.leftKnee, PoseLandmarkType.rightKnee,
+      });
+    } else {
+      _setFeedback('Good form ✓', true);
+    }
+  }
+
+  void _detectLungeRepFront(Pose pose) {
+    if (!_frontFullBaselineCaptured) {
+      _setFeedback('Stand still to calibrate', false);
+      return;
+    }
+    final lm = pose.landmarks;
+    final lh = lm[PoseLandmarkType.leftHip];
+    final rh = lm[PoseLandmarkType.rightHip];
+    final lk = lm[PoseLandmarkType.leftKnee];
+    final rk = lm[PoseLandmarkType.rightKnee];
+    if (lh == null || rh == null || lk == null || rk == null ||
+        lh.likelihood < 0.4 || rh.likelihood < 0.4 ||
+        lk.likelihood < 0.4 || rk.likelihood < 0.4) {
+      _setFeedback('Make sure your full body is visible to the camera', false);
+      return;
+    }
+
+    final h = _imageSize.height;
+    final hipMidY      = (lh.y + rh.y) / 2;
+    final hipDrop      = hipMidY - _baselineHipMidY;
+    final leftKneeDrop = lk.y - _baselineKneeLeftY;
+    final rightKneeDrop = rk.y - _baselineKneeRightY;
+    final maxKneeDrop  = max(leftKneeDrop, rightKneeDrop);
+
+    // Ankle Y separation as step-forward signal for active leg detection.
+    final la = lm[PoseLandmarkType.leftAnkle];
+    final ra = lm[PoseLandmarkType.rightAnkle];
+
+    final eitherAtDepth = hipDrop >= 0.12 * h && maxKneeDrop >= 0.10 * h;
+    final bothAtTop = hipMidY <= _baselineHipMidY + 0.05 * h &&
+        lk.y <= _baselineKneeLeftY + 0.05 * h &&
+        rk.y <= _baselineKneeRightY + 0.05 * h;
+
+    // Optional supporting signal: knee angle when confidence is sufficient
+    final lKneeAngle = _angle(lh, lk, la);
+    final rKneeAngle = _angle(rh, rk, ra);
+    final kneeAngleConfirmsDepth = lKneeAngle != null && rKneeAngle != null &&
+        (lKneeAngle <= 100 || rKneeAngle <= 100);
+
+    // Torso lean check using left-side landmarks.
+    bool torsoOk = true;
+    final ls = lm[PoseLandmarkType.leftShoulder];
+    if (ls != null && ls.likelihood >= 0.4 && lh.likelihood >= 0.4) {
+      final dx = (ls.x - lh.x).abs();
+      final dy = (lh.y - ls.y).abs();
+      final lean = dy > 0 ? atan(dx / dy) * 180 / pi : 90.0;
+      torsoOk = lean <= 40;
+    }
+
+    if (!_repDown && eitherAtDepth) {
+      _repDown = true;
+      _repStartTime = DateTime.now();
+      // Active leg = whichever knee dropped more; ankle separation is a
+      // tiebreaker when confidence is sufficient.
+      String activeLeg = leftKneeDrop >= rightKneeDrop ? 'L' : 'R';
+      if (la != null && ra != null &&
+          la.likelihood >= 0.4 && ra.likelihood >= 0.4) {
+        final ankleDiff = la.y - ra.y;
+        if (ankleDiff.abs() >= 0.08 * h) {
+          activeLeg = ankleDiff > 0 ? 'L' : 'R';
+        }
+      }
+      _activeLungeLeg = activeLeg;
+    } else if (_repDown && bothAtTop) {
+      final elapsed = _repStartTime != null
+          ? DateTime.now().difference(_repStartTime!).inMilliseconds
+          : _minRepMillis;
+      if (elapsed >= _minRepMillis) {
+        _repDown = false;
+        _repStartTime = null;
+        _activeLungeLeg = '';
+        _incrementRep();
+      }
+    }
+
+    if (!torsoOk) {
+      _setFeedback('Keep your torso upright', false, {
+        PoseLandmarkType.leftShoulder, PoseLandmarkType.rightShoulder,
+        PoseLandmarkType.leftHip, PoseLandmarkType.rightHip,
+      });
+    } else if (_repDown && !bothAtTop) {
+      final leg = _activeLungeLeg == 'L' ? 'Left' : 'Right';
+      _setFeedback('Good — drive through your $leg heel', true);
+    } else if (!eitherAtDepth && hipDrop >= 0.04 * h && kneeAngleConfirmsDepth) {
+      _setFeedback('Good depth — drive down', true);
+    } else if (!eitherAtDepth && hipDrop >= 0.04 * h) {
       _setFeedback('Lower your hips more', false, {
         PoseLandmarkType.leftKnee, PoseLandmarkType.rightKnee,
       });
@@ -747,6 +1135,8 @@ class _WorkoutSessionScreenState extends State<WorkoutSessionScreen> {
       _orientationFrameCount = 0;
       _state = _SessionState.activeSet;
     });
+    _resetFrontBaseline();
+    _wasInFrame = false;
   }
 
   void _endSession() {
