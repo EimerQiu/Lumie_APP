@@ -6,6 +6,7 @@ runtime_type: lumie_db
 requires_ping: true
 requires_credentials: true
 target_system: lumie_db
+credential_display_name: Lumie Internal - Dayprint Access
 tags: [dayprint, followup, memory, advisor, concern, unresolved]
 keywords: [dayprint, follow up, unresolved concern, advisor chat, important insight, health concern, medication concern, open question, issue mentioned, problem discussed]
 summary: Scan recent dayprints to identify unresolved health/medication concerns and follow-up opportunities for proactive advisor outreach. Detects themes repeated across multiple days or marked as concerns by the user.
@@ -14,6 +15,7 @@ proactive_domain: dayprint
 proactive_priority: 65
 proactive_mode: assessment
 allowed_connectors: [lumie_db_connector]
+allowed_collections: [dayprints, profiles]
 input_schema:
   type: object
   properties:
@@ -37,6 +39,19 @@ output_schema:
       description: "Suggested action (follow up, monitor, escalate)"
 ---
 
+# Credential Setup
+
+**Automatic Provisioning:**
+- Credentials are auto-generated when user enables `lumie_internal_data` capability
+- Credential ID: `cred_dayprint_followup_{user_id}`
+- Includes: ping token for `lumie_db_connector` validation
+- Status: `valid` once created
+
+**Access Control:**
+- Can query: `dayprints`, `profiles` collections only
+- Cannot write or delete
+- User must have `lumie_internal_data` capability enabled
+
 # Purpose
 Use this skill to evaluate recent dayprints and identify unresolved health concerns, medication issues, or open questions that deserve proactive follow-up from the advisor.
 
@@ -53,9 +68,25 @@ This skill helps the proactive advisor detect:
 - To detect user-reported concerns that haven't been addressed
 - To prioritize which health domains need advisor attention
 
+# Connector Rules
+
+**Runtime System**: `lumie_db_connector` (MongoDB)
+**Credential Required**: Yes (auto-provisioned with lumie_internal_data capability)
+**Ping Validation**: Required (stored in credential record)
+
+**Collections Allowed**:
+- `dayprints` — Read only. User's daily summaries with events
+- `profiles` — Read only. User profile for timezone context
+
+**Collections NOT Allowed**:
+- `users`, `sleep_sessions`, `activities`, `tasks`, `hr_readings` — Will be rejected
+
+**Write Permissions**: None. This is a read-only assessment skill.
+
 # Runtime Rules
-- Query only the requesting user's `dayprints`
+- Query only the requesting user's `dayprints` (filter by user_id)
 - Default to last 7 days if not specified
+- Use user timezone from `profiles` collection for date range calculations
 - Focus on `important_insight` and `advisor_chat` events
 - Mark concerns as "recurring" if they appear on 2+ different days
 - Classify concerns by category: health, medication, mood, social, other
@@ -296,6 +327,26 @@ LLM receives:
 - LLM should combine with sleep/activity data for full context and make holistic decision
 
 # Failure Handling
-- If `dayprints` collection empty for range: return summary "No dayprint data available"
+
+## Common Failure Scenarios
+
+**"Access to collections not allowed: {'dayprints'}"**
+- Root cause: Credential missing or invalid ping token
+- Fix: Check `advisor_skill_credentials` collection for (user_id, skill_id='dayprint_followup')
+- Ensure credential has `ping` field with valid token
+- If missing: auto-provision by enabling lumie_internal_data capability
+
+**"No data available for date range"**
+- Normal behavior: return summary "No dayprint data available" with no_data status
+- Do not error — this is expected if user has no dayprints yet
+
+**"User not found in profiles"**
+- User timezone needed for date calculation
+- Check that user has a profile record
+- Fall back to UTC if profile missing
+
+## Graceful Degradation
+- If `dayprints` query fails: return status='no_data'
 - If all events are resolved: return "No unresolved concerns"
-- On DB error: return error message for retry
+- Partial data is acceptable — return what's available
+- Never throw unhandled errors — always return structured failure response
