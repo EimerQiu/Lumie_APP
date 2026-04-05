@@ -34,14 +34,10 @@ output_schema:
   properties:
     summary:
       type: string
-    sleep:
+      description: "Natural language synthesis of overall health picture from all domains"
+    data:
       type: object
-    activity:
-      type: object
-    hrv_rhr:
-      type: object
-    medications:
-      type: object
+      description: "Raw aggregated data from all domains (for reference)"
 ---
 
 # Purpose
@@ -104,10 +100,11 @@ This skill is part of a **skill dependency chain**:
    }
    ```
 
-4. Use LLM to synthesize into comprehensive narrative:
+4. Use LLM to synthesize AGGREGATE insights:
    - Input: combined_context (all health data)
-   - LLM task: "Synthesize this health data into a 2-3 paragraph natural language summary"
-   - Output: structured `_result` with summary + sections
+   - LLM task: "Analyze combined data for cross-domain patterns and aggregate insights"
+   - Focus: NOT "here's sleep, here's activity" but "sleep is low AND activity is low, suggesting fatigue"
+   - Output: structured `_result` with summary (no domain-by-domain fields)
 
 5. Return structured result:
    ```python
@@ -119,89 +116,92 @@ This skill is part of a **skill dependency chain**:
 
 # Output Structure
 
-Return a dict with:
-- `summary`: Natural language overview (2-3 sentences) of overall health picture
-- `sleep`: Sleep trends and latest session
-- `activity`: Activity totals and recent patterns
-- `hrv`: Heart rate variability and fatigue signals
-- `steps`: Daily step patterns and trends
-- `medications`: Task/medication adherence
+Return a dict with only:
+- `summary`: 2-4 paragraph natural language synthesis analyzing the **combined** health picture
+  - Focus on **aggregate insights** (patterns that emerge from all domains together)
+  - NOT a domain-by-domain breakdown (that's what health_data_query provides)
+  - Highlight how domains interact: e.g., "Low activity combined with poor sleep suggests fatigue"
+  - Flag multi-domain concerns: e.g., "Elevated fatigue + inconsistent activity + medication gaps"
+  - Include trend observations and any anomalies
+- `data`: Raw aggregated data structure (for reference/debugging)
 
 # How to Implement
 
-**Option 1: Simple LLM Synthesis (Recommended)**
+**LLM Synthesis Approach**
 
 ```python
 from ..services.llm_client import chat_completion
 import json
 
-# Extract data from previous_results (see Execution Plan step 2-3 above)
-combined_context = {...}
+# Extract data from previous_results
+combined_context = {
+    "sleep": {...},
+    "activity": {...},
+    "hrv": {...},
+    "steps": {...},
+    "medications": {...},
+}
 
-# Call LLM to synthesize
+# Call LLM to synthesize AGGREGATE insights only
 response = await chat_completion(
     model="openai/gpt-5.4",
-    max_tokens=1500,
+    max_tokens=1000,
     messages=[{
         "role": "user",
-        "content": f"""Synthesize this health data into a comprehensive health assessment.
-        
+        "content": f"""Analyze this multi-domain health data and provide a comprehensive synthesis.
+
+IMPORTANT: Focus on AGGREGATE insights only, not domain-by-domain findings.
+
+Analyze:
+- Overall health picture combining all domains
+- Patterns and relationships that emerge across domains
+- How domains interact (e.g., does poor sleep explain low activity?)
+- Multi-domain concerns or anomalies
+- Health trajectory (improving/declining/stable)
+
+Do NOT provide separate findings for each domain. Instead, synthesize into 
+a cohesive narrative of overall health status and cross-domain patterns.
+
 Health Data:
 {json.dumps(combined_context, indent=2, default=str)}
 
-Provide:
-1. A 2-3 sentence summary of overall health status
-2. Key findings from each domain (sleep, activity, HRV, steps, medications)
-3. Any notable trends or concerns
-4. Recommendations for follow-up
-
-Format as JSON with fields: summary, sleep_insights, activity_insights, hrv_insights, steps_insights, medications_insights, trends, recommendations"""
+Provide a 2-4 paragraph natural language synthesis."""
     }],
 )
 
-result_data = json.loads(response.text)
 _result = {
-    "summary": result_data.get("summary", ""),
+    "summary": response.text,
     "data": combined_context,
-    **result_data,  # Include all LLM-generated fields
 }
 ```
-
-**Option 2: Simple Aggregation + LLM Call**
-
-```python
-# Build simple aggregate
-_result = {
-    "summary": f"Sleep: {combined_context['sleep'].get('avg_minutes')} min/night. "
-               f"Activity: {combined_context['activity'].get('total_minutes')} min this week. "
-               f"Medications: {combined_context['medications'].get('adherence')} adherence.",
-    "sleep": combined_context.get("sleep", {}),
-    "activity": combined_context.get("activity", {}),
-    "hrv": combined_context.get("hrv", {}),
-    "steps": combined_context.get("steps", {}),
-    "medications": combined_context.get("medications", {}),
-}
 ```
 
-# No Database Queries Needed
+# No Database Queries, No Domain-by-Domain Breakdown
 
-This skill does **NOT** query the database directly. All data comes from `previous_results` (already fetched by `health_data_query` calls in Tier 1). This eliminates:
-- No timezone handling needed (already done in health_data_query)
-- No collection queries needed
-- No aggregation logic needed
-- No complex data parsing needed
+This skill does **NOT**:
+- Query the database directly (all data comes from `previous_results`)
+- Provide domain-by-domain insights (that's health_data_query's job)
+- Need timezone handling (already done in health_data_query)
+- Need complex aggregation logic
 
-The skill's job is purely: **aggregate + synthesize**.
+The skill's **only job**: **Synthesize aggregate insights using LLM**
+
+The LLM receives raw data from all 5 domains and identifies cross-domain patterns:
+- What does the combined picture tell us?
+- How do domains interact?
+- What anomalies stand out across all data?
+- What is the overall health trajectory?
 
 # Proactive Mode Guidance
 
-When used in proactive advisor checks, this skill synthesizes 5 focused health queries into a complete picture. The LLM/decision model then evaluates whether to nudge based on:
+When used in proactive advisor checks, this skill synthesizes 5 focused health queries into aggregate insights. The result feeds into the proactive decision LLM, which evaluates whether to nudge based on:
 
-- Multiple domains showing concerning patterns simultaneously
-- Trends (not single-day fluctuations)
-- Contextual thresholds (e.g., lower thresholds for users with chronic conditions)
+- Multi-domain concerns (e.g., poor sleep + low activity together)
+- Cross-domain patterns that suggest a trend (e.g., fatigue manifesting across HRV + activity)
+- Anomalies in the combined picture (not just single-domain outliers)
+- Overall health trajectory from the aggregate data
 
-See downstream LLM decision logic for nudge thresholds.
+The comprehensive summary allows the decision LLM to see the "whole person" health status, not just isolated metrics.
 
 # Failure Handling
 - If any of the 5 health_data_query calls failed, their data will be empty — continue synthesis with available data
