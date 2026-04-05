@@ -1,7 +1,7 @@
 """Proactive Skill Selector — chooses which assessment skills to run.
 
-Uses the skill registry's proactive metadata to select skills based on
-enabled capabilities, domain, and priority.
+Uses the skill registry's proactive metadata to select all assessment-eligible
+skills. All eligible skills run in parallel, sorted by proactive_priority.
 """
 import logging
 from .skill_registry_service import skill_registry, SkillIndexItem
@@ -9,37 +9,35 @@ from .skill_registry_service import skill_registry, SkillIndexItem
 logger = logging.getLogger(__name__)
 
 
-def select_proactive_skills(enabled_capabilities: set[str]) -> list[SkillIndexItem]:
-    """Select proactive assessment skills for a run.
+def select_proactive_skills() -> list[SkillIndexItem]:
+    """Select all proactive assessment skills for a run.
 
     Selection rules:
     - Only proactive_eligible = true
-    - Must have a compatible capability
-    - One assessment skill per domain (highest priority wins)
+    - Only assessment-mode skills
+    - All eligible skills run in parallel (no domain-based deduplication)
     - Sorted by priority descending
 
     Returns:
-        Ordered list of SkillIndexItem to run.
+        Ordered list of SkillIndexItem to run, sorted by priority.
     """
-    candidates = skill_registry.get_proactive_skills_for_capabilities(enabled_capabilities)
+    candidates = skill_registry.get_proactive_skills()
 
     if not candidates:
-        logger.info("ProactiveSelector: no proactive-eligible skills for capabilities %s", enabled_capabilities)
+        logger.info("ProactiveSelector: no proactive-eligible skills found")
         return []
 
-    # Deduplicate: one per domain, highest priority wins
-    by_domain: dict[str, SkillIndexItem] = {}
-    for skill in candidates:
-        domain = skill.proactive_domain or "unknown"
-        if skill.proactive_mode != "assessment":
-            continue
-        if domain not in by_domain or skill.proactive_priority > by_domain[domain].proactive_priority:
-            by_domain[domain] = skill
+    # Filter: only assessment-mode skills
+    assessment_skills = [
+        skill for skill in candidates
+        if skill.proactive_mode == "assessment"
+    ]
 
-    selected = sorted(by_domain.values(), key=lambda s: s.proactive_priority, reverse=True)
+    # Sort by priority descending
+    selected = sorted(assessment_skills, key=lambda s: s.proactive_priority, reverse=True)
 
     logger.info(
-        "ProactiveSelector: selected %d skills: %s",
+        "ProactiveSelector: selected %d assessment skills: %s",
         len(selected),
         [(s.skill_id, s.proactive_domain, s.proactive_priority) for s in selected],
     )

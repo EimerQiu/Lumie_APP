@@ -13,7 +13,7 @@ class ProactiveStatus(str, Enum):
 
 class ProactiveSkillResult(BaseModel):
     skill_id: str
-    domain: str  # sleep | activity | medication | recovery | dayprint | team_followup
+    domain: str  # descriptive label: sleep | activity | medication | recovery | dayprint | team_followup
     status: ProactiveStatus
     summary: str
     score: float  # 0.0 (no concern) → 1.0 (critical)
@@ -22,19 +22,12 @@ class ProactiveSkillResult(BaseModel):
     evidence: dict = {}
 
 
-class GuardrailVerdict(BaseModel):
-    action: str  # "proceed_to_llm" | "skip_nudge" | "force_nudge"
-    reason: str
-    details: dict = {}
-
-
 class LastNudgeContext(BaseModel):
     reason: str = ""
     nudged_at: str = ""
     run_id: Optional[str] = None
     primary_domain: Optional[str] = None
     evidence_summary: dict = {}  # domain → {score, status, top_signal}
-    decision_inputs_hash: Optional[str] = None  # hash of skill results for material change detection
 
 
 class ProactiveDecisionInput(BaseModel):
@@ -43,8 +36,16 @@ class ProactiveDecisionInput(BaseModel):
     icd10: str = ""
     local_time: str = ""
     skill_results: list[ProactiveSkillResult] = []
+    last_round_results: list[dict] = []  # previous round's skill results for comparison
+    today_dayprint: Optional[dict] = None  # today's dayprint for context
     last_nudge: Optional[LastNudgeContext] = None
-    guardrail_summary: dict = {}
+
+
+class ProactiveInformationRound(BaseModel):
+    round_id: str
+    user_id: str
+    created_at: str
+    skill_results: list[ProactiveSkillResult] = []
 
 
 class ProactiveDecisionResult(BaseModel):
@@ -62,8 +63,8 @@ class ProactiveRunRecord(BaseModel):
     user_id: str
     started_at: str
     finished_at: Optional[str] = None
+    round_id: Optional[str] = None  # reference to proactive_information_rounds
     selected_skills: list[str] = []
     skill_results: list[ProactiveSkillResult] = []
-    guardrail_result: dict = {}
     decision_result: dict = {}
     delivery_result: dict = {}

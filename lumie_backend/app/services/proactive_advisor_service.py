@@ -1,17 +1,14 @@
-"""Proactive Advisor Service — structured assessment-driven design.
+"""Proactive Advisor Service — flat skill architecture.
 
-Instead of packing raw data + full skill markdown into one LLM prompt,
-this service:
-  1. Runs domain-specific assessment modules (sleep, activity, medication,
-     recovery, dayprint follow-up, team follow-up) that each query their own data and
-     return a structured ProactiveSkillResult.
-  2. Evaluates deterministic guardrails to short-circuit obvious cases.
-  3. Sends only structured assessment results + compact decision policy
-     to the LLM for the final nudge decision.
-  4. Persists audit records for observability.
+New design (v2):
+  1. All proactive-eligible assessment skills run in parallel each round.
+  2. Assessment results are persisted in proactive_information_rounds collection.
+  3. LLM gets: current round results + last round results + today's dayprint + last nudge.
+  4. LLM decides whether to nudge (no deterministic guardrails).
+  5. If LLM says no: fall back to LLM-ranked 15-day dayprint topics.
+  6. Audit records persisted for observability.
 
-Adding a new domain = add a new assessment module + register it.
-No changes to this orchestrator needed.
+Skills are flat and unsorted by domain — all assessment skills run, sorted by priority.
 """
 
 import asyncio
@@ -30,7 +27,6 @@ from ..services.capability_service import get_user_enabled_capability_ids
 from ..services.chat_history_service import save_message
 from ..services.notification_service import queue_checkin_notification
 from . import proactive_audit_service as audit
-from . import proactive_guardrails as guardrails
 from .llm_client import chat_completion
 from .proactive_skill_selector import select_proactive_skills
 from .proactive_skills import DOMAIN_ASSESSMENTS
@@ -41,15 +37,6 @@ _DECISION_MODEL = settings.PALEBLUEDOT_MODEL
 
 # Capabilities whose data we can assess directly from MongoDB
 _INTERNAL_CAP_ID = "lumie_internal_data"
-
-# Capabilities that require execution infrastructure — noted for context
-_EXECUTION_CAPS = {
-    "email_read": "Email (enabled, data not available in proactive mode)",
-    "browser_portal_access": "Web portal (enabled, data not available in proactive mode)",
-    "web_read": "Web read (enabled, data not available in proactive mode)",
-}
-_MIN_ALT_CONCERN_SCORE = 0.30
-_LOW_PRIORITY_DOMAINS = {"dayprint", "team_followup"}
 
 
 # ── Assessment execution ────────────────────────────────────────────────────
@@ -74,23 +61,6 @@ async def _run_all_assessments(
     tasks = [_run_single_assessment(fn, db, user_id, now_utc) for fn in assessment_fns]
     raw_results = await asyncio.gather(*tasks)
     return [r for r in raw_results if r is not None]
-
-
-async def _get_no_material_change_streak(db, user_id: str, lookback: int = 12) -> int:
-    """Count consecutive recent runs with guardrail reason=no_material_change."""
-    docs = await db.proactive_runs.find(
-        {"user_id": user_id},
-        {"_id": 0, "guardrail_result.reason": 1},
-    ).sort("started_at", -1).to_list(lookback)
-
-    streak = 0
-    for doc in docs:
-        reason = ((doc or {}).get("guardrail_result") or {}).get("reason")
-        if reason == "no_material_change":
-            streak += 1
-            continue
-        break
-    return streak
 
 
 def _canonicalize(text: str) -> str:
@@ -130,31 +100,6 @@ def _find_skill_by_domain(skill_results: list[ProactiveSkillResult], domain: str
     for r in skill_results:
         if r.domain == domain:
             return r
-    return None
-
-
-def _pick_alternate_concern(
-    skill_results: list[ProactiveSkillResult],
-    sent_concern_keys: set[str],
-    allowed_domains: set[str] | None = None,
-) -> tuple[str, str, str, str] | None:
-    """Pick the highest-score unsent concern for same-day dedupe fallback."""
-    candidates = sorted(skill_results, key=lambda r: r.score, reverse=True)
-    for r in candidates:
-        if allowed_domains is not None and r.domain not in allowed_domains:
-            continue
-        if r.score < _MIN_ALT_CONCERN_SCORE:
-            continue
-        alt_reason = f"alternate_{r.domain}_concern_same_day_dedupe"
-        alt_key = _build_concern_key(r.domain, alt_reason, r)
-        if alt_key in sent_concern_keys:
-            continue
-        alt_message = (
-            r.recommended_actions[0]
-            if r.recommended_actions
-            else f"Quick check-in on your {r.domain.replace('_', ' ')} data."
-        )
-        return r.domain, alt_message, alt_reason, alt_key
     return None
 
 
@@ -322,18 +267,29 @@ def _build_decision_prompt(
     icd10: str,
     local_time_str: str,
     skill_results: list[ProactiveSkillResult],
+    priority_map: dict[str, int],
+    last_round_results: list[dict],
+    today_dayprint: dict | None,
     last_nudge_str: str,
-    guardrail_summary: dict,
-    execution_caps_notes: list[str],
 ) -> tuple[str, str]:
-    """Build compact system + user prompt from structured assessment results."""
+    """Build compact system + user prompt from structured assessment results.
 
-    # Serialize skill results for the LLM
-    results_for_llm = []
+    Args:
+        user_name, role, icd10, local_time_str: user context
+        skill_results: current round assessment results
+        priority_map: {domain → priority_score}
+        last_round_results: previous round assessment results (for comparison)
+        today_dayprint: today's dayprint data (if available)
+        last_nudge_str: description of last nudge
+    """
+    # Serialize current round skill results with priority scores
+    current_results_for_llm = []
     for r in skill_results:
-        results_for_llm.append({
+        priority = priority_map.get(r.domain, 0)
+        current_results_for_llm.append({
             "skill_id": r.skill_id,
             "domain": r.domain,
+            "priority": priority,
             "status": r.status.value,
             "summary": r.summary,
             "score": r.score,
@@ -349,31 +305,36 @@ def _build_decision_prompt(
         "You are in PROACTIVE MODE. You are reviewing structured assessment results to decide "
         "whether to send a nudge notification.\n\n"
         "DECISION POLICY:\n"
-        "1. First check dayprint/team follow-up domains: if there is an unresolved concern, "
-        "ongoing struggle, or notable team-member risk, prefer a follow-up nudge.\n"
-        "2. If dayprint includes family health concern signals (family/family_concern/health_concern), "
-        "treat them as high-priority follow-up evidence.\n"
-        "3. If no strong follow-up signal, check other domains for actionable concerns (score >= 0.3).\n"
-        "4. Only nudge if genuinely worth addressing NOW. Avoid minor, speculative, or future concerns.\n"
-        "5. When multiple domains have concerns, prefer the most personally grounded one.\n"
-        "6. Never repeat the same nudge reason if the situation hasn't materially changed.\n\n"
+        "1. Review all current assessment results. Higher priority scores indicate more important skills.\n"
+        "2. Look for concerns: scores >= 0.3 are actionable, >= 0.7 are urgent.\n"
+        "3. Consider trends from the previous round (if available).\n"
+        "4. Check today's dayprint for context (if available).\n"
+        "5. Only nudge if genuinely worth addressing NOW. Avoid minor or speculative concerns.\n"
+        "6. Prefer personalized, grounded concerns over vague ones.\n\n"
         f"Nudge history: {last_nudge_str}\n\n"
         "Respond with valid JSON only — no markdown, no explanation:\n"
         '{"should_nudge": true|false, "message": "<friendly nudge message ≤120 chars, or null>", '
         '"reason": "<brief internal reason>", "primary_domain": "<domain>", "confidence": 0.0-1.0}'
     )
 
-    # Build user message with assessment results + guardrail summary
-    user_parts = ["Assessment results:\n"]
-    user_parts.append(json.dumps(results_for_llm, indent=2))
+    # Build user message with assessment results + context
+    user_parts = ["=== CURRENT ROUND ASSESSMENTS ===\n"]
+    user_parts.append(json.dumps(current_results_for_llm, indent=2))
 
-    if guardrail_summary:
-        user_parts.append(f"\nGuardrail summary: {json.dumps(guardrail_summary)}")
+    if last_round_results:
+        user_parts.append("\n=== PREVIOUS ROUND ASSESSMENTS (for comparison) ===\n")
+        user_parts.append(json.dumps(last_round_results, indent=2))
 
-    if execution_caps_notes:
-        user_parts.append("\nNote: " + "; ".join(execution_caps_notes))
+    if today_dayprint:
+        user_parts.append("\n=== TODAY'S DAYPRINT ===\n")
+        dayprint_summary = {
+            "date": today_dayprint.get("date"),
+            "summary": today_dayprint.get("summary", ""),
+            "events_count": len(today_dayprint.get("events", [])),
+        }
+        user_parts.append(json.dumps(dayprint_summary, indent=2))
 
-    user_parts.append("\n\nBased on these assessments, should I reach out?")
+    user_parts.append("\n\nBased on these assessments and context, should I reach out to the user?")
     user_message = "\n".join(user_parts)
 
     return system_prompt, user_message
@@ -384,8 +345,14 @@ def _build_decision_prompt(
 async def run_proactive_check(user_id: str) -> dict:
     """Run a proactive advisor check for a single user.
 
-    Returns::
+    New architecture:
+    - All proactive-eligible assessment skills run in parallel
+    - Information rounds are persisted for trend analysis
+    - LLM gets current round + last round + today's dayprint + last nudge
+    - No deterministic guardrails; LLM decides everything
+    - If LLM says no nudge: fallback to LLM-ranked 15-day topic selection
 
+    Returns:
         {
             "nudged": bool,
             "message": str | None,
@@ -393,6 +360,7 @@ async def run_proactive_check(user_id: str) -> dict:
         }
     """
     run_id = str(uuid.uuid4())
+    round_id = str(uuid.uuid4())
     db = get_database()
     now_utc = datetime.now(timezone.utc)
 
@@ -424,14 +392,18 @@ async def run_proactive_check(user_id: str) -> dict:
         logger.info("Proactive[%s]: lumie_internal_data not enabled — skip", user_id)
         return {"nudged": False, "message": None, "reason": "no_internal_data_capability"}
 
-    logger.info("Proactive[%s]: run_id=%s, capabilities=%s", user_id, run_id, sorted(enabled_cap_ids))
+    logger.info("Proactive[%s]: run_id=%s round_id=%s capabilities=%s", user_id, run_id, round_id, sorted(enabled_cap_ids))
 
-    # ── 3. Select and run proactive assessments ─────────────────────────────
-    selected_skills = select_proactive_skills(enabled_cap_ids)
+    # ── 3. Select and run ALL proactive assessments in parallel ──────────────
+    selected_skills = select_proactive_skills()
     if not selected_skills:
         logger.warning("Proactive[%s]: no proactive skills selected", user_id)
         return {"nudged": False, "message": None, "reason": "no_proactive_skills_selected"}
 
+    # Build domain → priority map for LLM context
+    priority_map = {skill.proactive_domain: skill.proactive_priority for skill in selected_skills if skill.proactive_domain}
+
+    # Map skills to assessment functions
     assessment_fns = []
     for skill in selected_skills:
         domain = skill.proactive_domain or ""
@@ -450,6 +422,7 @@ async def run_proactive_check(user_id: str) -> dict:
         logger.warning("Proactive[%s]: no mapped assessment functions for selected proactive skills", user_id)
         return {"nudged": False, "message": None, "reason": "no_mapped_proactive_assessments"}
 
+    # Run all assessments concurrently (fault-isolated)
     skill_results = await _run_all_assessments(db, user_id, now_utc, assessment_fns)
     logger.info(
         "Proactive[%s]: selected proactive skills=%s",
@@ -467,9 +440,13 @@ async def run_proactive_check(user_id: str) -> dict:
         logger.warning("Proactive[%s]: all assessments failed — skip", user_id)
         return {"nudged": False, "message": None, "reason": "all_assessments_failed"}
 
-    # ── 4. Last nudge context ───────────────────────────────────────────────
+    # ── 3.5. Save information round for this proactive run ─────────────────
+    await audit.save_round_record(db, round_id, user_id, now_utc, skill_results)
+
+    # ── 4. Fetch last nudge, last round, and today's dayprint ───────────────
     checkin_doc = await db.advisor_checkins.find_one({"user_id": user_id})
     last_nudge = (checkin_doc or {}).get("last_nudge")
+
     if last_nudge:
         nudged_at_raw = last_nudge.get("nudged_at", "")
         try:
@@ -479,12 +456,11 @@ async def run_proactive_check(user_id: str) -> dict:
             minutes_ago = int((now_utc - nudged_at_dt).total_seconds() / 60)
             last_nudge_str = (
                 f"Last nudge sent {minutes_ago} minutes ago. "
-                f"Reason: \"{last_nudge.get('reason', '')}\". "
-                f"Domain: {last_nudge.get('primary_domain', 'unknown')}. "
-                "Only nudge again for the same concern if the situation has materially changed."
+                f"Reason: {last_nudge.get('reason', 'unknown')}. "
+                f"Domain: {last_nudge.get('primary_domain', 'unknown')}."
             )
         except Exception:
-            last_nudge_str = ""
+            last_nudge_str = "Previous nudge context available."
     else:
         last_nudge_str = "No nudge has been sent yet."
 
@@ -495,48 +471,43 @@ async def run_proactive_check(user_id: str) -> dict:
         last_nudge.get("primary_domain", "none") if last_nudge else "none",
     )
 
-    # ── 5. Evaluate guardrails ──────────────────────────────────────────────
-    no_change_streak = await _get_no_material_change_streak(db, user_id)
-    logger.info("Proactive[%s]: no_material_change_streak=%d", user_id, no_change_streak)
+    # Fetch last round for trend comparison
+    last_round_doc = await audit.get_last_round(db, user_id)
+    last_round_results = []
+    if last_round_doc:
+        last_round_results = [
+            {
+                "skill_id": r.get("skill_id"),
+                "domain": r.get("domain"),
+                "status": r.get("status"),
+                "score": r.get("score"),
+            }
+            for r in last_round_doc.get("skill_results", [])
+        ]
+        logger.info("Proactive[%s]: found last round with %d results", user_id, len(last_round_results))
 
-    guardrail = guardrails.evaluate(
-        skill_results=skill_results,
-        last_nudge=last_nudge,
-        now_utc=now_utc,
-        no_material_change_streak=no_change_streak,
+    # Fetch today's dayprint for context
+    today_str = now_local.date().isoformat()
+    today_dayprint = await db.dayprints.find_one(
+        {"user_id": user_id, "date": today_str},
+        {"_id": 0},
     )
-    logger.info("Proactive[%s]: guardrail action=%s reason=%s", user_id, guardrail.action, guardrail.reason)
+    if today_dayprint:
+        logger.info("Proactive[%s]: found today's dayprint with %d events", user_id, len(today_dayprint.get("events", [])))
 
-    if guardrail.action == "skip_nudge":
-        skip_decision = {
-            "should_nudge": False,
-            "reason_code": guardrail.reason,
-            "message": None,
-            "primary_domain": None,
-            "confidence": 1.0,
-            "decision_summary": "guardrail_skip_nudge",
-        }
-        await audit.save_run_record(db, run_id, user_id, now_utc, skill_results, guardrail, skip_decision)
-        return {"nudged": False, "message": None, "reason": guardrail.reason}
-
-    # ── 6. Build prompt and call LLM ────────────────────────────────────────
-    execution_notes = [
-        label for cap_id, label in _EXECUTION_CAPS.items()
-        if cap_id in enabled_cap_ids
-    ]
-
+    # ── 5. Build prompt and call LLM ────────────────────────────────────────
     system_prompt, user_message = _build_decision_prompt(
         user_name=user_name,
         role=role,
         icd10=icd10,
         local_time_str=local_time_str,
         skill_results=skill_results,
+        priority_map=priority_map,
+        last_round_results=last_round_results,
+        today_dayprint=today_dayprint,
         last_nudge_str=last_nudge_str,
-        guardrail_summary=guardrail.details,
-        execution_caps_notes=execution_notes,
     )
 
-    # For force_nudge, we still call the LLM to generate the message
     logger.info("Proactive[%s]: calling decision model", user_id)
     logger.debug("Proactive[%s]: system_prompt=\n%s", user_id, system_prompt)
     logger.debug("Proactive[%s]: user_message=\n%s", user_id, user_message)
@@ -563,34 +534,15 @@ async def run_proactive_check(user_id: str) -> dict:
             "message": None,
             "primary_domain": None,
             "confidence": 0.0,
-            "decision_summary": "llm_error_exit",
         }
-        await audit.save_run_record(db, run_id, user_id, now_utc, skill_results, guardrail, error_decision)
+        await audit.save_run_record(db, run_id, user_id, now_utc, skill_results, error_decision, None, round_id)
         return {"nudged": False, "message": None, "reason": f"llm_error: {e}"}
 
     should_nudge: bool = bool(result.get("should_nudge", False))
     message: str | None = result.get("message") or None
     reason: str = result.get("reason", "")
 
-    # If guardrail said force_nudge, override LLM if it said no
-    if guardrail.action == "force_nudge" and not should_nudge:
-        logger.info("Proactive[%s]: guardrail force_nudge overriding model no-nudge", user_id)
-        should_nudge = True
-        target_domain = guardrail.details.get("target_domain") or guardrail.details.get("domain")
-        target_result = None
-        if target_domain:
-            target_result = next((r for r in skill_results if r.domain == target_domain), None)
-        if not message:
-            if target_result and target_result.recommended_actions:
-                message = target_result.recommended_actions[0]
-            else:
-                top = max(skill_results, key=lambda r: r.score)
-                message = top.recommended_actions[0] if top.recommended_actions else "Hey, just checking in — how are you doing?"
-        if target_domain and not result.get("primary_domain"):
-            result["primary_domain"] = target_domain
-        reason = guardrail.reason
-
-    # ── 7. Same-day semantic dedupe & alternate concern selection ─────────
+    # ── 6. Same-day semantic dedupe & alternate topic selection ──────────
     local_date_key = now_local.date().isoformat()
     daily_sent_concerns = (
         ((checkin_doc or {}).get("daily_sent_concerns") or {}).get(local_date_key) or []
@@ -601,11 +553,7 @@ async def run_proactive_check(user_id: str) -> dict:
     )
     sent_topic_keys = set(daily_sent_topics)
 
-    selected_domain = (
-        result.get("primary_domain")
-        or guardrail.details.get("target_domain")
-        or guardrail.details.get("domain")
-    )
+    selected_domain = result.get("primary_domain")
     if not selected_domain and skill_results:
         selected_domain = max(skill_results, key=lambda r: r.score).domain
 
@@ -613,13 +561,18 @@ async def run_proactive_check(user_id: str) -> dict:
     concern_key = _build_concern_key(selected_domain or "unknown", reason, selected_skill)
     selected_topic_key = ""
 
-    if should_nudge and message and concern_key in sent_concern_keys:
+    # Check for same-day duplicate concern
+    is_duplicate = should_nudge and message and concern_key in sent_concern_keys
+    if is_duplicate:
         logger.info(
-            "Proactive[%s]: suppress duplicate concern key=%s for date=%s, trying alternate",
+            "Proactive[%s]: suppress duplicate concern key=%s for date=%s, trying topic fallback",
             user_id,
             concern_key,
             local_date_key,
         )
+
+    # If no nudge OR duplicate: try topic fallback (LLM-ranked 15-day dayprint topics)
+    if not should_nudge or is_duplicate:
         alt_topic = await _pick_alternate_topic_nudge(
             db=db,
             user_id=user_id,
@@ -631,32 +584,15 @@ async def run_proactive_check(user_id: str) -> dict:
         if alt_topic is not None:
             selected_domain, message, reason, concern_key, selected_topic_key = alt_topic
             result["primary_domain"] = selected_domain
-            logger.info("Proactive[%s]: switched to alternate topic concern key=%s", user_id, concern_key)
+            should_nudge = True  # Override to true if we found a good topic
+            logger.info("Proactive[%s]: selected topic fallback key=%s", user_id, concern_key)
         else:
-            alt_allowed_domains = None
-            if selected_domain in _LOW_PRIORITY_DOMAINS:
-                alt_allowed_domains = _LOW_PRIORITY_DOMAINS
-
-            alt = _pick_alternate_concern(
-                skill_results=skill_results,
-                sent_concern_keys=sent_concern_keys,
-                allowed_domains=alt_allowed_domains,
-            )
-            if alt is None:
-                should_nudge = False
-                message = None
-                reason = "suppressed_duplicate_same_day"
-                selected_domain = None
-                concern_key = ""
-            else:
-                selected_domain, message, reason, concern_key = alt
-                result["primary_domain"] = selected_domain
-                logger.info(
-                    "Proactive[%s]: switched to alternate concern domain=%s key=%s",
-                    user_id,
-                    selected_domain,
-                    concern_key,
-                )
+            should_nudge = False
+            message = None
+            reason = "no_concern_or_duplicate_no_topic_fallback"
+            selected_domain = None
+            concern_key = ""
+            logger.info("Proactive[%s]: no nudge and no topic fallback", user_id)
 
     # ── 7. Deliver ──────────────────────────────────────────────────────────
     decision_data = {
@@ -687,9 +623,15 @@ async def run_proactive_check(user_id: str) -> dict:
 
         await queue_checkin_notification(user_id, message)
 
-        # Build structured last_nudge with evidence summary and inputs hash
-        evidence_summary = guardrails.build_evidence_summary(skill_results)
-        decision_inputs_hash = guardrails.compute_decision_inputs_hash(skill_results)
+        # Build structured last_nudge for next run context
+        evidence_summary = {
+            r.domain: {
+                "score": r.score,
+                "status": r.status.value,
+                "top_signal": r.signals[0] if r.signals else None,
+            }
+            for r in skill_results
+        }
 
         await db.advisor_checkins.update_one(
             {"user_id": user_id},
@@ -700,8 +642,6 @@ async def run_proactive_check(user_id: str) -> dict:
                     "run_id": run_id,
                     "primary_domain": selected_domain or result.get("primary_domain"),
                     "evidence_summary": evidence_summary,
-                    "decision_inputs_hash": decision_inputs_hash,
-                    "concern_key": concern_key,
                 }},
                 "$addToSet": {
                     f"daily_sent_concerns.{local_date_key}": concern_key,
@@ -728,7 +668,7 @@ async def run_proactive_check(user_id: str) -> dict:
 
     # ── 8. Audit ────────────────────────────────────────────────────────────
     await audit.save_run_record(
-        db, run_id, user_id, now_utc, skill_results, guardrail, decision_data, delivery_data,
+        db, run_id, user_id, now_utc, skill_results, decision_data, delivery_data, round_id,
     )
 
     return {"nudged": should_nudge, "message": message, "reason": reason}
