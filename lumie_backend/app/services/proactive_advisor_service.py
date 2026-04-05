@@ -184,7 +184,7 @@ async def _rank_topics_with_llm(
     try:
         response = await chat_completion(
             model=_DECISION_MODEL,
-            max_tokens=500,
+            max_tokens=1000,
             temperature=0,
             system=system_prompt,
             messages=[{"role": "user", "content": user_message}],
