@@ -394,8 +394,8 @@ async def run_proactive_check(user_id: str) -> dict:
 
     logger.info("Proactive[%s]: run_id=%s round_id=%s capabilities=%s", user_id, run_id, round_id, sorted(enabled_cap_ids))
 
-    # ── 3. Select and run ALL proactive assessments in parallel ──────────────
-    selected_skills = select_proactive_skills()
+    # ── 3. Select and run proactive assessments (enabled capabilities only) ──
+    selected_skills = select_proactive_skills(enabled_cap_ids)
     if not selected_skills:
         logger.warning("Proactive[%s]: no proactive skills selected", user_id)
         return {"nudged": False, "message": None, "reason": "no_proactive_skills_selected"}
