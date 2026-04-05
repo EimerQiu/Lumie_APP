@@ -66,12 +66,28 @@ This skill helps the proactive advisor detect:
   - `date`: ISO date string (YYYY-MM-DD)
   - `user_id`: The user whose dayprint it is
   - `events`: Array of daily events
-    - `type`: "important_insight", "advisor_chat", "mood_entry", etc.
+    - `event_id`: UUID for this specific event
+    - `type`: Event type — focus on "important_insight" events (automatically flagged by advisor when detecting concerns)
+    - `timestamp`: ISO datetime (UTC)
     - `data`: Object containing event-specific fields
-      - `category`: Health topic (sleep, activity, mood, medication, etc.)
-      - `summary`: Natural language description of the event
-      - `concern_flag`: Boolean (true if user marked as concern)
-      - `resolved`: Boolean (true if concern was addressed)
+
+## Important Insight Events (Priority!)
+
+**`important_insight` events** are automatically created when the advisor detects:
+- New or worsening symptoms
+- Medication concerns (missed dose, side effect)
+- Emotional distress or health anxiety
+- Urgent health signals
+
+**Fields in important_insight.data:**
+- `category`: One of: `symptom`, `medication`, `emotional`, `health_concern`, `urgent`, `other`
+- `summary`: Brief description (3rd person, includes user's name)
+- `session_id`: Which advisor session detected this
+
+**These are the "重点关注" (priority concern) markers!**
+- Scan for `important_insight` events first
+- Weight by category: urgent > health_concern > medication > symptom > emotional
+- If same category appears on 2+ days → strong follow-up signal
 
 # Execution Plan
 1. Parse `days_back` parameter (default 7)
@@ -105,10 +121,10 @@ dayprints = await db.dayprints.find({
 }).sort("date", -1).to_list(7)
 ```
 
-## Extract and categorize concerns
+## Extract and categorize important insights
 ```python
-concerns_by_category = {}
-concern_history = {}  # track dates mentioned
+# Priority: scan for important_insight events first
+important_insights = {}  # category -> [dates, summaries]
 
 for dayprint in dayprints:
     date = dayprint.get("date")
@@ -116,35 +132,48 @@ for dayprint in dayprints:
     
     for event in events:
         event_type = event.get("type")
-        if event_type not in ("important_insight", "advisor_chat"):
-            continue
         
-        data = event.get("data") or {}
-        category = data.get("category", "general").lower()
-        summary = data.get("summary", "").strip()
-        resolved = data.get("resolved", False)
-        concern_flag = data.get("concern_flag", False)
-        
-        if not summary:
-            continue
-        
-        # Only track unresolved or flagged concerns
-        if not resolved or concern_flag:
-            if category not in concerns_by_category:
-                concerns_by_category[category] = []
+        # PRIORITY: important_insight events are flagged concerns
+        if event_type == "important_insight":
+            data = event.get("data") or {}
+            category = data.get("category", "other").lower()
+            summary = data.get("summary", "").strip()
             
-            concerns_by_category[category].append({
-                "date": date,
-                "summary": summary,
-                "resolved": resolved,
-                "concern_flag": concern_flag
-            })
+            if not summary:
+                continue
             
-            # Track recurrence
+            if category not in important_insights:
+                important_insights[category] = {"dates": [], "summaries": []}
+            
+            important_insights[category]["dates"].append(date)
+            important_insights[category]["summaries"].append(summary)
+
+# Secondary: also scan advisor_chat events for other concerns (lower priority)
+other_concerns = {}
+
+for dayprint in dayprints:
+    date = dayprint.get("date")
+    events = dayprint.get("events") or []
+    
+    for event in events:
+        event_type = event.get("type")
+        
+        if event_type == "advisor_chat":
+            data = event.get("data") or {}
+            category = data.get("category", "general").lower()
+            summary = data.get("summary", "").strip()
+            
+            if not summary:
+                continue
+            
+            # Skip if this category already covered by important_insights
+            if category in important_insights:
+                continue
+            
             key = f"{category}:{summary[:50]}"
-            if key not in concern_history:
-                concern_history[key] = {"dates": [], "category": category}
-            concern_history[key]["dates"].append(date)
+            if key not in other_concerns:
+                other_concerns[key] = {"dates": [], "category": category}
+            other_concerns[key]["dates"].append(date)
 ```
 
 ## Identify and categorize concerns
@@ -183,59 +212,116 @@ unresolved_concerns.sort(
 
 ## Build response
 ```python
-# Separate recurring vs recent concerns
-recurring = [c for c in unresolved_concerns if c["is_recurring"]]
-recent_only = [c for c in unresolved_concerns if not c["is_recurring"] and c["is_recent"]]
+# PRIORITY: important_insight events are more significant than advisor_chat mentions
+# Category weight: urgent > health_concern > medication > symptom > emotional > other
+
+category_weight = {
+    "urgent": 5,
+    "health_concern": 4,
+    "medication": 3,
+    "symptom": 2,
+    "emotional": 1,
+    "other": 0
+}
+
+# Separate important_insights by recurrence
+important_recurring = [
+    {
+        "category": cat,
+        "occurrences": len(data["dates"]),
+        "dates": sorted(set(data["dates"]), reverse=True),
+        "summaries": data["summaries"],
+        "weight": category_weight.get(cat, 0)
+    }
+    for cat, data in important_insights.items()
+    if len(set(data["dates"])) >= 2
+]
+
+important_recent = [
+    {
+        "category": cat,
+        "dates": sorted(set(data["dates"]), reverse=True),
+        "summaries": data["summaries"],
+        "weight": category_weight.get(cat, 0)
+    }
+    for cat, data in important_insights.items()
+    if len(set(data["dates"])) == 1
+]
+
+# Sort by weight (urgency)
+important_recurring.sort(key=lambda x: x["weight"], reverse=True)
+important_recent.sort(key=lambda x: x["weight"], reverse=True)
+
+# Also include non-important concerns (lower priority)
+other_recurring = [
+    {
+        "category": c["category"],
+        "summary": c["key"].split(":")[-1],
+        "occurrences": len(c["dates"])
+    }
+    for c in other_concerns.values()
+    if len(set(c["dates"])) >= 2
+]
 
 _result = {
     "summary": (
-        f"Found {len(recurring)} recurring concerns and {len(recent_only)} recent concerns"
-        if recurring and recent_only
-        else f"Found {len(recurring)} recurring concerns"
-        if recurring
-        else f"Found {len(recent_only)} recent unresolved concerns"
-        if recent_only
-        else "No unresolved concerns"
+        f"Found {len(important_recurring)} flagged recurring concerns (important_insight)"
+        + (f" and {len(important_recent)} recent flagged concerns" if important_recent else "")
+        + (f" plus {len(other_recurring)} other recurring patterns" if other_recurring else "")
     ),
-    "recurring_concerns": [
+    "important_insights_recurring": [
         {
             "category": c["category"],
-            "summary": c["key"].split(":")[-1],
+            "weight": c["weight"],
             "occurrences": c["occurrences"],
-            "last_seen": c["last_seen"],
-            "days_since_last": c["days_since_last"]
+            "dates": c["dates"],
+            "latest_summary": c["summaries"][-1] if c["summaries"] else ""
         }
-        for c in recurring[:5]
+        for c in important_recurring[:5]
     ],
-    "recent_concerns": [
+    "important_insights_recent": [
         {
             "category": c["category"],
-            "summary": c["key"].split(":")[-1],
-            "days_since_last": c["days_since_last"]
+            "weight": c["weight"],
+            "date": c["dates"][0],
+            "summary": c["summaries"][0] if c["summaries"] else ""
         }
-        for c in recent_only[:3]
+        for c in important_recent[:3]
     ],
-    "has_follow_up_signal": len(recurring) > 0 or len(recent_only) > 0
+    "other_concerns_recurring": other_recurring[:3],
+    "has_priority_signal": len(important_recurring) > 0 or len(important_recent) > 0
 }
 ```
 
 # Proactive Decision Guidance
 
-**Return data for LLM to decide. LLM should nudge if:**
-- `recurring_concerns` list is non-empty (concern appeared 2+ days)
-- `recent_concerns` list has health/medication categories
-- `has_follow_up_signal` is true
+**Return data structure prioritizes `important_insight` events (重点关注):**
+
+LLM receives:
+- `important_insights_recurring`: Flagged concerns appearing on 2+ days (HIGHEST PRIORITY)
+- `important_insights_recent`: Flagged concerns from last 10 days (HIGH PRIORITY)
+- `other_concerns_recurring`: Non-flagged patterns (lower priority)
+- `has_priority_signal`: Boolean for quick check
+
+**LLM should STRONGLY nudge if:**
+- `important_insights_recurring` is non-empty → User flagged same concern multiple times
+- Category weight >= 3 (`medication`, `health_concern`, `urgent`)
+- Dates show consistent pattern
+
+**LLM should nudge if:**
+- `important_insights_recent` has items → Advisor detected and flagged concern recently
+- Category is health-related even if not recurring
 
 **LLM should NOT nudge if:**
-- Both `recurring_concerns` and `recent_concerns` are empty
-- Last mention is > 10 days old
-- All concerns already marked as resolved
+- `has_priority_signal` is false → No flagged concerns at all
+- Last mention > 10 days old
+- Only very low-weight categories
 
-**LLM decision context:**
-- Recurring concerns are higher priority (user mentioned same issue multiple times)
-- Recent-only concerns should be considered but with lower weight
-- Category matters: health/medication > mood > social > other
-- Let LLM combine this with other skill data to decide overall nudge
+**Key context for LLM:**
+- **`important_insight` events are pre-screened by the advisor — they've already been deemed significant**
+- Weight = urgency level (0-5): urgent(5) > health_concern(4) > medication(3) > symptom(2) > emotional(1) > other(0)
+- Recurring important_insights should be weighted MUCH higher than other_concerns
+- LLM should combine with sleep/activity data for full context
 
 # Failure Handling
 - If `dayprints` collection empty for range: return summary "No dayprint data available"
