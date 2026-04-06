@@ -23,6 +23,7 @@ from zoneinfo import ZoneInfo
 
 from ..core.config import settings
 from ..core.database import get_database
+from ..core.credential_utils import resolve_credential_key
 from ..models.proactive import ProactiveSkillData
 from ..services.capability_service import get_user_enabled_capability_ids
 from ..services.chat_history_service import save_message
@@ -51,9 +52,12 @@ async def _load_proactive_credential(db, user_id: str, skill: SkillIndexItem) ->
     if not skill.requires_credentials:
         return None
 
-    # Look up credential by user_id + skill_id (works for both lumie_internal and external)
+    # Resolve the credential key (handles shared_credential_id)
+    credential_key = resolve_credential_key(skill)
+
+    # Look up credential by user_id + credential key
     cred = await db.advisor_skill_credentials.find_one(
-        {"user_id": user_id, "skill_id": skill.skill_id},
+        {"user_id": user_id, "skill_id": credential_key},
         {"_id": 0}
     )
 

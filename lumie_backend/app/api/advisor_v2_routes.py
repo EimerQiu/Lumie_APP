@@ -25,6 +25,7 @@ from ..services.skill_registry_service import skill_registry
 from ..services.chat_history_service import save_exchange, save_message
 from ..services.dayprint_service import log_advisor_chat
 from ..core.database import get_database
+from ..core.credential_utils import resolve_credential_key
 from ..models.execution_job import (
     AdvisorChatV2Request,
     AdvisorChatV2Response,
@@ -244,17 +245,6 @@ async def reindex_skills(
     return {"message": "Reindex complete", **result}
 
 
-# ── Credential helpers ───────────────────────────────────────────────────────
-
-def _resolve_credential_key(skill) -> str:
-    """Return the DB key used to store/retrieve a skill's credential.
-
-    Skills with a shared_credential_id use a shared pool key
-    (__shared__{id}) that is independent of any skill_id.
-    """
-    if skill.shared_credential_id:
-        return f"__shared__{skill.shared_credential_id}"
-    return skill.skill_id
 
 
 # ── Credentials ──────────────────────────────────────────────────────────────
@@ -266,7 +256,7 @@ async def get_skill_credential(
 ):
     """Get the credential for a skill (sanitized — no passwords or pings)."""
     skill = skill_registry.get_skill(skill_id)
-    cred_key = _resolve_credential_key(skill) if skill else skill_id
+    cred_key = resolve_credential_key(skill) if skill else skill_id
     cred = await skill_credential_service.get_credential(user_id, cred_key)
     if not cred:
         return {"status": "missing", "skill_id": cred_key}
@@ -287,7 +277,7 @@ async def save_skill_credential(
 
     cred = await skill_credential_service.save_credential(
         user_id=user_id,
-        skill_id=_resolve_credential_key(skill),
+        skill_id=resolve_credential_key(skill),
         data=request.model_dump(exclude_none=True),
     )
 
@@ -307,7 +297,7 @@ async def test_skill_credential(
     if not skill:
         raise HTTPException(status_code=404, detail="Skill not found")
 
-    cred_key = _resolve_credential_key(skill)
+    cred_key = resolve_credential_key(skill)
     cred = await skill_credential_service.get_credential(user_id, cred_key)
     if not cred:
         return CredentialTestResponse(

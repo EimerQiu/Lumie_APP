@@ -15,6 +15,7 @@ from zoneinfo import ZoneInfo
 
 from ..core.config import settings
 from ..core.database import get_database
+from ..core.credential_utils import resolve_credential_key
 from . import capability_service
 from . import skill_credential_service
 from . import execution_service
@@ -191,7 +192,7 @@ async def _handle_skill_execution(
     # ── Step 8: Load credentials ─────────────────────────────────────
     credential = None
     if skill.requires_credentials or skill.requires_ping:
-        cred_key = f"__shared__{skill.shared_credential_id}" if skill.shared_credential_id else skill_id
+        cred_key = resolve_credential_key(skill)
         credential = await skill_credential_service.get_credential(user_id, cred_key)
 
         # Auto-provision Lumie internal credentials
