@@ -10,6 +10,13 @@ class SleepStageData(BaseModel):
     percentage: float
 
 
+class SleepTimelineSegment(BaseModel):
+    """One ordered block in the sleep timeline (stage + time window)."""
+    stage: str  # "awake", "light", "deep", "rem"
+    start_offset_minutes: int  # minutes from session bedtime
+    duration_minutes: int
+
+
 class SleepSessionSync(BaseModel):
     """A single sleep session uploaded from the ring."""
     session_id: str
@@ -39,6 +46,8 @@ class SleepSessionResponse(BaseModel):
     sleep_quality_score: float
     created_at: datetime
     source: str = "ring"  # defaults to "ring" for records predating this field
+    timeline_segments: list[SleepTimelineSegment] = []
+    wake_count: int = 0
 
 
 class SleepSummaryResponse(BaseModel):

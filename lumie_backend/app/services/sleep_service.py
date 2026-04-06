@@ -9,6 +9,7 @@ from ..models.sleep import (
     SleepSessionSync,
     SleepSessionResponse,
     SleepStageData,
+    SleepTimelineSegment,
     SleepSummaryResponse,
     SleepTargetResponse,
 )
@@ -72,6 +73,83 @@ def _passes_quality_filter(total_minutes: int, quality_score: float,
     return True
 
 
+def _split_by_wake_boundaries(segs: list[SleepSessionSync]) -> list[list[SleepSessionSync]]:
+    """Split same-night segments into sub-sessions based on wake duration rules.
+
+    Session continues (gap treated as awake block within session) if:
+      - Gap ≤ 30 minutes at any time of night, OR
+      - Gap ≤ 60 minutes before 5 AM
+
+    Session ends (start a new session) if:
+      - Gap > 30 minutes AND the gap starts at or after 5:00 AM, OR
+      - Gap > 60 minutes at any time
+    """
+    if not segs:
+        return []
+
+    groups: list[list[SleepSessionSync]] = [[segs[0]]]
+    for seg in segs[1:]:
+        prev_end = groups[-1][-1].wake_time
+        gap_minutes = int((seg.bedtime - prev_end).total_seconds() / 60)
+        is_past_5am = prev_end.hour >= 5
+
+        if (gap_minutes > 30 and is_past_5am) or gap_minutes > 60:
+            groups.append([seg])
+        else:
+            groups[-1].append(seg)
+
+    return groups
+
+
+def _build_timeline_segments(segs: list[SleepSessionSync],
+                              earliest_bedtime: datetime) -> tuple[list[dict], int]:
+    """Build an ordered list of timeline blocks from ring session records.
+
+    Each ring record contributes blocks in this order:
+      awake (if any within the record) → light → deep → rem
+
+    Gaps between records (the user was out of bed / awake) are inserted as
+    explicit "awake" blocks.  Returns (timeline_segments, wake_count).
+    """
+    timeline: list[dict] = []
+    wake_count = 0
+    last_end: datetime | None = None
+
+    stage_order = ["awake", "light", "deep", "rem"]
+
+    for seg in segs:
+        # Awake gap between previous segment end and this one's start
+        if last_end is not None:
+            gap_minutes = int((seg.bedtime - last_end).total_seconds() / 60)
+            if gap_minutes > 0:
+                gap_offset = int((last_end - earliest_bedtime).total_seconds() / 60)
+                timeline.append({
+                    "stage": "awake",
+                    "start_offset_minutes": gap_offset,
+                    "duration_minutes": gap_minutes,
+                })
+                wake_count += 1
+
+        # Within-segment stage blocks in conventional sleep-architecture order
+        stage_map = {s.stage: s.duration_minutes for s in seg.stages}
+        awake_mins = stage_map.get("awake", seg.time_awake_minutes)
+        block_offset = int((seg.bedtime - earliest_bedtime).total_seconds() / 60)
+
+        for stage_name in stage_order:
+            mins = awake_mins if stage_name == "awake" else stage_map.get(stage_name, 0)
+            if mins > 0:
+                timeline.append({
+                    "stage": stage_name,
+                    "start_offset_minutes": block_offset,
+                    "duration_minutes": mins,
+                })
+                block_offset += mins
+
+        last_end = seg.wake_time
+
+    return timeline, wake_count
+
+
 def _build_merged_doc(user_id: str, night_key: str,
                       segs: list[SleepSessionSync]) -> dict:
     """Merge multiple same-night ring segments into a single DB document."""
@@ -108,6 +186,8 @@ def _build_merged_doc(user_id: str, night_key: str,
         1,
     )
 
+    timeline_segments, wake_count = _build_timeline_segments(segs, earliest_bedtime)
+
     return {
         "user_id": user_id,
         # Stable session_id per night so re-syncs overwrite cleanly
@@ -122,6 +202,8 @@ def _build_merged_doc(user_id: str, night_key: str,
         "sleep_quality_score": quality,
         "source": segs[0].source,
         "created_at": latest_wake,
+        "timeline_segments": timeline_segments,
+        "wake_count": wake_count,
     }
 
 
@@ -145,12 +227,18 @@ class SleepService:
             nights[key].append(s)
 
         for night_key, segs in nights.items():
-            merged = _build_merged_doc(user_id, night_key, segs)
-            await db.sleep_sessions.update_one(
-                {"user_id": user_id, "session_id": merged["session_id"]},
-                {"$set": merged},
-                upsert=True,
-            )
+            sorted_segs = sorted(segs, key=lambda s: s.bedtime)
+            sub_sessions = _split_by_wake_boundaries(sorted_segs)
+            for i, sub in enumerate(sub_sessions):
+                # Use bedtime timestamp suffix for any split sub-sessions so that
+                # re-syncs still upsert to the same document.
+                sub_key = night_key if i == 0 else f"{night_key}_{sub[0].bedtime.strftime('%H%M')}"
+                merged = _build_merged_doc(user_id, sub_key, sub)
+                await db.sleep_sessions.update_one(
+                    {"user_id": user_id, "session_id": merged["session_id"]},
+                    {"$set": merged},
+                    upsert=True,
+                )
 
         logger.info("[sleep] synced %d night(s) for user %s", len(nights), user_id)
 
@@ -287,6 +375,11 @@ class SleepService:
             sleep_quality_score=doc["sleep_quality_score"],
             created_at=doc["created_at"],
             source=doc.get("source", "ring"),
+            timeline_segments=[
+                SleepTimelineSegment(**seg)
+                for seg in doc.get("timeline_segments", [])
+            ],
+            wake_count=doc.get("wake_count", 0),
         )
 
 

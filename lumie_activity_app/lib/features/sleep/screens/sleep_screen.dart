@@ -2,11 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../shared/models/sleep_models.dart';
-import '../../../shared/widgets/gradient_card.dart';
 import '../../ring/providers/ring_provider.dart';
 import '../providers/sleep_provider.dart';
 import '../widgets/sleep_stage_chart.dart';
-import '../widgets/sleep_metric_card.dart';
 
 class SleepScreen extends StatefulWidget {
   const SleepScreen({super.key});
@@ -22,7 +20,6 @@ class _SleepScreenState extends State<SleepScreen> {
   @override
   void initState() {
     super.initState();
-    // Trigger a fresh backend read on mount (SleepProvider debounces concurrent calls).
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) context.read<SleepProvider>().load();
     });
@@ -44,8 +41,6 @@ class _SleepScreenState extends State<SleepScreen> {
     if (!mounted) return;
     final connected = _ringProvider?.isConnected ?? false;
     if (connected && !_lastConnected) {
-      // RingProvider already started a background sleep sync (0x53 + 0x55).
-      // Wait for it to finish uploading, then reload from the backend.
       _reloadAfterRingSync();
     }
     _lastConnected = connected;
@@ -53,7 +48,6 @@ class _SleepScreenState extends State<SleepScreen> {
 
   Future<void> _reloadAfterRingSync() async {
     if (!mounted) return;
-    // Give the background sync in RingProvider up to 10 s to complete.
     await Future.delayed(const Duration(seconds: 10));
     if (!mounted) return;
     context.read<SleepProvider>().load();
@@ -65,12 +59,46 @@ class _SleepScreenState extends State<SleepScreen> {
     super.dispose();
   }
 
+  // ─── Formatting helpers ───────────────────────────────────────────────────
+
+  String _formatTime(DateTime dt) {
+    final h = dt.hour > 12 ? dt.hour - 12 : (dt.hour == 0 ? 12 : dt.hour);
+    final period = dt.hour >= 12 ? 'PM' : 'AM';
+    final m = dt.minute.toString().padLeft(2, '0');
+    return '$h:$m $period';
+  }
+
+  String _formatDuration(Duration d) {
+    final h = d.inHours;
+    final m = d.inMinutes % 60;
+    if (h == 0) return '${m}m';
+    if (m == 0) return '${h}h';
+    return '${h}h ${m}m';
+  }
+
+  String _formatFullDate(DateTime dt) {
+    const weekdays = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+    const months   = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+                       'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    return '${weekdays[dt.weekday - 1]}, ${months[dt.month - 1]} ${dt.day}';
+  }
+
+  /// Non-alarming quality description — never uses "bad", "poor", or "failed".
+  String _qualityDescription(double score) {
+    if (score >= 80) return 'Better than your recent average';
+    if (score >= 65) return 'Similar to your recent average';
+    if (score >= 50) return 'Slightly below your usual';
+    return 'Below your usual';
+  }
+
+  // ─── Build ────────────────────────────────────────────────────────────────
+
   @override
   Widget build(BuildContext context) {
     return Consumer<SleepProvider>(
       builder: (context, sleep, _) {
         return Scaffold(
-          backgroundColor: AppColors.backgroundWhite,
+          backgroundColor: AppColors.backgroundPaper,
           body: SafeArea(
             child: CustomScrollView(
               slivers: [
@@ -83,17 +111,17 @@ class _SleepScreenState extends State<SleepScreen> {
                   _buildNoData()
                 else
                   SliverPadding(
-                    padding: const EdgeInsets.all(24),
+                    padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
                     sliver: SliverList(
                       delegate: SliverChildListDelegate([
-                        _buildSleepSummaryCard(sleep),
+                        const SizedBox(height: 20),
+                        _buildQualityScoreCard(sleep.latestSleep!),
                         const SizedBox(height: 16),
-                        _buildSleepStagesCard(sleep.latestSleep!),
+                        _buildTimelineCard(sleep.latestSleep!),
                         const SizedBox(height: 16),
-                        _buildMetricsGrid(sleep.latestSleep!),
+                        _buildMetricsCard(sleep.latestSleep!),
                         const SizedBox(height: 16),
                         _buildViewHistoryButton(),
-                        const SizedBox(height: 24),
                       ]),
                     ),
                   ),
@@ -104,6 +132,8 @@ class _SleepScreenState extends State<SleepScreen> {
       },
     );
   }
+
+  // ─── Header ───────────────────────────────────────────────────────────────
 
   Widget _buildHeader(SleepProvider sleep) {
     final syncedAt = sleep.lastSyncedAt;
@@ -118,205 +148,167 @@ class _SleepScreenState extends State<SleepScreen> {
 
     return SliverToBoxAdapter(
       child: Container(
-        padding: const EdgeInsets.all(24),
-        decoration: const BoxDecoration(gradient: AppColors.primaryGradient),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+        padding: const EdgeInsets.fromLTRB(20, 20, 20, 16),
+        color: AppColors.backgroundPaper,
+        child: Row(
           children: [
-            Row(
-              children: [
-                Container(
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    gradient: AppColors.coolGradient,
-                    borderRadius: BorderRadius.circular(12),
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: AppColors.primaryLemon,
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: const Icon(
+                Icons.bedtime,
+                color: AppColors.textOnYellow,
+                size: 22,
+              ),
+            ),
+            const SizedBox(width: 14),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'Sleep',
+                    style: TextStyle(
+                      fontSize: 22,
+                      fontWeight: FontWeight.bold,
+                      color: AppColors.textPrimary,
+                    ),
                   ),
-                  child: const Icon(
-                    Icons.bedtime,
-                    color: AppColors.textOnYellow,
-                    size: 24,
-                  ),
-                ),
-                const SizedBox(width: 16),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Text(
-                        'Sleep',
-                        style: TextStyle(
-                          fontSize: 24,
-                          fontWeight: FontWeight.bold,
-                          color: AppColors.textPrimary,
+                  if (syncLabel != null)
+                    Row(
+                      children: [
+                        Icon(
+                          incomplete
+                              ? Icons.warning_amber_rounded
+                              : Icons.check_circle_outline,
+                          size: 11,
+                          color: incomplete ? AppColors.warning : AppColors.success,
                         ),
-                      ),
-                      const Text(
-                        'Rest & Recovery',
-                        style: TextStyle(
-                          fontSize: 14,
-                          color: AppColors.textSecondary,
-                        ),
-                      ),
-                      if (syncLabel != null) ...[
-                        const SizedBox(height: 4),
-                        Row(
-                          children: [
-                            Icon(
-                              incomplete
-                                  ? Icons.warning_amber_rounded
-                                  : Icons.check_circle_outline,
-                              size: 12,
-                              color: incomplete
-                                  ? AppColors.warning
-                                  : AppColors.success,
-                            ),
-                            const SizedBox(width: 4),
-                            Text(
-                              syncLabel,
-                              style: TextStyle(
-                                fontSize: 11,
-                                color: incomplete
-                                    ? AppColors.warning
-                                    : AppColors.textLight,
-                              ),
-                            ),
-                          ],
+                        const SizedBox(width: 4),
+                        Text(
+                          syncLabel,
+                          style: TextStyle(
+                            fontSize: 11,
+                            color: incomplete
+                                ? AppColors.warning
+                                : AppColors.textLight,
+                          ),
                         ),
                       ],
-                    ],
+                    ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ─── No-data state ────────────────────────────────────────────────────────
+
+  Widget _buildNoData() {
+    return const SliverFillRemaining(
+      child: Center(
+        child: Padding(
+          padding: EdgeInsets.all(40),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(Icons.bedtime_outlined, size: 72, color: AppColors.textLight),
+              SizedBox(height: 20),
+              Text(
+                'No sleep data recorded for this night.',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: 17,
+                  fontWeight: FontWeight.w600,
+                  color: AppColors.textSecondary,
+                ),
+              ),
+              SizedBox(height: 8),
+              Text(
+                'Wear your Lumie Ring to bed to see your sleep stages and quality score.',
+                textAlign: TextAlign.center,
+                style: TextStyle(fontSize: 14, color: AppColors.textLight, height: 1.5),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  // ─── Quality score ────────────────────────────────────────────────────────
+
+  Widget _buildQualityScoreCard(SleepSession session) {
+    final score = session.sleepQualityScore;
+    final description = _qualityDescription(score);
+    final dateLabel = _formatFullDate(session.bedtime);
+
+    return _Card(
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          // Score circle
+          _ScoreRing(score: score),
+          const SizedBox(width: 20),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Sleep Quality',
+                  style: TextStyle(
+                    fontSize: 13,
+                    color: AppColors.textLight,
+                    fontWeight: FontWeight.w500,
                   ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  description,
+                  style: const TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.w600,
+                    color: AppColors.textPrimary,
+                    height: 1.3,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Row(
+                  children: [
+                    const Icon(Icons.bedtime_outlined,
+                        size: 14, color: AppColors.textLight),
+                    const SizedBox(width: 6),
+                    Text(
+                      '${_formatTime(session.bedtime)} – ${_formatTime(session.wakeTime)}',
+                      style: const TextStyle(
+                          fontSize: 13, color: AppColors.textSecondary),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  dateLabel,
+                  style: const TextStyle(
+                      fontSize: 12, color: AppColors.textLight),
                 ),
               ],
             ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildNoData() {
-    return SliverFillRemaining(
-      child: Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(Icons.bedtime_outlined, size: 80, color: AppColors.textLight),
-            const SizedBox(height: 16),
-            const Text(
-              'No sleep data recorded',
-              style: TextStyle(
-                fontSize: 18,
-                fontWeight: FontWeight.w600,
-                color: AppColors.textSecondary,
-              ),
-            ),
-            const SizedBox(height: 8),
-            const Text(
-              'Wear your Lumie Ring to track sleep',
-              style: TextStyle(fontSize: 14, color: AppColors.textLight),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildSleepSummaryCard(SleepProvider sleep) {
-    final session = sleep.latestSleep!;
-    final hours = session.totalSleepTime.inHours;
-    final minutes = session.totalSleepTime.inMinutes % 60;
-    final targetHours = sleep.sleepTarget?.targetDuration.inHours ?? 8;
-    final targetMinutes =
-        (sleep.sleepTarget?.targetDuration.inMinutes ?? 480) % 60;
-
-    return GradientCard(
-      gradient: AppColors.coolGradient,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              const Text(
-                'Last Night',
-                style: TextStyle(
-                  fontSize: 16,
-                  fontWeight: FontWeight.w600,
-                  color: AppColors.textOnYellow,
-                ),
-              ),
-              const Spacer(),
-              Text(
-                _formatFullDate(session.bedtime),
-                style: TextStyle(
-                  fontSize: 12,
-                  color: AppColors.textOnYellow.withValues(alpha: 0.8),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 16),
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.end,
-            children: [
-              Text(
-                '${hours}h ${minutes}m',
-                style: const TextStyle(
-                  fontSize: 48,
-                  fontWeight: FontWeight.bold,
-                  color: AppColors.textOnYellow,
-                  height: 1.0,
-                ),
-              ),
-              const SizedBox(width: 8),
-              Padding(
-                padding: const EdgeInsets.only(bottom: 8),
-                child: Text(
-                  'of ${targetHours}h ${targetMinutes}m target',
-                  style: TextStyle(
-                    fontSize: 14,
-                    color: AppColors.textOnYellow.withValues(alpha: 0.8),
-                  ),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 16),
-          Row(
-            children: [
-              Icon(
-                Icons.bedtime_outlined,
-                size: 16,
-                color: AppColors.textOnYellow.withValues(alpha: 0.8),
-              ),
-              const SizedBox(width: 8),
-              Text(
-                '${_formatTime(session.bedtime)} – ${_formatTime(session.wakeTime)}',
-                style: TextStyle(
-                  fontSize: 14,
-                  color: AppColors.textOnYellow.withValues(alpha: 0.8),
-                ),
-              ),
-            ],
           ),
         ],
       ),
     );
   }
 
-  Widget _buildSleepStagesCard(SleepSession session) {
-    return Container(
-      padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(
-        color: AppColors.backgroundWhite,
-        borderRadius: BorderRadius.circular(16),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.05),
-            blurRadius: 10,
-            offset: const Offset(0, 4),
-          ),
-        ],
-      ),
+  // ─── Timeline + stage breakdown ───────────────────────────────────────────
+
+  Widget _buildTimelineCard(SleepSession session) {
+    return _Card(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -329,85 +321,170 @@ class _SleepScreenState extends State<SleepScreen> {
             ),
           ),
           const SizedBox(height: 16),
-          SleepStageChart(session: session),
+          SleepTimelineChart(session: session),
+          const SizedBox(height: 20),
+          _buildStageBreakdown(session),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildStageBreakdown(SleepSession session) {
+    final totalMinutes = session.totalSleepTime.inMinutes;
+
+    // Order: Awake → Light → REM → Deep (lightest to deepest per spec)
+    final rows = <_StageRow>[
+      _StageRow(
+        stage: SleepStage.awake,
+        label: 'Awake',
+        color: const Color(0xFFE0E0E0),
+        duration: session.timeAwake,
+        pct: totalMinutes > 0
+            ? (session.timeAwake.inMinutes / totalMinutes * 100).round()
+            : 0,
+      ),
+      _StageRow(
+        stage: SleepStage.light,
+        label: 'Light Sleep',
+        color: SleepStageColors.light,
+        duration: session.getStageDuration(SleepStage.light),
+        pct: session.getStagePercentage(SleepStage.light).round(),
+      ),
+      _StageRow(
+        stage: SleepStage.rem,
+        label: 'REM Sleep',
+        color: SleepStageColors.rem,
+        duration: session.getStageDuration(SleepStage.rem),
+        pct: session.getStagePercentage(SleepStage.rem).round(),
+      ),
+      _StageRow(
+        stage: SleepStage.deep,
+        label: 'Deep Sleep',
+        color: SleepStageColors.deep,
+        duration: session.getStageDuration(SleepStage.deep),
+        pct: session.getStagePercentage(SleepStage.deep).round(),
+      ),
+    ];
+
+    return Column(
+      children: rows
+          .where((r) => r.duration.inMinutes > 0)
+          .map((r) => Padding(
+                padding: const EdgeInsets.only(bottom: 10),
+                child: Row(
+                  children: [
+                    Container(
+                      width: 10,
+                      height: 10,
+                      decoration: BoxDecoration(
+                        color: r.color,
+                        shape: BoxShape.circle,
+                        border: r.stage == SleepStage.awake
+                            ? Border.all(color: AppColors.surfaceLight, width: 1)
+                            : null,
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                        r.label,
+                        style: const TextStyle(
+                            fontSize: 14, color: AppColors.textPrimary),
+                      ),
+                    ),
+                    Text(
+                      _formatDuration(r.duration),
+                      style: const TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
+                        color: AppColors.textPrimary,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    SizedBox(
+                      width: 38,
+                      child: Text(
+                        '${r.pct}%',
+                        textAlign: TextAlign.right,
+                        style: const TextStyle(
+                            fontSize: 13, color: AppColors.textLight),
+                      ),
+                    ),
+                  ],
+                ),
+              ))
+          .toList(),
+    );
+  }
+
+  // ─── Metrics ──────────────────────────────────────────────────────────────
+
+  Widget _buildMetricsCard(SleepSession session) {
+    final efficiency = session.sleepEfficiency;
+    final wakeCount = session.wakeCount;
+
+    final metrics = [
+      _Metric(
+        label: 'Total Sleep',
+        value: _formatDuration(session.totalSleepTime),
+        icon: Icons.bedtime_outlined,
+      ),
+      _Metric(
+        label: 'Time in Bed',
+        value: _formatDuration(session.totalTimeInBed),
+        icon: Icons.hotel_outlined,
+      ),
+      _Metric(
+        label: 'Efficiency',
+        value: '${efficiency.toStringAsFixed(0)}%',
+        icon: Icons.show_chart,
+      ),
+      _Metric(
+        label: 'Sleep Window',
+        value: '${_formatTime(session.bedtime)} – ${_formatTime(session.wakeTime)}',
+        icon: Icons.access_time_outlined,
+        wide: true,
+      ),
+      _Metric(
+        label: 'Wake-ups',
+        value: wakeCount == 0 ? 'None' : '$wakeCount',
+        icon: Icons.nightlight_round,
+      ),
+    ];
+
+    return _Card(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'Sleep Details',
+            style: TextStyle(
+              fontSize: 16,
+              fontWeight: FontWeight.w600,
+              color: AppColors.textPrimary,
+            ),
+          ),
           const SizedBox(height: 16),
-          _buildStageRow(
-            'Light Sleep',
-            session.getStagePercentage(SleepStage.light),
-            AppColors.primaryLemon,
-          ),
-          const SizedBox(height: 8),
-          _buildStageRow(
-            'Deep Sleep',
-            session.getStagePercentage(SleepStage.deep),
-            AppColors.accentMint,
-          ),
-          const SizedBox(height: 8),
-          _buildStageRow(
-            'REM Sleep',
-            session.getStagePercentage(SleepStage.rem),
-            AppColors.accentLavender,
+          // 2-column grid; "wide" metrics span full width
+          Wrap(
+            spacing: 12,
+            runSpacing: 12,
+            children: metrics.map((m) {
+              final halfWidth = (MediaQuery.of(context).size.width - 40 - 40 - 12) / 2;
+              return SizedBox(
+                width: m.wide
+                    ? double.infinity
+                    : halfWidth,
+                child: _MetricTile(metric: m),
+              );
+            }).toList(),
           ),
         ],
       ),
     );
   }
 
-  Widget _buildStageRow(String label, double percentage, Color color) {
-    return Row(
-      children: [
-        Container(
-          width: 12,
-          height: 12,
-          decoration: BoxDecoration(color: color, shape: BoxShape.circle),
-        ),
-        const SizedBox(width: 12),
-        Expanded(
-          child: Text(
-            label,
-            style: const TextStyle(fontSize: 14, color: AppColors.textPrimary),
-          ),
-        ),
-        Text(
-          '${percentage.toStringAsFixed(0)}%',
-          style: const TextStyle(
-            fontSize: 14,
-            fontWeight: FontWeight.w600,
-            color: AppColors.textPrimary,
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildMetricsGrid(SleepSession session) {
-    final hasRhr = session.restingHeartRate > 0;
-    return Row(
-      children: [
-        if (hasRhr) ...[
-          Expanded(
-            child: SleepMetricCard(
-              title: 'Resting HR',
-              value: '${session.restingHeartRate}',
-              unit: 'bpm',
-              icon: Icons.favorite_outline,
-              gradient: AppColors.warmGradient,
-            ),
-          ),
-          const SizedBox(width: 12),
-        ],
-        Expanded(
-          child: SleepMetricCard(
-            title: 'Sleep Quality',
-            value: session.sleepQualityScore.toStringAsFixed(0),
-            unit: '%',
-            icon: Icons.star_outline,
-            gradient: AppColors.mintGradient,
-          ),
-        ),
-      ],
-    );
-  }
+  // ─── History button ───────────────────────────────────────────────────────
 
   Widget _buildViewHistoryButton() {
     return SizedBox(
@@ -422,18 +499,179 @@ class _SleepScreenState extends State<SleepScreen> {
       ),
     );
   }
+}
 
-  String _formatFullDate(DateTime dt) {
-    const weekdays = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
-    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-    return '${weekdays[dt.weekday - 1]}, ${months[dt.month - 1]} ${dt.day}';
+// ─── Internal helper models ────────────────────────────────────────────────
+
+class _StageRow {
+  final SleepStage stage;
+  final String label;
+  final Color color;
+  final Duration duration;
+  final int pct;
+
+  const _StageRow({
+    required this.stage,
+    required this.label,
+    required this.color,
+    required this.duration,
+    required this.pct,
+  });
+}
+
+class _Metric {
+  final String label;
+  final String value;
+  final IconData icon;
+  final bool wide;
+
+  const _Metric({
+    required this.label,
+    required this.value,
+    required this.icon,
+    this.wide = false,
+  });
+}
+
+// ─── Reusable sub-widgets ─────────────────────────────────────────────────
+
+class _Card extends StatelessWidget {
+  final Widget child;
+
+  const _Card({required this.child});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: AppColors.backgroundWhite,
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: AppColors.cardShadow,
+      ),
+      child: child,
+    );
+  }
+}
+
+/// Circular arc showing the sleep quality score (0–100).
+class _ScoreRing extends StatelessWidget {
+  final double score;
+
+  const _ScoreRing({required this.score});
+
+  @override
+  Widget build(BuildContext context) {
+    final clamped = score.clamp(0.0, 100.0);
+
+    return SizedBox(
+      width: 80,
+      height: 80,
+      child: Stack(
+        alignment: Alignment.center,
+        children: [
+          // Background track
+          SizedBox(
+            width: 80,
+            height: 80,
+            child: CircularProgressIndicator(
+              value: 1.0,
+              strokeWidth: 6,
+              valueColor:
+                  const AlwaysStoppedAnimation<Color>(AppColors.backgroundLight),
+            ),
+          ),
+          // Score arc
+          SizedBox(
+            width: 80,
+            height: 80,
+            child: CircularProgressIndicator(
+              value: clamped / 100,
+              strokeWidth: 6,
+              strokeCap: StrokeCap.round,
+              valueColor: AlwaysStoppedAnimation<Color>(
+                _arcColor(clamped),
+              ),
+            ),
+          ),
+          // Score number
+          Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                clamped.round().toString(),
+                style: const TextStyle(
+                  fontSize: 26,
+                  fontWeight: FontWeight.bold,
+                  color: AppColors.textPrimary,
+                  height: 1.0,
+                ),
+              ),
+              const Text(
+                'pts',
+                style: TextStyle(
+                  fontSize: 10,
+                  color: AppColors.textLight,
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
   }
 
-  String _formatTime(DateTime dt) {
-    final hour =
-        dt.hour > 12 ? dt.hour - 12 : (dt.hour == 0 ? 12 : dt.hour);
-    final period = dt.hour >= 12 ? 'PM' : 'AM';
-    final minute = dt.minute.toString().padLeft(2, '0');
-    return '$hour:$minute $period';
+  Color _arcColor(double score) {
+    if (score >= 80) return const Color(0xFF4ADE80);  // green
+    if (score >= 65) return const Color(0xFFF9A825);  // amber
+    return const Color(0xFFF87171);                   // red
+  }
+}
+
+class _MetricTile extends StatelessWidget {
+  final _Metric metric;
+
+  const _MetricTile({required this.metric});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      decoration: BoxDecoration(
+        color: AppColors.backgroundLight,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          Icon(metric.icon, size: 16, color: AppColors.textLight),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  metric.label,
+                  style: const TextStyle(
+                    fontSize: 11,
+                    color: AppColors.textLight,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  metric.value,
+                  style: const TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
+                    color: AppColors.textPrimary,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
   }
 }
