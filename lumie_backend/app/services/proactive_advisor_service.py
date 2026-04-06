@@ -534,6 +534,7 @@ def _build_decision_prompt(
         f"Current local time: {local_time_str}.\n\n"
         "You are in PROACTIVE MODE. You are reviewing skill execution data to decide "
         "whether to send a contextual check-in notification.\n\n"
+        "CRITICAL RULE: DO NOT repeat any topic (domain/subject) that has been mentioned in the last 6 hours.\n\n"
         "DECISION POLICY:\n"
         "1. Review all current skill data. Higher priority values indicate more important skills.\n"
         "2. Focus on data from successfully-executed skills (execution_status='success').\n"
@@ -542,10 +543,11 @@ def _build_decision_prompt(
         "5. Consider trends from the previous round (if available).\n"
         "6. Check today's dayprint for context (if available).\n"
         "7. Send nudges regularly (not just emergencies) to build supportive, ongoing connection.\n"
-        "8. AVOID REPEATING: Do not nudge about the same domain (sleep, meds, activity, energy, etc) within 6 hours.\n"
-        "9. If the primary domain has been nudged recently, pick a different domain from available skills.\n"
-        "10. Prefer personalized, grounded insights over vague ones.\n\n"
-        f"Nudge history: {last_nudge_str}\n\n"
+        "8. If you find something worth sharing BUT that topic was nudged recently, SKIP IT and don't nudge.\n"
+        "9. Prefer personalized, grounded insights over vague ones. Include specific numbers (temperature, duration, percentage).\n\n"
+        f"RECENT NUDGE HISTORY (last 6 hours):\n{last_nudge_str}\n\n"
+        "If the list is empty, all topics are available.\n"
+        "If a topic appears in the list, do not nudge about it now.\n\n"
         "Respond with valid JSON only — no markdown, no explanation:\n"
         '{"should_nudge": true|false, "message": "<friendly check-in message ≤120 chars, or null>", '
         '"reason": "<brief internal reason>", "primary_domain": "<domain>", "confidence": 0.0-1.0}'
@@ -573,7 +575,13 @@ def _build_decision_prompt(
                       "- Weave together insights from multiple domains (e.g., sleep + activity + energy) in a single message.\n"
                       "- Include positive signals and good news alongside concerns (e.g., 'Home energy is looking great, AND let's check on sleep').\n"
                       "- Regular check-ins on routine topics are welcome — you don't need to wait for urgent issues.\n"
-                      "- A balanced message that mentions both strengths and areas to focus on is more supportive than doom-focused.")
+                      "- A balanced message that mentions both strengths and areas to focus on is more supportive than doom-focused.\n"
+                      "- ALWAYS include specific numbers and metrics instead of vague language:\n"
+                      "  - Say '6.4k steps' not 'good activity'\n"
+                      "  - Say '25.8°C' not 'a bit warm'\n"
+                      "  - Say '5.5 hours sleep' not 'short sleep'\n"
+                      "  - Say '35 active minutes' not 'some exercise'\n"
+                      "- Show the actual data from the skill results in your message.")
     user_message = "\n".join(user_parts)
 
     return system_prompt, user_message
@@ -671,11 +679,25 @@ async def run_proactive_check(user_id: str) -> dict:
     # ── 3.5. Save information round for this proactive run ─────────────────
     await audit.save_round_record(db, round_id, user_id, now_utc, skill_data)
 
-    # ── 4. Fetch last nudge, last round, and today's dayprint ───────────────
+    # ── 4. Fetch nudge history (last 6 hours), last round, and today's dayprint
     checkin_doc = await db.advisor_checkins.find_one({"user_id": user_id})
     last_nudge = (checkin_doc or {}).get("last_nudge")
 
-    if last_nudge:
+    # Build nudge history from last 6 hours
+    six_hours_ago = now_utc - timedelta(hours=6)
+    nudge_history = (checkin_doc or {}).get("nudge_history", [])
+    recent_nudges = [
+        n for n in nudge_history
+        if datetime.fromisoformat(n.get("nudged_at", "2000-01-01")) > six_hours_ago
+    ]
+
+    if recent_nudges:
+        recent_nudges_str = "\n".join([
+            f"  - {n.get('domain', 'unknown')}: {n.get('reason', '')}"
+            for n in recent_nudges
+        ])
+        last_nudge_str = f"Recent nudges (last 6 hours):\n{recent_nudges_str}"
+    elif last_nudge:
         nudged_at_raw = last_nudge.get("nudged_at", "")
         try:
             nudged_at_dt = datetime.fromisoformat(nudged_at_raw)
