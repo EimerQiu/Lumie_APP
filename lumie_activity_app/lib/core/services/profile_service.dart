@@ -13,9 +13,9 @@ class ProfileService {
   final AuthService _authService = AuthService();
 
   Map<String, String> get _headers => {
-        'Content-Type': 'application/json',
-        'Authorization': 'Bearer ${_authService.token}',
-      };
+    'Content-Type': 'application/json',
+    'Authorization': 'Bearer ${_authService.token}',
+  };
 
   /// Create a teen profile
   Future<UserProfile> createTeenProfile({
@@ -27,18 +27,20 @@ class ProfileService {
     String? advisorName,
   }) async {
     try {
-      final response = await http.post(
-        Uri.parse('${ApiConstants.baseUrl}/profile/teen'),
-        headers: _headers,
-        body: json.encode({
-          'name': name,
-          'age': age,
-          'height': height.toJson(),
-          'weight': weight.toJson(),
-          'icd10_code': icd10Code,
-          'advisor_name': advisorName,
-        }),
-      ).timeout(const Duration(seconds: 3));
+      final response = await http
+          .post(
+            Uri.parse('${ApiConstants.baseUrl}/profile/teen'),
+            headers: _headers,
+            body: json.encode({
+              'name': name,
+              'age': age,
+              'height': height.toJson(),
+              'weight': weight.toJson(),
+              'icd10_code': icd10Code,
+              'advisor_name': advisorName,
+            }),
+          )
+          .timeout(const Duration(seconds: 3));
 
       if (response.statusCode == 200) {
         final profile = UserProfile.fromJson(json.decode(response.body));
@@ -69,16 +71,18 @@ class ProfileService {
     WeightData? weight,
   }) async {
     try {
-      final response = await http.post(
-        Uri.parse('${ApiConstants.baseUrl}/profile/parent'),
-        headers: _headers,
-        body: json.encode({
-          'name': name,
-          'age': age,
-          'height': height?.toJson(),
-          'weight': weight?.toJson(),
-        }),
-      ).timeout(const Duration(seconds: 3));
+      final response = await http
+          .post(
+            Uri.parse('${ApiConstants.baseUrl}/profile/parent'),
+            headers: _headers,
+            body: json.encode({
+              'name': name,
+              'age': age,
+              'height': height?.toJson(),
+              'weight': weight?.toJson(),
+            }),
+          )
+          .timeout(const Duration(seconds: 3));
 
       if (response.statusCode == 200) {
         final profile = UserProfile.fromJson(json.decode(response.body));
@@ -102,10 +106,9 @@ class ProfileService {
   /// Get user profile
   Future<UserProfile> getProfile() async {
     try {
-      final response = await http.get(
-        Uri.parse('${ApiConstants.baseUrl}/profile'),
-        headers: _headers,
-      ).timeout(const Duration(seconds: 3));
+      final response = await http
+          .get(Uri.parse('${ApiConstants.baseUrl}/profile'), headers: _headers)
+          .timeout(const Duration(seconds: 3));
 
       if (response.statusCode == 200) {
         return UserProfile.fromJson(json.decode(response.body));
@@ -153,12 +156,19 @@ class ProfileService {
   }
 
   /// Search ICD-10 codes
-  Future<List<ICD10Code>> searchICD10Codes(String query, {int limit = 20}) async {
+  Future<List<ICD10Code>> searchICD10Codes(
+    String query, {
+    int limit = 20,
+  }) async {
     try {
-      final response = await http.get(
-        Uri.parse('${ApiConstants.baseUrl}/profile/icd10/search?query=$query&limit=$limit'),
-        headers: _headers,
-      ).timeout(const Duration(seconds: 2));
+      final response = await http
+          .get(
+            Uri.parse(
+              '${ApiConstants.baseUrl}/profile/icd10/search?query=$query&limit=$limit',
+            ),
+            headers: _headers,
+          )
+          .timeout(const Duration(seconds: 2));
 
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
@@ -255,11 +265,15 @@ class ProfileService {
     ];
 
     final lowerQuery = query.toLowerCase();
-    final filtered = mockData.where((code) =>
-      code.code.toLowerCase().contains(lowerQuery) ||
-      code.description.toLowerCase().contains(lowerQuery) ||
-      code.category.toLowerCase().contains(lowerQuery)
-    ).take(limit).toList();
+    final filtered = mockData
+        .where(
+          (code) =>
+              code.code.toLowerCase().contains(lowerQuery) ||
+              code.description.toLowerCase().contains(lowerQuery) ||
+              code.category.toLowerCase().contains(lowerQuery),
+        )
+        .take(limit)
+        .toList();
 
     return filtered;
   }
