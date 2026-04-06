@@ -395,11 +395,29 @@ def _build_tools(candidates: list[SkillIndexItem]) -> list[dict]:
 
 # ── System prompt ────────────────────────────────────────────────────────────
 
+def _build_profile_block(ctx: dict) -> str:
+    """Build the User Profile section. Omits any field that is null/empty."""
+    lines = []
+    if ctx.get("name"):
+        lines.append(f"- Name: {ctx['name']}")
+    if ctx.get("age"):
+        lines.append(f"- Age: {ctx['age']}")
+    if ctx.get("role"):
+        role_label = "Teen" if ctx["role"] == "teen" else "Parent/Guardian"
+        lines.append(f"- Account type: {role_label}")
+    if ctx.get("height"):
+        lines.append(f"- Height: {ctx['height']}")
+    if ctx.get("weight"):
+        lines.append(f"- Weight: {ctx['weight']}")
+    if ctx.get("condition_label"):
+        lines.append(f"- Health condition: {ctx['condition_label']}")
+    if ctx.get("advisor_name"):
+        lines.append(f"- Healthcare provider: {ctx['advisor_name']}")
+    return "\n".join(lines)
+
+
 def _build_system_prompt(ctx: dict, candidates: list[SkillIndexItem]) -> str:
     name = ctx.get("name") or "the user"
-    age = ctx.get("age")
-    condition = ctx.get("icd10_code")
-    advisor = ctx.get("advisor_name")
     ai_advisor_name = ctx.get("ai_advisor_name")
     timezone = ctx.get("timezone") or "UTC"
 
@@ -416,6 +434,8 @@ def _build_system_prompt(ctx: dict, candidates: list[SkillIndexItem]) -> str:
             'Never say your name is Lumie or any other name.'
         )
 
+    profile_block = _build_profile_block(ctx)
+
     skill_summary = ""
     if candidates:
         skill_summary = "\n## Available Skills\n"
@@ -429,11 +449,8 @@ def _build_system_prompt(ctx: dict, candidates: list[SkillIndexItem]) -> str:
 You are a compassionate AI health advisor built into the app.
 This app helps teens and young adults with chronic health conditions stay active safely.
 
-User profile:
-- Name: {name}
-- Age: {age or 'unknown'}
-- Medical condition (ICD-10): {condition or 'No condition on file'}
-{f'- Their healthcare advisor/coach is {advisor}' if advisor else ''}
+## About {name}
+{profile_block if profile_block else "No profile information available yet."}
 
 ## Decision Rules
 
@@ -482,6 +499,47 @@ You have two tools: `execute_skill` and `create_task`.
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
+def _icd10_label(code: str | None) -> str | None:
+    """Resolve an ICD-10 code to a human-readable description."""
+    if not code:
+        return None
+    from .icd10_service import ICD10_CODES
+    for entry in ICD10_CODES:
+        if entry.code == code:
+            return entry.description
+    # Fallback: use the code prefix to get a broad label
+    prefix = code.split(".")[0]
+    for entry in ICD10_CODES:
+        if entry.code == prefix:
+            return entry.description
+    return None  # Unknown code — omit rather than expose raw code
+
+
+def _format_height(height: dict | None) -> str | None:
+    if not height:
+        return None
+    value = height.get("value")
+    unit = height.get("unit", "cm")
+    if value is None:
+        return None
+    if unit == "cm":
+        return f"{int(value)} cm"
+    # ft_in stored as total inches
+    total_in = int(value)
+    ft, inches = divmod(total_in, 12)
+    return f"{ft}'{inches}\""
+
+
+def _format_weight(weight: dict | None) -> str | None:
+    if not weight:
+        return None
+    value = weight.get("value")
+    unit = weight.get("unit", "kg")
+    if value is None:
+        return None
+    return f"{value:.1f} {unit}"
+
+
 async def _get_user_context(user_id: str) -> dict:
     try:
         db = get_database()
@@ -493,7 +551,11 @@ async def _get_user_context(user_id: str) -> dict:
         return {
             "name": profile.get("name"),
             "age": profile.get("age"),
+            "role": profile.get("role"),
+            "height": _format_height(profile.get("height")),
+            "weight": _format_weight(profile.get("weight")),
             "icd10_code": profile.get("icd10_code"),
+            "condition_label": _icd10_label(profile.get("icd10_code")),
             "advisor_name": profile.get("advisor_name"),
             "ai_advisor_name": ai_advisor_name,
             "timezone": profile.get("timezone"),
