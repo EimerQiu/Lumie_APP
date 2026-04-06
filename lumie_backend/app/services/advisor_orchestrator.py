@@ -9,6 +9,7 @@ Unified entry point that:
 """
 import asyncio
 import logging
+import re
 from datetime import datetime
 from typing import Optional
 from zoneinfo import ZoneInfo
@@ -29,6 +30,65 @@ logger = logging.getLogger(__name__)
 # Layer 1 model routed through PaleBlueDot's OpenAI-compatible API.
 _MODEL = settings.PALEBLUEDOT_MODEL
 
+# Health-related keywords that should trigger team member lookup
+_HEALTH_KEYWORDS = {
+    "medication", "medicine", "drug", "dose",
+    "sleep", "sleeping", "bedtime",
+    "health", "healthy",
+    "exercise", "activity", "workout",
+    "heart rate", "pulse", "hr", "bpm",
+    "temperature", "fever", "temp",
+    "energy", "tired", "fatigue",
+    "symptom", "side effect", "reaction",
+    "stress", "anxiety", "mood",
+}
+
+
+def _extract_target_hint_from_message(message: str) -> Optional[str]:
+    """Extract target person reference from health-related questions.
+
+    Detects patterns like:
+    - "Emma's sleep", "John's medication"
+    - "my daughter's health", "my son's temperature"
+    - "What's [name]'s [health topic]?"
+
+    Returns the target person reference or None.
+    """
+    msg_lower = message.lower().strip()
+
+    # Quick check: does message contain health keywords?
+    if not any(keyword in msg_lower for keyword in _HEALTH_KEYWORDS):
+        return None
+
+    # Pattern 1: "[name]'s [health topic]" or "[name] [health topic]"
+    # e.g., "Emma's sleep", "John medication", "my daughter's health"
+    import re
+
+    # Match patterns like "name's keyword" or "name keyword"
+    pattern = r'(?:my\s+)?([a-z\s]+?)[\s\']+(?:is|have|has|medication|medicine|sleep|health|heart rate|temperature|energy|exercise)'
+    matches = re.findall(pattern, msg_lower, re.IGNORECASE)
+    if matches:
+        hint = matches[0].strip()
+        if hint and len(hint) < 50:  # Reasonable length for a name
+            return hint
+
+    # Pattern 2: "What about [name]'s [health topic]?"
+    pattern = r'(?:what\s+(?:about|of)|how\s+is|check)\s+([a-z\s]+?)[\s\']+(?:s\s+)?(?:' + '|'.join(_HEALTH_KEYWORDS) + ')'
+    matches = re.findall(pattern, msg_lower, re.IGNORECASE)
+    if matches:
+        hint = matches[0].strip()
+        if hint and len(hint) < 50:
+            return hint
+
+    # Pattern 3: Explicit family references with health keywords
+    # "How is my daughter's sleep?"
+    family_pattern = r'(?:my|the)\s+(daughter|son|child|kid|teen)\s+(?:.*)?(?:' + '|'.join(_HEALTH_KEYWORDS) + ')'
+    if re.search(family_pattern, msg_lower, re.IGNORECASE):
+        for match in re.finditer(r'(?:my|the)\s+(daughter|son|child|kid|teen)', msg_lower, re.IGNORECASE):
+            return match.group(0).strip()
+
+    return None
+
 
 # ── Main entry point ─────────────────────────────────────────────────────────
 
@@ -44,6 +104,16 @@ async def handle_chat(
 
     Returns dict with keys: type, reply, job_id, skill_id, status, nav_hint
     """
+    # ── Step 0.5: Auto-detect target user from health-related queries ────
+    # If asking about another person's medication/sleep/health, try to resolve them
+    if not target_user_id:
+        auto_hint = _extract_target_hint_from_message(message)
+        if auto_hint:
+            resolved = await _resolve_target_user_hint(user_id, auto_hint, team_id)
+            if resolved and resolved != user_id:
+                target_user_id = resolved
+                logger.info(f"Auto-detected target user from message: {auto_hint} → {target_user_id}")
+
     # ── Step 1: Load user context ────────────────────────────────────────
     ctx = await _get_user_context(user_id)
     enabled_caps = await capability_service.get_user_enabled_capability_ids(user_id)
