@@ -276,6 +276,7 @@ class AuthProvider extends ChangeNotifier {
     WeightData? weight,
     String? icd10Code,
     String? advisorName,
+    String? aiAdvisorName,
   }) async {
     try {
       _profile = await _profileService.updateProfile(
@@ -285,6 +286,7 @@ class AuthProvider extends ChangeNotifier {
         weight: weight,
         icd10Code: icd10Code,
         advisorName: advisorName,
+        aiAdvisorName: aiAdvisorName,
       );
       notifyListeners();
       return true;

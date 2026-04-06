@@ -400,7 +400,21 @@ def _build_system_prompt(ctx: dict, candidates: list[SkillIndexItem]) -> str:
     age = ctx.get("age")
     condition = ctx.get("icd10_code")
     advisor = ctx.get("advisor_name")
+    ai_advisor_name = ctx.get("ai_advisor_name")
     timezone = ctx.get("timezone") or "UTC"
+
+    if ai_advisor_name:
+        identity_block = (
+            f'Your name is {ai_advisor_name}. Always use this name when referring to yourself. '
+            f'If the user asks what your name is, respond with this name only — '
+            f'never say your name is Lumie or any other name.'
+        )
+    else:
+        identity_block = (
+            'You do not have a name yet. If the user asks what your name is, '
+            'tell them you do not have a name yet but they can set one in Edit Profile under Advisor Name. '
+            'Never say your name is Lumie or any other name.'
+        )
 
     skill_summary = ""
     if candidates:
@@ -408,8 +422,9 @@ def _build_system_prompt(ctx: dict, candidates: list[SkillIndexItem]) -> str:
         for c in candidates:
             skill_summary += f"- **{c.title}** (`{c.skill_id}`): {c.summary}\n"
 
-    return f"""You are Lumie, a compassionate AI health advisor built into the Lumie app.
-Lumie helps teens and young adults with chronic health conditions stay active safely.
+    return f"""You are a compassionate AI health advisor built into the Lumie app.
+{identity_block}
+This app helps teens and young adults with chronic health conditions stay active safely.
 
 User profile:
 - Name: {name}
@@ -475,6 +490,7 @@ async def _get_user_context(user_id: str) -> dict:
             "age": profile.get("age"),
             "icd10_code": profile.get("icd10_code"),
             "advisor_name": profile.get("advisor_name"),
+            "ai_advisor_name": profile.get("ai_advisor_name"),
             "timezone": profile.get("timezone"),
         }
     except Exception as e:

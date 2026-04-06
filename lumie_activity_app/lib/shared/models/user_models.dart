@@ -336,6 +336,7 @@ class UserProfile {
   final WeightData? weight;
   final String? icd10Code;
   final String? advisorName;
+  final String? aiAdvisorName;
   final bool profileComplete;
   final SubscriptionStatus subscription;
   final DateTime createdAt;
@@ -351,6 +352,7 @@ class UserProfile {
     this.weight,
     this.icd10Code,
     this.advisorName,
+    this.aiAdvisorName,
     required this.profileComplete,
     required this.subscription,
     required this.createdAt,
@@ -368,6 +370,7 @@ class UserProfile {
       weight: json['weight'] != null ? WeightData.fromJson(json['weight']) : null,
       icd10Code: json['icd10_code'] as String?,
       advisorName: json['advisor_name'] as String?,
+      aiAdvisorName: json['ai_advisor_name'] as String?,
       profileComplete: json['profile_complete'] as bool? ?? true,
       subscription: json['subscription'] != null
           ? SubscriptionStatus.fromJson(json['subscription'])
@@ -388,6 +391,7 @@ class UserProfile {
       'weight': weight?.toJson(),
       'icd10_code': icd10Code,
       'advisor_name': advisorName,
+      'ai_advisor_name': aiAdvisorName,
       'profile_complete': profileComplete,
       'subscription': subscription.toJson(),
       'created_at': createdAt.toIso8601String(),

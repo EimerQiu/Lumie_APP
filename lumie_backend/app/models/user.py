@@ -177,6 +177,7 @@ class ProfileUpdate(BaseModel):
     weight: Optional[WeightData] = None
     icd10_code: Optional[str] = None
     advisor_name: Optional[str] = None
+    ai_advisor_name: Optional[str] = None
     rest_days: Optional[RestDaySettings] = None
     timezone: Optional[str] = Field(None, description="User's timezone (e.g., America/Los_Angeles)")
 
@@ -192,6 +193,7 @@ class UserProfile(BaseModel):
     weight: Optional[WeightData] = None
     icd10_code: Optional[str] = None
     advisor_name: Optional[str] = None
+    ai_advisor_name: Optional[str] = None
     rest_days: Optional[RestDaySettings] = None
     timezone: str = "UTC"
     profile_complete: bool = True
@@ -210,6 +212,7 @@ class ProfileInDB(BaseModel):
     weight: Optional[dict] = None  # {value, unit}
     icd10_code: Optional[str] = None
     advisor_name: Optional[str] = None
+    ai_advisor_name: Optional[str] = None
     timezone: str = "UTC"
     subscription: Optional[dict] = None  # SubscriptionStatus as dict
     created_at: datetime

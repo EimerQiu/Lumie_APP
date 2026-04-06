@@ -127,6 +127,7 @@ class ProfileService {
     WeightData? weight,
     String? icd10Code,
     String? advisorName,
+    String? aiAdvisorName,
   }) async {
     final body = <String, dynamic>{};
     if (name != null) body['name'] = name;
@@ -135,6 +136,7 @@ class ProfileService {
     if (weight != null) body['weight'] = weight.toJson();
     if (icd10Code != null) body['icd10_code'] = icd10Code;
     if (advisorName != null) body['advisor_name'] = advisorName;
+    if (aiAdvisorName != null) body['ai_advisor_name'] = aiAdvisorName;
 
     final response = await http.put(
       Uri.parse('${ApiConstants.baseUrl}/profile'),

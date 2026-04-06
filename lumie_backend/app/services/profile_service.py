@@ -216,6 +216,7 @@ class ProfileService:
             weight=weight_data,
             icd10_code=profile.get("icd10_code"),
             advisor_name=profile.get("advisor_name"),
+            ai_advisor_name=profile.get("ai_advisor_name"),
             timezone=profile.get("timezone", "UTC"),
             profile_complete=True,
             subscription=subscription,
@@ -258,6 +259,8 @@ class ProfileService:
             # Only allow for teen accounts
             if profile["role"] == AccountRole.TEEN.value:
                 update_fields["advisor_name"] = data.advisor_name if data.advisor_name else None
+        if data.ai_advisor_name is not None:
+            update_fields["ai_advisor_name"] = data.ai_advisor_name.strip() if data.ai_advisor_name.strip() else None
         if data.timezone is not None:
             update_fields["timezone"] = data.timezone
 
