@@ -279,6 +279,7 @@ class AuthProvider extends ChangeNotifier {
     String? aiAdvisorName,
   }) async {
     try {
+      debugPrint('[AuthProvider] updateProfile: sending aiAdvisorName=$aiAdvisorName');
       _profile = await _profileService.updateProfile(
         name: name,
         age: age,
@@ -288,6 +289,7 @@ class AuthProvider extends ChangeNotifier {
         advisorName: advisorName,
         aiAdvisorName: aiAdvisorName,
       );
+      debugPrint('[AuthProvider] updateProfile: response aiAdvisorName=${_profile?.aiAdvisorName}');
       notifyListeners();
       return true;
     } catch (e) {

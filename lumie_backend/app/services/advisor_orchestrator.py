@@ -422,8 +422,11 @@ def _build_system_prompt(ctx: dict, candidates: list[SkillIndexItem]) -> str:
         for c in candidates:
             skill_summary += f"- **{c.title}** (`{c.skill_id}`): {c.summary}\n"
 
-    return f"""You are a compassionate AI health advisor built into the Lumie app.
-{identity_block}
+    logger.debug(f"[advisor_orchestrator] system_prompt[:300]: {identity_block[:300]}")
+
+    return f"""{identity_block}
+
+You are a compassionate AI health advisor built into the app.
 This app helps teens and young adults with chronic health conditions stay active safely.
 
 User profile:
@@ -485,12 +488,14 @@ async def _get_user_context(user_id: str) -> dict:
         profile = await db.profiles.find_one({"user_id": user_id})
         if not profile:
             return {}
+        ai_advisor_name = profile.get("ai_advisor_name")
+        logger.info(f"[advisor_orchestrator] _get_user_context: ai_advisor_name={ai_advisor_name!r} for user_id={user_id}")
         return {
             "name": profile.get("name"),
             "age": profile.get("age"),
             "icd10_code": profile.get("icd10_code"),
             "advisor_name": profile.get("advisor_name"),
-            "ai_advisor_name": profile.get("ai_advisor_name"),
+            "ai_advisor_name": ai_advisor_name,
             "timezone": profile.get("timezone"),
         }
     except Exception as e:

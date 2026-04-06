@@ -1,10 +1,13 @@
 """Profile service for user profile management."""
+import logging
 from datetime import datetime
 from typing import Optional
 
 from fastapi import HTTPException, status
 
 from ..core.database import get_database
+
+logger = logging.getLogger(__name__)
 from ..models.user import (
     AccountRole,
     TeenProfileCreate,
@@ -260,7 +263,9 @@ class ProfileService:
             if profile["role"] == AccountRole.TEEN.value:
                 update_fields["advisor_name"] = data.advisor_name if data.advisor_name else None
         if data.ai_advisor_name is not None:
-            update_fields["ai_advisor_name"] = data.ai_advisor_name.strip() if data.ai_advisor_name.strip() else None
+            value = data.ai_advisor_name.strip() if data.ai_advisor_name.strip() else None
+            update_fields["ai_advisor_name"] = value
+            logger.info(f"[profile_service] update_profile: writing ai_advisor_name={value!r} for user_id={user_id}")
         if data.timezone is not None:
             update_fields["timezone"] = data.timezone
 
