@@ -49,6 +49,7 @@ def _extract_target_hint_from_message(message: str) -> Optional[str]:
 
     Detects patterns like:
     - "Emma's sleep", "John's medication"
+    - "Did Eimer take medication?"
     - "my daughter's health", "my son's temperature"
     - "What's [name]'s [health topic]?"
 
@@ -60,32 +61,59 @@ def _extract_target_hint_from_message(message: str) -> Optional[str]:
     if not any(keyword in msg_lower for keyword in _HEALTH_KEYWORDS):
         return None
 
-    # Pattern 1: "[name]'s [health topic]" or "[name] [health topic]"
-    # e.g., "Emma's sleep", "John medication", "my daughter's health"
-    import re
+    # Build keyword pattern once
+    keyword_pattern = '|'.join(re.escape(kw) for kw in _HEALTH_KEYWORDS)
 
-    # Match patterns like "name's keyword" or "name keyword"
-    pattern = r'(?:my\s+)?([a-z\s]+?)[\s\']+(?:is|have|has|medication|medicine|sleep|health|heart rate|temperature|energy|exercise)'
+    # Pattern 1: Possessive patterns "[name]'s [health topic]"
+    # e.g., "Emma's sleep", "John's medication"
+    pattern = r"([a-z]+(?:\s+[a-z]+)?)'s\s+(?:" + keyword_pattern + ")"
     matches = re.findall(pattern, msg_lower, re.IGNORECASE)
     if matches:
         hint = matches[0].strip()
-        if hint and len(hint) < 50:  # Reasonable length for a name
+        if hint and len(hint) < 50 and hint not in {"my", "the", "his", "her", "their"}:
             return hint
 
-    # Pattern 2: "What about [name]'s [health topic]?"
-    pattern = r'(?:what\s+(?:about|of)|how\s+is|check)\s+([a-z\s]+?)[\s\']+(?:s\s+)?(?:' + '|'.join(_HEALTH_KEYWORDS) + ')'
-    matches = re.findall(pattern, msg_lower, re.IGNORECASE)
+    # Pattern 2: Action patterns "name take/took health_keyword"
+    # e.g., "Did Eimer take all her medication?", "John take his medicine"
+    # First convert message to lowercase to match case-insensitively
+    pattern = r'(?:did|does|has)\s+(\w+(?:\s+\w+)?)\s+(?:take|took|have|has)\s+(?:all\s+)?(?:his|her|their\s+)?(?:' + keyword_pattern + ')'
+    matches = re.findall(pattern, msg_lower)
     if matches:
         hint = matches[0].strip()
-        if hint and len(hint) < 50:
+        if hint and len(hint) < 50 and hint not in {"did", "does", "has"}:
             return hint
 
-    # Pattern 3: Explicit family references with health keywords
+    # Pattern 3: Question patterns "How/What about [name]'s [health topic]?"
+    pattern = r'(?:how|what|check)\s+(?:about\s+)?(?:is\s+)?(?:my\s+)?([a-z]+(?:\s+[a-z]+)?)[\'s]*\s+(?:' + keyword_pattern + ')'
+    matches = re.findall(pattern, msg_lower)
+    if matches:
+        hint = matches[0].strip()
+        if hint and len(hint) < 50 and hint not in {"my", "the", "his", "her", "their"}:
+            return hint
+
+    # Pattern 4: Family references with health keywords
     # "How is my daughter's sleep?"
-    family_pattern = r'(?:my|the)\s+(daughter|son|child|kid|teen)\s+(?:.*)?(?:' + '|'.join(_HEALTH_KEYWORDS) + ')'
+    family_pattern = r'(?:my|the)\s+(daughter|son|child|kid|teen)'
     if re.search(family_pattern, msg_lower, re.IGNORECASE):
-        for match in re.finditer(r'(?:my|the)\s+(daughter|son|child|kid|teen)', msg_lower, re.IGNORECASE):
+        match = re.search(family_pattern, msg_lower, re.IGNORECASE)
+        if match:
             return match.group(0).strip()
+
+    # Pattern 5: Just a capitalized name near health keywords
+    # Extract capitalized words (likely names) from the message
+    words = message.split()
+    capitalized_names = [w.strip('.,!?;:') for w in words if w and w[0].isupper() and len(w) > 1]
+
+    # Check if any capitalized name is adjacent to health keywords
+    for name in capitalized_names:
+        name_pos = msg_lower.find(name.lower())
+        if name_pos >= 0:
+            # Check nearby context for health keywords
+            context_start = max(0, name_pos - 30)
+            context_end = min(len(msg_lower), name_pos + len(name) + 30)
+            context = msg_lower[context_start:context_end]
+            if any(keyword in context for keyword in _HEALTH_KEYWORDS):
+                return name
 
     return None
 
