@@ -4,7 +4,6 @@ import 'package:provider/provider.dart';
 import '../../wellness/providers/wellness_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
-import 'dart:async';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/services/advisor_v2_service.dart';
 import '../../../core/services/checkin_service.dart';
@@ -124,106 +123,87 @@ class _ChatTabState extends State<_ChatTab> {
   /// Tracks the currently polling job so the user can cancel it.
   String? _pendingJobId;
 
-  /// Timer for auto-refreshing proactive messages.
-  Timer? _refreshTimer;
-
   static const _sessionIdKey = 'advisor_active_session_id';
   static const _lastActiveKey = 'advisor_last_active_at';
   static const _sessionTimeoutMinutes = 2;
-  static const _proactiveRefreshIntervalSeconds = 10;
 
   @override
   void initState() {
     super.initState();
     _initSession();
-    _startProactiveRefreshTimer();
   }
 
   @override
   void dispose() {
     _input.dispose();
     _scroll.dispose();
-    _refreshTimer?.cancel();
     super.dispose();
   }
 
   Future<void> _initSession() async {
     final prefs = await SharedPreferences.getInstance();
-    final savedId = prefs.getString(_sessionIdKey);
 
-    if (savedId != null) {
+    // Check for proactive messages first
+    final proactiveMessages = await _historyService.fetchSessionMessages('proactive');
+    final lastProactiveTime = proactiveMessages.isNotEmpty
+        ? DateTime.tryParse(proactiveMessages.last.createdAt)
+        : null;
+
+    // Check saved session
+    final savedId = prefs.getString(_sessionIdKey);
+    final savedMessages = savedId != null
+        ? await _historyService.fetchSessionMessages(savedId)
+        : <dynamic>[];
+    final lastSavedTime = savedMessages.isNotEmpty
+        ? DateTime.tryParse(savedMessages.last.createdAt)
+        : null;
+
+    // Determine which session to display:
+    // If proactive messages exist and are more recent, show proactive session
+    if (lastProactiveTime != null &&
+        (lastSavedTime == null || lastProactiveTime.isAfter(lastSavedTime))) {
+      _sessionId = 'proactive';
+    } else if (savedId != null) {
       _sessionId = savedId;
-      final messages = await _historyService.fetchSessionMessages(savedId);
-      if (mounted && messages.isNotEmpty) {
-        setState(() {
-          _items.clear();
-          for (final m in messages) {
-            _items.add(
-              _ChatItem.message(
-                _Message(
-                  text: m.content,
-                  isUser: m.isUser,
-                  createdAt: m.createdAt,
-                ),
-              ),
-            );
-          }
-          _isLoading = false;
-        });
-        _scrollToBottom();
-      } else {
-        await _saveActiveSession();
-        if (mounted) setState(() => _isLoading = false);
-      }
     } else {
       // No saved session — start fresh
+      _sessionId = const Uuid().v4();
       await _saveActiveSession();
       if (mounted) setState(() => _isLoading = false);
+      return;
     }
 
-    // Always load full proactive check-in history into chat view.
-    await _loadProactiveMessages();
-  }
+    // Load selected session
+    final messagesToDisplay = (_sessionId == 'proactive')
+        ? proactiveMessages
+        : savedMessages;
 
-  Future<void> _loadProactiveMessages() async {
-    final proactiveMessages = await _historyService.fetchSessionMessages(
-      'proactive',
-    );
-    if (proactiveMessages.isEmpty) return;
-
-    if (mounted) {
-      final existingProactiveTexts = _items
-          .where(
-            (i) =>
-                i.type == _ChatItemType.message &&
-                i.message?.isProactive == true,
-          )
-          .map((i) => i.message?.text ?? '')
-          .toSet();
+    if (mounted && messagesToDisplay.isNotEmpty) {
       setState(() {
-        for (final m in proactiveMessages) {
-          if (existingProactiveTexts.contains(m.content)) continue;
+        _items.clear();
+        for (final m in messagesToDisplay) {
           _items.add(
             _ChatItem.message(
               _Message(
                 text: m.content,
-                isUser: false,
-                isProactive: true,
+                isUser: m.isUser,
+                isProactive: _sessionId == 'proactive',
                 createdAt: m.createdAt,
               ),
             ),
           );
         }
+        _isLoading = false;
       });
       _scrollToBottom();
+    } else {
+      if (mounted) setState(() => _isLoading = false);
     }
-  }
 
-  void _startProactiveRefreshTimer() {
-    _refreshTimer = Timer.periodic(
-      const Duration(seconds: _proactiveRefreshIntervalSeconds),
-      (_) => _loadProactiveMessages(),
-    );
+    // Update saved session to current one
+    if (_sessionId != 'proactive') {
+      await _saveActiveSession();
+    }
   }
 
   Future<void> _saveActiveSession() async {
