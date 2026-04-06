@@ -27,6 +27,7 @@ ALLOWED_COLLECTIONS = {
     "teams", "team_members", "sleep_sessions", "execution_jobs",
     "ring_command_requests", "notification_queue",
     "hr_readings", "daily_steps", "hrv_readings", "temperature_readings", "spo2_readings",
+    "dayprints",
 }
 
 # Fields that must never be returned

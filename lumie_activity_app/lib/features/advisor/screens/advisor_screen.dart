@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import '../../wellness/providers/wellness_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
+import 'dart:async';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/services/advisor_v2_service.dart';
 import '../../../core/services/checkin_service.dart';
@@ -123,20 +124,26 @@ class _ChatTabState extends State<_ChatTab> {
   /// Tracks the currently polling job so the user can cancel it.
   String? _pendingJobId;
 
+  /// Timer for auto-refreshing proactive messages.
+  Timer? _refreshTimer;
+
   static const _sessionIdKey = 'advisor_active_session_id';
   static const _lastActiveKey = 'advisor_last_active_at';
   static const _sessionTimeoutMinutes = 2;
+  static const _proactiveRefreshIntervalSeconds = 10;
 
   @override
   void initState() {
     super.initState();
     _initSession();
+    _startProactiveRefreshTimer();
   }
 
   @override
   void dispose() {
     _input.dispose();
     _scroll.dispose();
+    _refreshTimer?.cancel();
     super.dispose();
   }
 
@@ -210,6 +217,13 @@ class _ChatTabState extends State<_ChatTab> {
       });
       _scrollToBottom();
     }
+  }
+
+  void _startProactiveRefreshTimer() {
+    _refreshTimer = Timer.periodic(
+      const Duration(seconds: _proactiveRefreshIntervalSeconds),
+      (_) => _loadProactiveMessages(),
+    );
   }
 
   Future<void> _saveActiveSession() async {

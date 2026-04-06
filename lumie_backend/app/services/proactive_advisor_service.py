@@ -484,8 +484,6 @@ async def _pick_alternate_topic_nudge(
         if topic_key in sent_topic_keys:
             continue
         score = float(item.get("score", 0.0))
-        if score < 0.3:
-            continue
         suggested = item.get("suggested_message") or ""
         summary = (item.get("topic") or {}).get("summary", "")
         message = suggested if suggested else f"Quick check-in: {summary[:96]}"
@@ -535,18 +533,21 @@ def _build_decision_prompt(
         f"You are a proactive health advisor for {user_name}, a {role}{condition_str}.\n"
         f"Current local time: {local_time_str}.\n\n"
         "You are in PROACTIVE MODE. You are reviewing skill execution data to decide "
-        "whether to send a nudge notification.\n\n"
+        "whether to send a contextual check-in notification.\n\n"
         "DECISION POLICY:\n"
         "1. Review all current skill data. Higher priority values indicate more important skills.\n"
         "2. Focus on data from successfully-executed skills (execution_status='success').\n"
-        "3. Look for concrete concerns in the raw data (not scores — use your judgment).\n"
-        "4. Consider trends from the previous round (if available).\n"
-        "5. Check today's dayprint for context (if available).\n"
-        "6. Only nudge if genuinely worth addressing NOW. Avoid minor or speculative concerns.\n"
-        "7. Prefer personalized, grounded concerns over vague ones.\n\n"
+        "3. Look for concrete concerns, patterns, or insights worth mentioning (urgent OR routine check-ins).\n"
+        "4. Include positive signals and good news alongside concerns — balanced perspective matters.\n"
+        "5. Consider trends from the previous round (if available).\n"
+        "6. Check today's dayprint for context (if available).\n"
+        "7. Send nudges regularly (not just emergencies) to build supportive, ongoing connection.\n"
+        "8. AVOID REPEATING: Do not nudge about the same domain (sleep, meds, activity, energy, etc) within 6 hours.\n"
+        "9. If the primary domain has been nudged recently, pick a different domain from available skills.\n"
+        "10. Prefer personalized, grounded insights over vague ones.\n\n"
         f"Nudge history: {last_nudge_str}\n\n"
         "Respond with valid JSON only — no markdown, no explanation:\n"
-        '{"should_nudge": true|false, "message": "<friendly nudge message ≤120 chars, or null>", '
+        '{"should_nudge": true|false, "message": "<friendly check-in message ≤120 chars, or null>", '
         '"reason": "<brief internal reason>", "primary_domain": "<domain>", "confidence": 0.0-1.0}'
     )
 
@@ -567,7 +568,12 @@ def _build_decision_prompt(
         }
         user_parts.append(json.dumps(dayprint_summary, indent=2))
 
-    user_parts.append("\n\nBased on these assessments and context, should I reach out to the user?")
+    user_parts.append("\n\nBased on these assessments and context, should I reach out to the user?\n\n"
+                      "GUIDANCE FOR YOUR MESSAGE:\n"
+                      "- Weave together insights from multiple domains (e.g., sleep + activity + energy) in a single message.\n"
+                      "- Include positive signals and good news alongside concerns (e.g., 'Home energy is looking great, AND let's check on sleep').\n"
+                      "- Regular check-ins on routine topics are welcome — you don't need to wait for urgent issues.\n"
+                      "- A balanced message that mentions both strengths and areas to focus on is more supportive than doom-focused.")
     user_message = "\n".join(user_parts)
 
     return system_prompt, user_message
@@ -763,7 +769,7 @@ async def run_proactive_check(user_id: str) -> dict:
     message: str | None = result.get("message") or None
     reason: str = result.get("reason", "")
 
-    # ── 6. Same-day semantic dedupe & alternate topic selection ──────────
+    # ── 6. Time-based dedupe (6-hour cooldown per domain) ────────────────
     local_date_key = now_local.date().isoformat()
     daily_sent_concerns = (
         ((checkin_doc or {}).get("daily_sent_concerns") or {}).get(local_date_key) or []
@@ -774,6 +780,10 @@ async def run_proactive_check(user_id: str) -> dict:
     )
     sent_topic_keys = set(daily_sent_topics)
 
+    # Get nudge history for 6-hour cooldown check
+    nudge_history = checkin_doc.get("nudge_history", []) if checkin_doc else []
+    six_hours_ago = now_utc - timedelta(hours=6)
+
     selected_domain = result.get("primary_domain")
     if not selected_domain and skill_data:
         selected_domain = max(skill_data, key=lambda s: s.priority).domain
@@ -782,8 +792,13 @@ async def run_proactive_check(user_id: str) -> dict:
     concern_key = _build_concern_key(selected_domain or "unknown", reason, selected_skill_data)
     selected_topic_key = ""
 
-    # Check for same-day duplicate concern
-    is_duplicate = should_nudge and message and concern_key in sent_concern_keys
+    # Check for duplicate: same-day concern OR same domain within 6 hours
+    is_duplicate = should_nudge and message and (
+        concern_key in sent_concern_keys or
+        any(h.get("domain") == selected_domain and
+            datetime.fromisoformat(h.get("nudged_at", "2000-01-01")) > six_hours_ago
+            for h in nudge_history)
+    )
     if is_duplicate:
         logger.info(
             "Proactive[%s]: suppress duplicate concern key=%s for date=%s, trying topic fallback",
@@ -864,6 +879,14 @@ async def run_proactive_check(user_id: str) -> dict:
                     "primary_domain": selected_domain or result.get("primary_domain"),
                     "evidence_summary": evidence_summary,
                 }},
+                "$push": {
+                    "nudge_history": {
+                        "domain": selected_domain or "unknown",
+                        "nudged_at": now_utc.isoformat(),
+                        "reason": reason,
+                        "run_id": run_id,
+                    }
+                },
                 "$addToSet": {
                     f"daily_sent_concerns.{local_date_key}": concern_key,
                     f"daily_sent_domains.{local_date_key}": selected_domain or "unknown",

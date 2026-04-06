@@ -20,7 +20,8 @@
       "Read(//dev/**)",
       "Bash(find /Users/ciline/Documents/development/projects/Lumie_APP/lumie_backend/app/skills -name \"*.md\" -type f ! -exec grep -q \"proactive_eligible: true\" {} \\\\; -print)",
       "Bash(python -m py_compile lumie_backend/app/services/proactive_advisor_service.py lumie_backend/app/services/proactive_audit_service.py lumie_backend/app/services/execution_service.py lumie_backend/app/models/proactive.py)",
-      "Bash(python -m py_compile lumie_backend/app/services/dayprint_service.py)"
+      "Bash(python -m py_compile lumie_backend/app/services/dayprint_service.py)",
+      "Read(//Users/ciline/Documents/development/projects/Lumie_APP/**)"
     ],
     "additionalDirectories": [
       "/Users/ciline/.claude",
