@@ -9,7 +9,6 @@ Unified entry point that:
 """
 import asyncio
 import logging
-import re
 from datetime import datetime
 from typing import Optional
 from zoneinfo import ZoneInfo
@@ -30,92 +29,45 @@ logger = logging.getLogger(__name__)
 # Layer 1 model routed through PaleBlueDot's OpenAI-compatible API.
 _MODEL = settings.PALEBLUEDOT_MODEL
 
-# Health-related keywords that should trigger team member lookup
-_HEALTH_KEYWORDS = {
-    "medication", "medicine", "drug", "dose",
-    "sleep", "sleeping", "bedtime",
-    "health", "healthy",
-    "exercise", "activity", "workout",
-    "heart rate", "pulse", "hr", "bpm",
-    "temperature", "fever", "temp",
-    "energy", "tired", "fatigue",
-    "symptom", "side effect", "reaction",
-    "stress", "anxiety", "mood",
-}
+async def _extract_target_person_with_llm(message: str) -> Optional[str]:
+    """Use LLM to detect if the user is asking about someone else's health/status.
 
+    Returns the person's name/reference if asking about someone else, None if asking about self.
 
-def _extract_target_hint_from_message(message: str) -> Optional[str]:
-    """Extract target person reference from health-related questions.
-
-    Detects patterns like:
-    - "Emma's sleep", "John's medication"
-    - "Did Eimer take medication?"
-    - "my daughter's health", "my son's temperature"
-    - "What's [name]'s [health topic]?"
-
-    Returns the target person reference or None.
+    Examples:
+    - "Did Eimer take all her medication?" → "Eimer"
+    - "Emma's sleep is low" → "Emma"
+    - "How is my daughter?" → "my daughter"
+    - "What's my heart rate?" → None (self)
     """
-    msg_lower = message.lower().strip()
+    prompt = f"""Analyze this message and determine if the user is asking about someone ELSE's health/status, or about their own.
 
-    # Quick check: does message contain health keywords?
-    if not any(keyword in msg_lower for keyword in _HEALTH_KEYWORDS):
+Message: "{message}"
+
+If the user is asking about SOMEONE ELSE's health/medication/sleep/exercise/status, respond with ONLY their name or relationship (e.g., "Emma", "John", "my daughter", "my son").
+If the user is asking about their own health/status, or if it's unclear, respond with: "self"
+
+Do NOT include quotes or explanation. Just the name or "self"."""
+
+    try:
+        response = await chat_completion(
+            model=_MODEL,
+            max_tokens=50,
+            temperature=0,
+            messages=[{"role": "user", "content": prompt}],
+        )
+
+        result = (response.text or "self").strip().lower()
+
+        # If LLM says "self" or empty, no target person
+        if result in {"self", "self.", "myself", "me", "my own", ""}:
+            return None
+
+        # Otherwise return the name/hint the LLM extracted
+        return result if result else None
+    except Exception as e:
+        logger.warning(f"LLM target person extraction failed: {e}")
         return None
-
-    # Build keyword pattern once
-    keyword_pattern = '|'.join(re.escape(kw) for kw in _HEALTH_KEYWORDS)
-
-    # Pattern 1: Possessive patterns "[name]'s [health topic]"
-    # e.g., "Emma's sleep", "John's medication"
-    pattern = r"([a-z]+(?:\s+[a-z]+)?)'s\s+(?:" + keyword_pattern + ")"
-    matches = re.findall(pattern, msg_lower, re.IGNORECASE)
-    if matches:
-        hint = matches[0].strip()
-        if hint and len(hint) < 50 and hint not in {"my", "the", "his", "her", "their"}:
-            return hint
-
-    # Pattern 2: Action patterns "name take/took health_keyword"
-    # e.g., "Did Eimer take all her medication?", "John take his medicine"
-    # First convert message to lowercase to match case-insensitively
-    pattern = r'(?:did|does|has)\s+(\w+(?:\s+\w+)?)\s+(?:take|took|have|has)\s+(?:all\s+)?(?:his|her|their\s+)?(?:' + keyword_pattern + ')'
-    matches = re.findall(pattern, msg_lower)
-    if matches:
-        hint = matches[0].strip()
-        if hint and len(hint) < 50 and hint not in {"did", "does", "has"}:
-            return hint
-
-    # Pattern 3: Question patterns "How/What about [name]'s [health topic]?"
-    pattern = r'(?:how|what|check)\s+(?:about\s+)?(?:is\s+)?(?:my\s+)?([a-z]+(?:\s+[a-z]+)?)[\'s]*\s+(?:' + keyword_pattern + ')'
-    matches = re.findall(pattern, msg_lower)
-    if matches:
-        hint = matches[0].strip()
-        if hint and len(hint) < 50 and hint not in {"my", "the", "his", "her", "their"}:
-            return hint
-
-    # Pattern 4: Family references with health keywords
-    # "How is my daughter's sleep?"
-    family_pattern = r'(?:my|the)\s+(daughter|son|child|kid|teen)'
-    if re.search(family_pattern, msg_lower, re.IGNORECASE):
-        match = re.search(family_pattern, msg_lower, re.IGNORECASE)
-        if match:
-            return match.group(0).strip()
-
-    # Pattern 5: Just a capitalized name near health keywords
-    # Extract capitalized words (likely names) from the message
-    words = message.split()
-    capitalized_names = [w.strip('.,!?;:') for w in words if w and w[0].isupper() and len(w) > 1]
-
-    # Check if any capitalized name is adjacent to health keywords
-    for name in capitalized_names:
-        name_pos = msg_lower.find(name.lower())
-        if name_pos >= 0:
-            # Check nearby context for health keywords
-            context_start = max(0, name_pos - 30)
-            context_end = min(len(msg_lower), name_pos + len(name) + 30)
-            context = msg_lower[context_start:context_end]
-            if any(keyword in context for keyword in _HEALTH_KEYWORDS):
-                return name
-
-    return None
 
 
 # ── Main entry point ─────────────────────────────────────────────────────────
@@ -133,9 +85,9 @@ async def handle_chat(
     Returns dict with keys: type, reply, job_id, skill_id, status, nav_hint
     """
     # ── Step 0.5: Auto-detect target user from health-related queries ────
-    # If asking about another person's medication/sleep/health, try to resolve them
+    # Use LLM to detect if asking about someone else's health/status
     if not target_user_id:
-        auto_hint = _extract_target_hint_from_message(message)
+        auto_hint = await _extract_target_person_with_llm(message)
         if auto_hint:
             resolved = await _resolve_target_user_hint(user_id, auto_hint, team_id)
             if resolved and resolved != user_id:
