@@ -534,7 +534,12 @@ def _build_decision_prompt(
         f"Current local time: {local_time_str}.\n\n"
         "You are in PROACTIVE MODE. You are reviewing skill execution data to decide "
         "whether to send a contextual check-in notification.\n\n"
-        "CRITICAL RULE: DO NOT repeat any topic (domain/subject) that has been mentioned in the last 6 hours.\n\n"
+        "CRITICAL RULE: DO NOT repeat any topic (domain/subject) mentioned in the last 6 hours "
+        "UNLESS the current data shows SIGNIFICANT CHANGE from when it was last mentioned.\n\n"
+        "WHAT COUNTS AS 'SIGNIFICANT CHANGE':\n"
+        "- Numeric change >15-20% (e.g., sleep 5h→3h, steps 8k→5k, temp 24°C→26°C)\n"
+        "- Status/threshold crossing (e.g., goes from 'ok' to 'concerning' or vice versa)\n"
+        "- New concerning pattern (e.g., was stable, now declining)\n\n"
         "DECISION POLICY:\n"
         "1. Review all current skill data. Higher priority values indicate more important skills.\n"
         "2. Focus on data from successfully-executed skills (execution_status='success').\n"
@@ -543,11 +548,9 @@ def _build_decision_prompt(
         "5. Consider trends from the previous round (if available).\n"
         "6. Check today's dayprint for context (if available).\n"
         "7. Send nudges regularly (not just emergencies) to build supportive, ongoing connection.\n"
-        "8. If you find something worth sharing BUT that topic was nudged recently, SKIP IT and don't nudge.\n"
+        "8. Compare recent nudge evidence to current data. Only nudge if significant change detected.\n"
         "9. Prefer personalized, grounded insights over vague ones. Include specific numbers (temperature, duration, percentage).\n\n"
         f"RECENT NUDGE HISTORY (last 6 hours):\n{last_nudge_str}\n\n"
-        "If the list is empty, all topics are available.\n"
-        "If a topic appears in the list, do not nudge about it now.\n\n"
         "Respond with valid JSON only — no markdown, no explanation:\n"
         '{"should_nudge": true|false, "message": "<friendly check-in message ≤120 chars, or null>", '
         '"reason": "<brief internal reason>", "primary_domain": "<domain>", "confidence": 0.0-1.0}'
@@ -693,10 +696,10 @@ async def run_proactive_check(user_id: str) -> dict:
 
     if recent_nudges:
         recent_nudges_str = "\n".join([
-            f"  - {n.get('domain', 'unknown')}: {n.get('reason', '')}"
+            f"  - {n.get('domain', 'unknown')}: {n.get('reason', '')} (evidence: {n.get('evidence_summary', 'none')})"
             for n in recent_nudges
         ])
-        last_nudge_str = f"Recent nudges (last 6 hours):\n{recent_nudges_str}"
+        last_nudge_str = f"Recent nudges (last 6 hours):\n{recent_nudges_str}\n\nIf the current data shows SIGNIFICANT CHANGE from the evidence above, you MAY nudge again."
     elif last_nudge:
         nudged_at_raw = last_nudge.get("nudged_at", "")
         try:
@@ -906,6 +909,7 @@ async def run_proactive_check(user_id: str) -> dict:
                         "domain": selected_domain or "unknown",
                         "nudged_at": now_utc.isoformat(),
                         "reason": reason,
+                        "evidence_summary": evidence_summary,
                         "run_id": run_id,
                     }
                 },
