@@ -108,7 +108,16 @@ class _SleepScreenState extends State<SleepScreen> {
                     child: Center(child: CircularProgressIndicator()),
                   )
                 else if (sleep.latestSleep == null)
-                  _buildNoData()
+                  SliverPadding(
+                    padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
+                    sliver: SliverList(
+                      delegate: SliverChildListDelegate([
+                        _buildNoData(),
+                        const SizedBox(height: 16),
+                        _buildViewHistoryButton(),
+                      ]),
+                    ),
+                  )
                 else
                   SliverPadding(
                     padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
@@ -211,33 +220,29 @@ class _SleepScreenState extends State<SleepScreen> {
   // ─── No-data state ────────────────────────────────────────────────────────
 
   Widget _buildNoData() {
-    return const SliverFillRemaining(
-      child: Center(
-        child: Padding(
-          padding: EdgeInsets.all(40),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Icon(Icons.bedtime_outlined, size: 72, color: AppColors.textLight),
-              SizedBox(height: 20),
-              Text(
-                'No sleep data recorded for this night.',
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                  fontSize: 17,
-                  fontWeight: FontWeight.w600,
-                  color: AppColors.textSecondary,
-                ),
-              ),
-              SizedBox(height: 8),
-              Text(
-                'Wear your Lumie Ring to bed to see your sleep stages and quality score.',
-                textAlign: TextAlign.center,
-                style: TextStyle(fontSize: 14, color: AppColors.textLight, height: 1.5),
-              ),
-            ],
+    return const Padding(
+      padding: EdgeInsets.symmetric(vertical: 48),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.bedtime_outlined, size: 72, color: AppColors.textLight),
+          SizedBox(height: 20),
+          Text(
+            'No sleep data',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              fontSize: 17,
+              fontWeight: FontWeight.w600,
+              color: AppColors.textSecondary,
+            ),
           ),
-        ),
+          SizedBox(height: 8),
+          Text(
+            'Wear your Lumie Ring to bed to see your sleep stages and quality score.',
+            textAlign: TextAlign.center,
+            style: TextStyle(fontSize: 14, color: AppColors.textLight, height: 1.5),
+          ),
+        ],
       ),
     );
   }
