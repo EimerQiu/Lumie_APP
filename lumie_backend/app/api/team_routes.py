@@ -10,7 +10,8 @@ from ..services.team_service import team_service
 from ..models.team import (
     TeamCreate, TeamUpdate, TeamInvite,
     TeamResponse, TeamsListResponse, TeamMembersResponse,
-    TeamSharedDataResponse, InvitationAcceptResponse
+    TeamSharedDataResponse, InvitationAcceptResponse,
+    TeamFeedResponse,
 )
 
 router = APIRouter(prefix="/teams", tags=["teams"])
@@ -187,6 +188,27 @@ async def get_pending_invitations(
     - Returns 403 if not admin
     """
     return await team_service.get_pending_invitations(team_id, user_id)
+
+
+@router.get("/{team_id}/feed", response_model=TeamFeedResponse)
+async def get_team_feed(
+    team_id: str,
+    limit: int = Query(20, ge=1, le=50),
+    before: Optional[str] = Query(None, description="ISO timestamp cursor – return items older than this"),
+    user_id: str = Depends(get_current_user_id),
+):
+    """
+    Get the team activity feed (dayprint)
+
+    Returns a paginated, reverse-chronological feed of:
+    - Completed team tasks with photos (task_with_photo)
+    - Completed team tasks without photos (task_text)
+    - Daily sleep scores for members who share sleep data (sleep_score)
+
+    - User must be an active member
+    - Returns 403 if not a member
+    """
+    return await team_service.get_team_feed(team_id, user_id, limit, before)
 
 
 @router.get("/{team_id}/shared-data", response_model=TeamSharedDataResponse)

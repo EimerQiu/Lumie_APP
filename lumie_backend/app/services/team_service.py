@@ -1213,6 +1213,171 @@ class TeamService:
 
         return count
 
+    async def get_team_feed(
+        self,
+        team_id: str,
+        user_id: str,
+        limit: int = 20,
+        before: Optional[str] = None,
+    ) -> dict:
+        """
+        Get the team activity feed (dayprint).
+
+        Returns completed team tasks (with and without photos) and daily sleep
+        scores for members who share sleep data, sorted newest-first.
+
+        Args:
+            team_id: Team ID
+            user_id: Requesting user ID (must be active member)
+            limit: Max items to return (1-50)
+            before: ISO timestamp cursor – return items older than this
+
+        Returns:
+            Dict matching TeamFeedResponse schema
+
+        Raises:
+            HTTPException 403 if requester is not an active member
+        """
+        db = get_database()
+
+        # Verify requester is an active member
+        membership = await db.team_members.find_one({
+            "team_id": team_id,
+            "user_id": user_id,
+            "status": MemberStatus.MEMBER.value,
+        })
+        if not membership:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You are not a member of this team",
+            )
+
+        # Fetch all active members and their data-sharing settings
+        members_cursor = db.team_members.find({
+            "team_id": team_id,
+            "status": MemberStatus.MEMBER.value,
+        })
+        members = await members_cursor.to_list(length=None)
+        member_user_ids = [m["user_id"] for m in members]
+
+        # Build lookup: user_id → display name (from profiles)
+        profiles = await db.profiles.find(
+            {"user_id": {"$in": member_user_ids}}
+        ).to_list(length=None)
+        name_map = {p["user_id"]: p.get("name", "Unknown") for p in profiles}
+
+        # Sleep-sharing user ids (respects per-member privacy toggle)
+        sleep_sharing_ids = [
+            m["user_id"]
+            for m in members
+            if m.get("data_sharing", {}).get("sleep", False)
+        ]
+
+        # --- Pagination cursor ---
+        cutoff = datetime.utcnow() - timedelta(days=14)
+        before_dt: Optional[datetime] = None
+        if before:
+            try:
+                before_dt = datetime.fromisoformat(before)
+            except ValueError:
+                pass
+
+        feed_items: list[dict] = []
+
+        # --- 1. Completed team tasks ---
+        # Tasks use a "done" timestamp field (not a status field) to mark completion.
+        # Only show tasks explicitly belonging to this team.
+        task_filter: dict = {
+            "team_id": team_id,
+            "done": {"$exists": True, "$ne": None, "$gte": cutoff},
+        }
+        if before_dt:
+            task_filter["done"]["$lt"] = before_dt
+
+        tasks_cursor = db.tasks.find(task_filter).sort("done", -1).limit(limit * 3)
+        tasks = await tasks_cursor.to_list(length=None)
+
+        for task in tasks:
+            attachments = task.get("attachments", [])
+            image_attachments = [
+                a for a in attachments if a.get("media_type") == "image"
+            ]
+            has_photo = bool(image_attachments)
+            item_type = "task_with_photo" if has_photo else "task_text"
+
+            done_at = task.get("done")
+            ts = done_at.isoformat() if isinstance(done_at, datetime) else str(done_at)
+
+            feed_items.append({
+                "item_id": task["task_id"],
+                "type": item_type,
+                "member_user_id": task["user_id"],
+                "member_name": name_map.get(task["user_id"], "Unknown"),
+                "timestamp": ts,
+                "task_name": task.get("task_name"),
+                "task_type": task.get("task_type"),
+                "attachments": [
+                    {"url": a["url"], "thumbnail_url": a.get("thumbnail_url")}
+                    for a in image_attachments
+                ] if has_photo else None,
+            })
+
+        # --- 2. Sleep scores (one per member per day, ring source only) ---
+        if sleep_sharing_ids:
+            sleep_filter: dict = {
+                "user_id": {"$in": sleep_sharing_ids},
+                "wake_time": {"$gte": cutoff},
+                "source": "ring",
+                "total_sleep_minutes": {"$gt": 0},
+            }
+            if before_dt:
+                sleep_filter["wake_time"]["$lt"] = before_dt
+
+            sleep_cursor = db.sleep_sessions.find(sleep_filter).sort("wake_time", -1)
+            sleep_sessions = await sleep_cursor.to_list(length=None)
+
+            seen_day: set[tuple] = set()
+            for session in sleep_sessions:
+                wake_time = session.get("wake_time")
+                uid = session.get("user_id")
+                if not isinstance(wake_time, datetime):
+                    continue
+                day_key = (uid, wake_time.date())
+                if day_key in seen_day:
+                    continue
+                seen_day.add(day_key)
+
+                sleep_hours = round(session.get("total_sleep_minutes", 0) / 60, 1)
+                sleep_score = round(session.get("sleep_quality_score", 0))
+
+                feed_items.append({
+                    "item_id": session["session_id"],
+                    "type": "sleep_score",
+                    "member_user_id": uid,
+                    "member_name": name_map.get(uid, "Unknown"),
+                    "timestamp": wake_time.isoformat(),
+                    "sleep_score": sleep_score,
+                    "sleep_hours": sleep_hours,
+                })
+
+        # --- Sort and paginate ---
+        def _ts(item: dict) -> datetime:
+            try:
+                return datetime.fromisoformat(item["timestamp"])
+            except Exception:
+                return datetime.min
+
+        feed_items.sort(key=_ts, reverse=True)
+        paginated = feed_items[:limit]
+        has_more = len(feed_items) > limit
+        next_before = paginated[-1]["timestamp"] if has_more and paginated else None
+
+        return {
+            "items": paginated,
+            "has_more": has_more,
+            "next_before": next_before,
+        }
+
 
 # Singleton instance
 team_service = TeamService()

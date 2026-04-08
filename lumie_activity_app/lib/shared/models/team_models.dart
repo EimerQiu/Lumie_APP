@@ -1,5 +1,13 @@
 /// Team and team member models
 
+/// Helper: backend timestamps omit the 'Z' suffix – append it before parsing.
+String _ensureUtcSuffix(String dateStr) {
+  if (!dateStr.endsWith('Z') && !dateStr.contains('+')) {
+    return '${dateStr}Z';
+  }
+  return dateStr;
+}
+
 enum TeamRole {
   admin,
   member;
@@ -254,5 +262,105 @@ class TeamMembersResponse {
       'members': members.map((m) => m.toJson()).toList(),
       'total_members': totalMembers,
     };
+  }
+}
+
+// ─── Team Feed (Dayprint) Models ─────────────────────────────────────────────
+
+enum TeamFeedItemType {
+  taskWithPhoto,
+  taskText,
+  sleepScore;
+
+  static TeamFeedItemType fromString(String value) {
+    switch (value) {
+      case 'task_with_photo':
+        return TeamFeedItemType.taskWithPhoto;
+      case 'sleep_score':
+        return TeamFeedItemType.sleepScore;
+      default:
+        return TeamFeedItemType.taskText;
+    }
+  }
+}
+
+class FeedAttachment {
+  final String url;
+  final String? thumbnailUrl;
+
+  const FeedAttachment({required this.url, this.thumbnailUrl});
+
+  factory FeedAttachment.fromJson(Map<String, dynamic> json) {
+    return FeedAttachment(
+      url: json['url'] as String,
+      thumbnailUrl: json['thumbnail_url'] as String?,
+    );
+  }
+}
+
+class TeamFeedItem {
+  final String itemId;
+  final TeamFeedItemType type;
+  final String memberUserId;
+  final String memberName;
+  final DateTime timestamp;
+  // Task fields
+  final String? taskName;
+  final String? taskType;
+  final List<FeedAttachment>? attachments;
+  // Sleep fields
+  final int? sleepScore;
+  final double? sleepHours;
+
+  const TeamFeedItem({
+    required this.itemId,
+    required this.type,
+    required this.memberUserId,
+    required this.memberName,
+    required this.timestamp,
+    this.taskName,
+    this.taskType,
+    this.attachments,
+    this.sleepScore,
+    this.sleepHours,
+  });
+
+  factory TeamFeedItem.fromJson(Map<String, dynamic> json) {
+    return TeamFeedItem(
+      itemId: json['item_id'] as String,
+      type: TeamFeedItemType.fromString(json['type'] as String),
+      memberUserId: json['member_user_id'] as String,
+      memberName: json['member_name'] as String,
+      timestamp: DateTime.parse(_ensureUtcSuffix(json['timestamp'] as String)),
+      taskName: json['task_name'] as String?,
+      taskType: json['task_type'] as String?,
+      attachments: (json['attachments'] as List?)
+          ?.map((a) => FeedAttachment.fromJson(a as Map<String, dynamic>))
+          .toList(),
+      sleepScore: json['sleep_score'] as int?,
+      sleepHours: (json['sleep_hours'] as num?)?.toDouble(),
+    );
+  }
+}
+
+class TeamFeedResponse {
+  final List<TeamFeedItem> items;
+  final bool hasMore;
+  final String? nextBefore;
+
+  const TeamFeedResponse({
+    required this.items,
+    required this.hasMore,
+    this.nextBefore,
+  });
+
+  factory TeamFeedResponse.fromJson(Map<String, dynamic> json) {
+    return TeamFeedResponse(
+      items: (json['items'] as List)
+          .map((i) => TeamFeedItem.fromJson(i as Map<String, dynamic>))
+          .toList(),
+      hasMore: json['has_more'] as bool,
+      nextBefore: json['next_before'] as String?,
+    );
   }
 }

@@ -365,6 +365,36 @@ class TeamService {
     }
   }
 
+  /// Get the team activity feed (dayprint)
+  Future<TeamFeedResponse> getTeamFeed(
+    String teamId, {
+    int limit = 20,
+    String? before,
+  }) async {
+    if (_token == null) throw Exception('Not authenticated');
+
+    final queryParams = <String, String>{'limit': limit.toString()};
+    if (before != null) queryParams['before'] = before;
+
+    final uri = Uri.parse('${ApiConstants.baseUrl}/teams/$teamId/feed')
+        .replace(queryParameters: queryParams);
+
+    try {
+      final response = await http.get(uri, headers: _headers);
+
+      if (response.statusCode == 200) {
+        return TeamFeedResponse.fromJson(json.decode(response.body));
+      } else if (response.statusCode == 403) {
+        throw Exception('You are not a member of this team');
+      } else {
+        final error = json.decode(response.body);
+        throw Exception(error['detail'] ?? 'Failed to get team feed');
+      }
+    } catch (e) {
+      rethrow;
+    }
+  }
+
   /// Get specific member's shared data
   Future<Map<String, dynamic>> getMemberData({
     required String teamId,

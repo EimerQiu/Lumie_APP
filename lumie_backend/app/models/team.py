@@ -177,6 +177,44 @@ class SubscriptionError(BaseModel):
     error: SubscriptionErrorDetail
 
 
+# Team Feed Models
+
+class FeedItemType(str, Enum):
+    """Type of feed item in the team dayprint"""
+    TASK_WITH_PHOTO = "task_with_photo"
+    TASK_TEXT = "task_text"
+    SLEEP_SCORE = "sleep_score"
+
+
+class FeedAttachment(BaseModel):
+    """Photo attachment in a feed item"""
+    url: str
+    thumbnail_url: Optional[str] = None
+
+
+class TeamFeedItem(BaseModel):
+    """A single item in the team activity feed"""
+    item_id: str
+    type: FeedItemType
+    member_user_id: str
+    member_name: str
+    timestamp: str  # ISO datetime (no Z suffix, backend standard)
+    # Task-specific fields
+    task_name: Optional[str] = None
+    task_type: Optional[str] = None
+    attachments: Optional[List[FeedAttachment]] = None
+    # Sleep-specific fields
+    sleep_score: Optional[int] = None
+    sleep_hours: Optional[float] = None
+
+
+class TeamFeedResponse(BaseModel):
+    """Paginated team activity feed"""
+    items: List[TeamFeedItem]
+    has_more: bool
+    next_before: Optional[str] = None  # ISO timestamp cursor for next page
+
+
 # Invitation Token Response
 
 class InvitationDetailsResponse(BaseModel):

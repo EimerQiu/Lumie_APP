@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../providers/teams_provider.dart';
 import '../../../shared/models/team_models.dart';
+import 'team_dayprint_screen.dart';
 
 class TeamDetailScreen extends StatefulWidget {
   final String teamId;
@@ -27,7 +28,7 @@ class _TeamDetailScreenState extends State<TeamDetailScreen>
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 2, vsync: this);
+    _tabController = TabController(length: 3, vsync: this);
     _loadData();
   }
 
@@ -239,6 +240,7 @@ class _TeamDetailScreenState extends State<TeamDetailScreen>
           controller: _tabController,
           tabs: const [
             Tab(text: 'Members', icon: Icon(Icons.people_outline)),
+            Tab(text: 'Dayprint', icon: Icon(Icons.photo_library_outlined)),
             Tab(text: 'Shared Data', icon: Icon(Icons.bar_chart)),
           ],
         ),
@@ -247,6 +249,7 @@ class _TeamDetailScreenState extends State<TeamDetailScreen>
         controller: _tabController,
         children: [
           _buildMembersTab(),
+          TeamDayprintScreen(teamId: widget.teamId),
           _buildSharedDataTab(),
         ],
       ),
