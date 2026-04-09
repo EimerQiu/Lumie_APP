@@ -27,6 +27,7 @@ from .api.advisor_v2_routes import router as advisor_v2_router
 from .api.proactive_routes import router as proactive_router
 from .api.steps_routes import router as steps_router
 from .api.hrv_routes import router as hrv_router
+from .api.hr_routes import router as hr_router
 from .api.temperature_routes import router as temperature_router
 from .api.spo2_routes import router as spo2_router
 from .api.ring_command_routes import router as ring_command_router
@@ -139,6 +140,7 @@ app.include_router(advisor_v2_router, prefix="/api/v2")
 app.include_router(proactive_router, prefix="/api/v1")
 app.include_router(steps_router, prefix="/api/v1")
 app.include_router(hrv_router, prefix="/api/v1")
+app.include_router(hr_router, prefix="/api/v1")
 app.include_router(temperature_router, prefix="/api/v1")
 app.include_router(spo2_router, prefix="/api/v1")
 app.include_router(ring_command_router, prefix="/api/v1")

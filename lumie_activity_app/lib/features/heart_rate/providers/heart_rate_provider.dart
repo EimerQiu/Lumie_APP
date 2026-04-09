@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:math';
 import 'package:flutter/foundation.dart';
 
+import '../../../core/services/hr_session_service.dart';
 import '../../../shared/models/heart_rate_models.dart';
 import '../../ring/providers/ring_provider.dart';
 
@@ -76,9 +77,25 @@ class HeartRateProvider extends ChangeNotifier {
     final connected = ring.isConnected;
     final justReconnected = !_lastRingConnected && connected;
     _lastRingConnected = connected;
-    if (justReconnected && _measureState == HrMeasureState.measuring) {
+
+    if (!justReconnected) return;
+
+    if (_measureState == HrMeasureState.measuring) {
+      // Re-subscribe to the new characteristic so the stream stays live.
+      // Also resends 0x28/0x09/0x19 start commands in case the ring lost state.
+      _hrSub?.cancel();
+      final stream = ring.startHrStreaming();
+      _hrSub = stream.listen(
+        _onRawReading,
+        onError: (e) => debugPrint('[HR] stream error after reconnect: $e'),
+      );
       _enqueueGapsFromSession();
       _kickBackfillIfNeeded();
+    } else if (_measureState == HrMeasureState.done) {
+      // Stop was tapped while disconnected — send stop commands to the ring now.
+      ring.stopHrStreaming().catchError(
+        (e) => debugPrint('[HR] delayed stop error: $e'),
+      );
     }
   }
 
@@ -110,6 +127,8 @@ class HeartRateProvider extends ChangeNotifier {
       : (_sessionReadings.map((e) => e.smoothedBpm).reduce((a, b) => a + b) /
                 _sessionReadings.length)
             .round();
+
+  DateTime? get measurementStartedAt => _measurementStartedAt;
 
   int? get latestHr => _dailyReadings.isEmpty ? null : _dailyReadings.last.bpm;
 
@@ -467,6 +486,12 @@ class HeartRateProvider extends ChangeNotifier {
   Future<void> stopMeasurement() async {
     if (_measureState != HrMeasureState.measuring) return;
 
+    // Snapshot before teardown — _sessionReadings is not cleared here,
+    // but capture startedAt and endedAt while they are still meaningful.
+    final startedAt = _measurementStartedAt;
+    final endedAt = DateTime.now();
+    final snapshotReadings = List<HrSessionPoint>.unmodifiable(_sessionReadings);
+
     _elapsedTimer?.cancel();
     _elapsedTimer = null;
     _autoStopTimer?.cancel();
@@ -476,17 +501,35 @@ class HeartRateProvider extends ChangeNotifier {
     _hrSub = null;
     await _ringProvider?.stopHrStreaming();
 
-    // Append session avg to daily history
+    // Append session avg to daily history (in-memory, for this session)
     final avg = sessionAvg;
     if (avg != null) {
       _dailyReadings = [
         ..._dailyReadings,
-        HrDataPoint(time: DateTime.now(), bpm: avg),
+        HrDataPoint(time: endedAt, bpm: avg),
       ];
     }
 
     _measureState = HrMeasureState.done;
     notifyListeners();
+
+    // Persist session to backend — fire-and-forget, never block the UI.
+    // Requires at least a few readings to be worth saving.
+    if (startedAt != null && snapshotReadings.length >= 5 && avg != null) {
+      HrSessionService()
+          .saveSession(
+            startedAt: startedAt,
+            endedAt: endedAt,
+            avgBpm: avg,
+            minBpm: sessionMin ?? avg,
+            maxBpm: sessionMax ?? avg,
+            readings: snapshotReadings,
+          )
+          .catchError((e) {
+            debugPrint('[HR] session save error: $e');
+            return null;
+          });
+    }
   }
 
   void resetMeasurement() {

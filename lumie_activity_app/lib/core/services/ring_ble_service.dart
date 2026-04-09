@@ -1041,22 +1041,26 @@ class RingBleService {
 
     final notifyChar = _notifyChar!;
     _hrStreamSub?.cancel();
-    _hrStreamSub = notifyChar.onValueReceived.listen((data) {
-      if (data.isEmpty || data[0] != 0x18) return;
-      // 0x18 exercise push packet: live optical HR at byte[1].
-      // byte[1] == 0xFF means ring ended exercise; byte[1] == 0x00 means sensor
-      // is still warming up (no valid reading yet) — both are ignored.
-      if (data.length < 2 || data[1] == 0xFF || data[1] == 0x00) return;
-      final hr = data[1];
-      // duration counter (seconds, LE) for log context
-      final secs = data.length >= 14
-          ? data[10] | (data[11] << 8) | (data[12] << 16) | (data[13] << 24)
-          : 0;
-      debugPrint('[Ring HR] 0x18 → $hr BPM (t=${secs}s)');
-      if (hr > 0 && hr < 250 && _hrStreamController?.isClosed == false) {
-        _hrStreamController!.add(hr);
-      }
-    });
+    _hrStreamSub = notifyChar.onValueReceived.listen(
+      (data) {
+        if (data.isEmpty || data[0] != 0x18) return;
+        // 0x18 exercise push packet: live optical HR at byte[1].
+        // byte[1] == 0xFF means ring ended exercise; byte[1] == 0x00 means sensor
+        // is still warming up (no valid reading yet) — both are ignored.
+        if (data.length < 2 || data[1] == 0xFF || data[1] == 0x00) return;
+        final hr = data[1];
+        // duration counter (seconds, LE) for log context
+        final secs = data.length >= 14
+            ? data[10] | (data[11] << 8) | (data[12] << 16) | (data[13] << 24)
+            : 0;
+        debugPrint('[Ring HR] 0x18 → $hr BPM (t=${secs}s)');
+        if (hr > 0 && hr < 250 && _hrStreamController?.isClosed == false) {
+          _hrStreamController!.add(hr);
+        }
+      },
+      onError: (e) => debugPrint('[Ring HR] notify stream error: $e'),
+      cancelOnError: false,
+    );
 
     // 0x28: activate optical sensor, max 90 min = 5400 s
     final measurePayload = List<int>.filled(15, 0);

@@ -568,8 +568,6 @@ class RingProvider extends ChangeNotifier with WidgetsBindingObserver {
 
   // ─── Heart Rate Streaming ─────────────────────────────────────────────────
 
-  StreamSubscription<int>? _hrStreamSubscription;
-
   /// Start streaming real-time heart rate from the ring.
   /// Returns a Stream<int> of BPM values.
   Stream<int> startHrStreaming() {
@@ -579,8 +577,6 @@ class RingProvider extends ChangeNotifier with WidgetsBindingObserver {
 
   /// Stop streaming heart rate data from the ring.
   Future<void> stopHrStreaming() async {
-    _hrStreamSubscription?.cancel();
-    _hrStreamSubscription = null;
     await _bleService.stopHrStreaming();
   }
 

@@ -114,6 +114,15 @@ async def create_indexes():
     await db.db.proactive_decisions.create_index([("run_id", 1)])
     await db.db.proactive_decisions.create_index([("user_id", 1), ("decided_at", -1)])
 
+    # HR session collection indexes
+    await db.db.hr_sessions.create_index([("user_id", 1), ("started_at", -1)])
+
+    # HR timeseries collection indexes (bucket pattern)
+    # Primary lookup: fetch all buckets for a session in order
+    await db.db.hr_timeseries.create_index([("session_id", 1), ("bucket_start", 1)])
+    # Secondary: user-level time-range queries (e.g. "last 7 days of HR data")
+    await db.db.hr_timeseries.create_index([("user_id", 1), ("bucket_start", -1)])
+
 
 def get_database() -> AsyncIOMotorDatabase:
     """Get database instance."""

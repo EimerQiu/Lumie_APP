@@ -1,11 +1,18 @@
-import 'package:fl_chart/fl_chart.dart';
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../../core/theme/app_colors.dart';
+import 'dart:convert';
+import 'package:http/http.dart' as http;
+import '../../../core/constants/api_constants.dart';
+import '../../../core/services/auth_service.dart';
+import '../../../shared/models/activity_models.dart';
 import '../../auth/providers/auth_provider.dart';
+import '../../manual_entry/widgets/activity_type_selector.dart';
 import '../../ring/providers/ring_provider.dart';
 import '../providers/heart_rate_provider.dart';
+import '../screens/hr_history_screen.dart';
+import '../widgets/hr_session_chart.dart';
 
 class HeartRateScreen extends StatefulWidget {
   const HeartRateScreen({super.key});
@@ -101,7 +108,42 @@ class _HeartRateScreenState extends State<HeartRateScreen>
   void _stopMeasurement(HeartRateProvider provider) {
     _pulseController.stop();
     _pulseController.reset();
+
+    // Capture before stopMeasurement clears state
+    final startedAt = provider.measurementStartedAt;
+    final endedAt = DateTime.now();
+    final avgBpm = provider.sessionAvg;
+    final maxBpm = provider.sessionMax;
+
     provider.stopMeasurement();
+
+    if (startedAt != null && avgBpm != null) {
+      _showActivityPrompt(
+        startedAt: startedAt,
+        endedAt: endedAt,
+        avgBpm: avgBpm,
+        maxBpm: maxBpm,
+      );
+    }
+  }
+
+  void _showActivityPrompt({
+    required DateTime startedAt,
+    required DateTime endedAt,
+    required int avgBpm,
+    int? maxBpm,
+  }) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => _ActivityPromptSheet(
+        startedAt: startedAt,
+        endedAt: endedAt,
+        avgBpm: avgBpm,
+        maxBpm: maxBpm,
+      ),
+    );
   }
 
   @override
@@ -121,6 +163,14 @@ class _HeartRateScreenState extends State<HeartRateScreen>
           ),
         ),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.history, color: AppColors.textSecondary),
+            tooltip: 'Session history',
+            onPressed: () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const HrHistoryScreen()),
+            ),
+          ),
           Consumer<HeartRateProvider>(
             builder: (_, hr, _) => IconButton(
               icon: const Icon(Icons.refresh, color: AppColors.textSecondary),
@@ -371,7 +421,10 @@ class _HeartRateScreenState extends State<HeartRateScreen>
                     ),
                   ),
                 )
-              : _buildSessionChart(hr),
+              : HrSessionChart(
+                  readings: hr.sessionReadings,
+                  backfillRanges: hr.attemptedBackfillRanges,
+                ),
         ),
         const SizedBox(height: 8),
         // Session stats (only once we have data)
@@ -445,7 +498,10 @@ class _HeartRateScreenState extends State<HeartRateScreen>
         const SizedBox(height: 20),
         // Session graph
         if (hr.sessionReadings.length >= 2) ...[
-          SizedBox(height: 160, child: _buildSessionChart(hr)),
+          SizedBox(
+            height: 160,
+            child: HrSessionChart(readings: hr.sessionReadings),
+          ),
           const SizedBox(height: 8),
         ],
         // Stats
@@ -467,141 +523,6 @@ class _HeartRateScreenState extends State<HeartRateScreen>
         ),
       ],
     );
-  }
-
-  // ─── Session chart ────────────────────────────────────────────────────────
-
-  Widget _buildSessionChart(HeartRateProvider hr) {
-    final readings = hr.sessionReadings;
-    if (readings.length < 2) return const SizedBox.shrink();
-
-    final origin = readings.first.time;
-    final spots = readings.map((p) {
-      final secs = p.time.difference(origin).inSeconds.toDouble();
-      return FlSpot(secs, p.smoothedBpm);
-    }).toList();
-
-    final bpms = readings.map((e) => e.smoothedBpm);
-    final minBpm = bpms.reduce((a, b) => a < b ? a : b);
-    final maxBpm = bpms.reduce((a, b) => a > b ? a : b);
-    final yMin = ((minBpm - 10).clamp(30, 200)).toDouble();
-    final yMax = ((maxBpm + 10).clamp(50, 250)).toDouble();
-    final totalSecs = spots.last.x;
-    final attemptedRanges = hr.attemptedBackfillRanges;
-    final visualBackfillRanges = attemptedRanges
-        .map((range) {
-          final x1 = range.start.difference(origin).inMilliseconds / 1000.0;
-          final x2 = range.end.difference(origin).inMilliseconds / 1000.0;
-          return VerticalRangeAnnotation(
-            x1: x1.clamp(0, totalSecs > 0 ? totalSecs : 1),
-            x2: x2.clamp(0, totalSecs > 0 ? totalSecs : 1),
-            color: Colors.amber.withValues(alpha: 0.12),
-          );
-        })
-        .where((r) => r.x2 > r.x1)
-        .toList();
-
-    return LineChart(
-      LineChartData(
-        minY: yMin,
-        maxY: yMax,
-        minX: 0,
-        maxX: totalSecs > 0 ? totalSecs : 1,
-        rangeAnnotations: RangeAnnotations(
-          verticalRangeAnnotations: visualBackfillRanges,
-        ),
-        clipData: const FlClipData.all(),
-        gridData: FlGridData(
-          show: true,
-          drawVerticalLine: false,
-          horizontalInterval: (yMax - yMin) / 3,
-          getDrawingHorizontalLine: (_) => FlLine(
-            color: AppColors.textLight.withValues(alpha: 0.3),
-            strokeWidth: 1,
-          ),
-        ),
-        borderData: FlBorderData(show: false),
-        titlesData: FlTitlesData(
-          rightTitles: const AxisTitles(
-            sideTitles: SideTitles(showTitles: false),
-          ),
-          topTitles: const AxisTitles(
-            sideTitles: SideTitles(showTitles: false),
-          ),
-          leftTitles: AxisTitles(
-            sideTitles: SideTitles(
-              showTitles: true,
-              reservedSize: 36,
-              interval: (yMax - yMin) / 3,
-              getTitlesWidget: (value, _) => Text(
-                '${value.toInt()}',
-                style: TextStyle(fontSize: 10, color: AppColors.textSecondary),
-              ),
-            ),
-          ),
-          bottomTitles: AxisTitles(
-            sideTitles: SideTitles(
-              showTitles: true,
-              reservedSize: 22,
-              interval: _sessionXInterval(totalSecs),
-              getTitlesWidget: (value, _) {
-                final m = (value ~/ 60).toString().padLeft(1, '0');
-                final s = (value.toInt() % 60).toString().padLeft(2, '0');
-                return Text(
-                  '$m:$s',
-                  style: TextStyle(fontSize: 9, color: AppColors.textSecondary),
-                );
-              },
-            ),
-          ),
-        ),
-        lineBarsData: [
-          LineChartBarData(
-            spots: spots,
-            isCurved: true,
-            curveSmoothness: 0.3,
-            color: Colors.redAccent,
-            barWidth: 2,
-            dotData: const FlDotData(show: false),
-            belowBarData: BarAreaData(
-              show: true,
-              gradient: LinearGradient(
-                begin: Alignment.topCenter,
-                end: Alignment.bottomCenter,
-                colors: [
-                  Colors.redAccent.withValues(alpha: 0.25),
-                  Colors.redAccent.withValues(alpha: 0.02),
-                ],
-              ),
-            ),
-          ),
-        ],
-        lineTouchData: LineTouchData(
-          touchTooltipData: LineTouchTooltipData(
-            getTooltipColor: (_) => AppColors.textPrimary,
-            getTooltipItems: (spots) => spots.map((spot) {
-              final m = spot.x.toInt() ~/ 60;
-              final s = spot.x.toInt() % 60;
-              return LineTooltipItem(
-                '${spot.y.toInt()} BPM\n$m:${s.toString().padLeft(2, '0')}',
-                const TextStyle(
-                  color: Colors.white,
-                  fontSize: 12,
-                  fontWeight: FontWeight.w600,
-                ),
-              );
-            }).toList(),
-          ),
-        ),
-      ),
-    );
-  }
-
-  double _sessionXInterval(double totalSecs) {
-    if (totalSecs <= 120) return 30;
-    if (totalSecs <= 600) return 120;
-    if (totalSecs <= 1800) return 300;
-    return 600;
   }
 
   Widget _buildSessionStatsRow(HeartRateProvider hr) {
@@ -795,6 +716,260 @@ class _HeartRateScreenState extends State<HeartRateScreen>
     final m = d.inMinutes.remainder(60).toString().padLeft(2, '0');
     final s = d.inSeconds.remainder(60).toString().padLeft(2, '0');
     return h > 0 ? '${h}h ${m}m ${s}s' : '${m}m ${s}s';
+  }
+}
+
+// ─── Activity prompt bottom sheet ────────────────────────────────────────────
+
+class _ActivityPromptSheet extends StatefulWidget {
+  final DateTime startedAt;
+  final DateTime endedAt;
+  final int avgBpm;
+  final int? maxBpm;
+
+  const _ActivityPromptSheet({
+    required this.startedAt,
+    required this.endedAt,
+    required this.avgBpm,
+    this.maxBpm,
+  });
+
+  @override
+  State<_ActivityPromptSheet> createState() => _ActivityPromptSheetState();
+}
+
+class _ActivityPromptSheetState extends State<_ActivityPromptSheet> {
+  ActivityType? _selectedType;
+  ActivityIntensity? _selectedIntensity;
+  bool _saving = false;
+
+  Future<void> _save() async {
+    if (_selectedType == null) return;
+    setState(() => _saving = true);
+    try {
+      final token = AuthService().token;
+      if (token == null) throw Exception('Not authenticated');
+      final response = await http
+          .post(
+            Uri.parse('${ApiConstants.baseUrl}/activity'),
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': 'Bearer $token',
+            },
+            body: json.encode({
+              'activity_type_id': _selectedType!.id,
+              'start_time': widget.startedAt.toUtc().toIso8601String(),
+              'end_time': widget.endedAt.toUtc().toIso8601String(),
+              'intensity': _selectedIntensity?.name,
+              'source': ActivitySource.manual.name,
+              'heart_rate_avg': widget.avgBpm,
+              'heart_rate_max': widget.maxBpm,
+            }),
+          )
+          .timeout(ApiConstants.receiveTimeout);
+      if (response.statusCode != 200 && response.statusCode != 201) {
+        throw Exception('HTTP ${response.statusCode}');
+      }
+      if (mounted) {
+        Navigator.pop(context);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Row(
+              children: [
+                const Icon(Icons.check_circle, color: Colors.white, size: 18),
+                const SizedBox(width: 8),
+                Text('${_selectedType!.icon} ${_selectedType!.name} saved'),
+              ],
+            ),
+            backgroundColor: AppColors.success,
+            behavior: SnackBarBehavior.floating,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+            ),
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() => _saving = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Could not save activity: $e'),
+            backgroundColor: AppColors.error,
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final durationMins =
+        widget.endedAt.difference(widget.startedAt).inMinutes.clamp(1, 9999);
+
+    return Container(
+      decoration: const BoxDecoration(
+        color: AppColors.backgroundWhite,
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      padding: EdgeInsets.fromLTRB(
+        20,
+        20,
+        20,
+        20 + MediaQuery.of(context).viewInsets.bottom,
+      ),
+      child: SingleChildScrollView(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // Handle bar
+            Center(
+              child: Container(
+                width: 36,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: AppColors.textLight,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+            ),
+            const SizedBox(height: 20),
+            const Text(
+              'Were you doing an activity?',
+              style: TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.bold,
+                color: AppColors.textPrimary,
+              ),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              '${widget.avgBpm} BPM avg · ${durationMins}m · log it to your timeline',
+              style: TextStyle(fontSize: 13, color: AppColors.textSecondary),
+            ),
+            const SizedBox(height: 20),
+            // Activity type grid
+            ActivityTypeSelector(
+              selectedType: _selectedType,
+              onTypeSelected: (t) => setState(() => _selectedType = t),
+            ),
+            const SizedBox(height: 20),
+            // Intensity (optional)
+            Text(
+              'Intensity  (optional)',
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+                color: AppColors.textSecondary,
+              ),
+            ),
+            const SizedBox(height: 10),
+            Row(
+              children: ActivityIntensity.values.map((level) {
+                final isSelected = _selectedIntensity == level;
+                final label = switch (level) {
+                  ActivityIntensity.low => 'Low',
+                  ActivityIntensity.moderate => 'Moderate',
+                  ActivityIntensity.high => 'High',
+                };
+                final color = switch (level) {
+                  ActivityIntensity.low => const Color(0xFF57B7E2),
+                  ActivityIntensity.moderate => const Color(0xFFE7C457),
+                  ActivityIntensity.high => const Color(0xFFFF6B5A),
+                };
+                return Expanded(
+                  child: Padding(
+                    padding: const EdgeInsets.only(right: 8),
+                    child: GestureDetector(
+                      onTap: () => setState(() => _selectedIntensity =
+                          isSelected ? null : level),
+                      child: AnimatedContainer(
+                        duration: const Duration(milliseconds: 150),
+                        padding: const EdgeInsets.symmetric(vertical: 10),
+                        decoration: BoxDecoration(
+                          color: isSelected
+                              ? color.withValues(alpha: 0.15)
+                              : AppColors.backgroundPaper,
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(
+                            color: isSelected ? color : Colors.transparent,
+                            width: 1.5,
+                          ),
+                        ),
+                        child: Center(
+                          child: Text(
+                            label,
+                            style: TextStyle(
+                              fontSize: 13,
+                              fontWeight: isSelected
+                                  ? FontWeight.w600
+                                  : FontWeight.normal,
+                              color: isSelected ? color : AppColors.textSecondary,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                );
+              }).toList(),
+            ),
+            const SizedBox(height: 24),
+            // Buttons
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton(
+                    onPressed: _saving ? null : () => Navigator.pop(context),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: AppColors.textSecondary,
+                      side: BorderSide(color: AppColors.textLight),
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(30),
+                      ),
+                    ),
+                    child: const Text('Skip'),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  flex: 2,
+                  child: ElevatedButton(
+                    onPressed: (_selectedType == null || _saving) ? null : _save,
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: AppColors.primaryLemon,
+                      foregroundColor: AppColors.textOnYellow,
+                      disabledBackgroundColor:
+                          AppColors.backgroundPaper,
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(30),
+                      ),
+                    ),
+                    child: _saving
+                        ? const SizedBox(
+                            width: 18,
+                            height: 18,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Text(
+                            'Save Activity',
+                            style: TextStyle(
+                              fontWeight: FontWeight.w600,
+                              fontSize: 15,
+                            ),
+                          ),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
   }
 }
 
