@@ -124,10 +124,17 @@ class _WorkoutSessionScreenState extends State<WorkoutSessionScreen>
   static const Map<PoseType, (double down, double up)> _thresholds = {
     PoseType.squat: (100.0, 155.0),
     PoseType.lunge: (100.0, 155.0),
-    PoseType.curl: (60.0, 150.0),
+    PoseType.curl: (50.0, 150.0),
     PoseType.pushup: (90.0, 155.0),
-    PoseType.shoulderPress: (80.0, 155.0),
+    PoseType.shoulderPress: (90.0, 160.0),
     PoseType.generic: (100.0, 150.0),
+    // Free weight additions
+    PoseType.lateralRaise: (100.0, 155.0), // wrist Y relative check, angle is supplementary
+    PoseType.rdl: (70.0, 160.0), // hip angle
+    PoseType.backSquat: (100.0, 155.0), // knee angle (same as squat)
+    PoseType.benchPress: (90.0, 155.0), // elbow angle
+    PoseType.deadlift: (80.0, 160.0), // hip angle
+    PoseType.barbellRow: (90.0, 155.0), // elbow angle
   };
 
   // Required landmarks per exercise type — ≥ 50% must have likelihood ≥ 0.4.
@@ -172,6 +179,41 @@ class _WorkoutSessionScreenState extends State<WorkoutSessionScreen>
       PoseLandmarkType.rightShoulder,
       PoseLandmarkType.rightHip,
       PoseLandmarkType.rightKnee,
+    ],
+    // Free weight additions
+    PoseType.lateralRaise: [
+      PoseLandmarkType.leftShoulder,
+      PoseLandmarkType.rightShoulder,
+      PoseLandmarkType.leftWrist,
+      PoseLandmarkType.rightWrist,
+      PoseLandmarkType.leftHip,
+      PoseLandmarkType.rightHip,
+    ],
+    PoseType.rdl: [
+      PoseLandmarkType.rightShoulder,
+      PoseLandmarkType.rightHip,
+      PoseLandmarkType.rightKnee,
+    ],
+    PoseType.backSquat: [
+      PoseLandmarkType.rightHip,
+      PoseLandmarkType.rightKnee,
+      PoseLandmarkType.rightAnkle,
+    ],
+    PoseType.benchPress: [
+      PoseLandmarkType.rightShoulder,
+      PoseLandmarkType.rightElbow,
+      PoseLandmarkType.rightWrist,
+    ],
+    PoseType.deadlift: [
+      PoseLandmarkType.rightShoulder,
+      PoseLandmarkType.rightHip,
+      PoseLandmarkType.rightKnee,
+    ],
+    PoseType.barbellRow: [
+      PoseLandmarkType.rightShoulder,
+      PoseLandmarkType.rightElbow,
+      PoseLandmarkType.rightWrist,
+      PoseLandmarkType.rightHip,
     ],
   };
 
@@ -1300,7 +1342,20 @@ class _WorkoutSessionScreenState extends State<WorkoutSessionScreen>
         return 'Keep elbows tucked · curl all the way up · lower with control';
       case PoseType.shoulderPress:
         return 'Core tight · press directly overhead · lower with control';
+      case PoseType.lateralRaise:
+        return 'Slight bend in elbows · raise to shoulder height · lower slowly';
+      case PoseType.rdl:
+        return 'Push hips back · keep back flat · legs nearly straight';
+      case PoseType.backSquat:
+        return 'Bar on upper back · brace core · sit back into the squat';
+      case PoseType.benchPress:
+        return 'Back flat on bench · lower bar to chest · press straight up';
+      case PoseType.deadlift:
+        return 'Chest up · bar close to body · drive through the floor';
+      case PoseType.barbellRow:
+        return 'Torso at 45° · pull to lower chest · squeeze shoulder blades';
       case PoseType.generic:
+      case PoseType.machine:
         return 'Controlled movement · full range of motion · breathe steadily';
     }
   }
@@ -1330,16 +1385,36 @@ class _WorkoutSessionScreenState extends State<WorkoutSessionScreen>
     switch (type) {
       case PoseType.curl:
       case PoseType.shoulderPress:
+      case PoseType.benchPress:
+      case PoseType.barbellRow:
+        // Elbow angle: shoulder → elbow → wrist
         return _angle(
           lm[PoseLandmarkType.rightShoulder],
           lm[PoseLandmarkType.rightElbow],
           lm[PoseLandmarkType.rightWrist],
         );
+      case PoseType.rdl:
+      case PoseType.deadlift:
       case PoseType.generic:
+        // Hip angle: shoulder → hip → knee
         return _angle(
           lm[PoseLandmarkType.rightShoulder],
           lm[PoseLandmarkType.rightHip],
           lm[PoseLandmarkType.rightKnee],
+        );
+      case PoseType.backSquat:
+        // Knee angle: hip → knee → ankle
+        return _angle(
+          lm[PoseLandmarkType.rightHip],
+          lm[PoseLandmarkType.rightKnee],
+          lm[PoseLandmarkType.rightAnkle],
+        );
+      case PoseType.lateralRaise:
+        // Hip-shoulder-wrist angle (right side)
+        return _angle(
+          lm[PoseLandmarkType.rightHip],
+          lm[PoseLandmarkType.rightShoulder],
+          lm[PoseLandmarkType.rightWrist],
         );
       default:
         return null;

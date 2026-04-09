@@ -1,12 +1,16 @@
 // Shared "Choose Activity" bottom-sheet widget.
-// Used by both ActivityHistoryScreen and MainNavigationScreen so the same
-// picker can be launched from the FAB or the nav-bar centre button.
+// Updated to show API-fetched workout templates alongside the activity grid.
 
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../shared/models/activity_models.dart';
 import '../../../shared/models/workout_plan_models.dart';
 import '../../teams/widgets/upgrade_prompt_sheet.dart';
+import '../../workout/providers/workout_template_provider.dart';
+import '../../workout/screens/split_builder_screen.dart';
+import '../../workout/screens/active_workout_screen.dart';
+import '../../workout/screens/template_builder_screen.dart';
 
 class ActivityPickerSheet extends StatelessWidget {
   final void Function(ActivityType) onSelected;
@@ -25,6 +29,8 @@ class ActivityPickerSheet extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final screenHeight = MediaQuery.of(context).size.height;
+    final templateProvider = context.watch<WorkoutTemplateProvider>();
+
     return ConstrainedBox(
       constraints: BoxConstraints(maxHeight: screenHeight * 0.87),
       child: Container(
@@ -75,94 +81,91 @@ class ActivityPickerSheet extends StatelessWidget {
               ),
             ),
             Builder(builder: (context) {
-              final visiblePlans = isPro
-                  ? WorkoutPlan.samplePlans
-                  : WorkoutPlan.samplePlans
-                      .where((p) => p.isFreeDefault)
-                      .toList();
-              final itemCount = visiblePlans.length + 1;
+              // Use API templates if available, fall back to legacy sample plans
+              final apiTemplates = templateProvider.templates;
+              final hasApiTemplates = apiTemplates.isNotEmpty;
+
+              final visibleTemplates = hasApiTemplates
+                  ? (isPro
+                      ? apiTemplates
+                      : apiTemplates
+                          .where((t) => t.isSystemDefault)
+                          .toList())
+                  : <WorkoutTemplate>[];
+
+              // Legacy fallback only if API hasn't loaded
+              final legacyPlans = hasApiTemplates
+                  ? <WorkoutPlan>[]
+                  : (isPro
+                      ? WorkoutPlan.samplePlans
+                      : WorkoutPlan.samplePlans
+                          .where((p) => p.isFreeDefault)
+                          .toList());
+
+              final totalItems =
+                  visibleTemplates.length + legacyPlans.length + 1;
 
               return SizedBox(
                 height: 110,
                 child: ListView.separated(
                   scrollDirection: Axis.horizontal,
                   padding: const EdgeInsets.fromLTRB(16, 0, 16, 0),
-                  itemCount: itemCount,
+                  itemCount: totalItems,
                   separatorBuilder: (_, _) => const SizedBox(width: 12),
                   itemBuilder: (ctx, i) {
-                    // ── Plan card ─────────────────────────────────────────
-                    if (i < visiblePlans.length) {
-                      final plan = visiblePlans[i];
+                    // ── API template cards ─────────────────────────────────
+                    if (i < visibleTemplates.length) {
+                      final template = visibleTemplates[i];
+                      return GestureDetector(
+                        onTap: () {
+                          Navigator.of(ctx).pop();
+                          // For the old-style free template, use legacy session
+                          if (template.isSystemDefault) {
+                            onWorkoutSelected(
+                                WorkoutPlan.fromTemplate(template));
+                          } else {
+                            // Use new active workout screen
+                            Navigator.of(context).push(
+                              MaterialPageRoute(
+                                builder: (_) => ActiveWorkoutScreen(
+                                    template: template),
+                                fullscreenDialog: true,
+                              ),
+                            );
+                          }
+                        },
+                        onLongPress: template.isSystemDefault
+                            ? null
+                            : () {
+                                Navigator.of(ctx).pop();
+                                Navigator.of(context).push(
+                                  MaterialPageRoute(
+                                    builder: (_) => TemplateBuilderScreen(
+                                        templateId: template.templateId),
+                                  ),
+                                );
+                              },
+                        child: _TemplatePlanCard(
+                          emoji: template.emoji,
+                          name: template.name,
+                          exerciseCount: template.exerciseCount,
+                          isFree: template.isSystemDefault,
+                          splitDayLabel: template.splitDayLabel,
+                        ),
+                      );
+                    }
+
+                    // ── Legacy plan cards (fallback) ──────────────────────
+                    final legacyIdx = i - visibleTemplates.length;
+                    if (legacyIdx < legacyPlans.length) {
+                      final plan = legacyPlans[legacyIdx];
                       return GestureDetector(
                         onTap: () => onWorkoutSelected(plan),
-                        child: Container(
-                          width: 130,
-                          decoration: BoxDecoration(
-                            gradient: AppColors.warmGradient,
-                            borderRadius: BorderRadius.circular(16),
-                          ),
-                          padding: const EdgeInsets.all(12),
-                          child: Stack(
-                            children: [
-                              Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                mainAxisAlignment:
-                                    MainAxisAlignment.spaceBetween,
-                                children: [
-                                  Text(
-                                    plan.emoji,
-                                    style: const TextStyle(fontSize: 28),
-                                  ),
-                                  Column(
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.start,
-                                    children: [
-                                      Text(
-                                        plan.name,
-                                        maxLines: 1,
-                                        overflow: TextOverflow.ellipsis,
-                                        style: const TextStyle(
-                                          fontSize: 13,
-                                          fontWeight: FontWeight.bold,
-                                          color: AppColors.textOnYellow,
-                                        ),
-                                      ),
-                                      Text(
-                                        '${plan.exercises.length} exercises',
-                                        style: TextStyle(
-                                          fontSize: 11,
-                                          color: AppColors.textOnYellow
-                                              .withValues(alpha: 0.7),
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                ],
-                              ),
-                              if (plan.isFreeDefault)
-                                Positioned(
-                                  top: 0,
-                                  right: 0,
-                                  child: Container(
-                                    padding: const EdgeInsets.symmetric(
-                                        horizontal: 6, vertical: 2),
-                                    decoration: BoxDecoration(
-                                      color: AppColors.primaryLemonDark,
-                                      borderRadius: BorderRadius.circular(6),
-                                    ),
-                                    child: const Text(
-                                      'FREE',
-                                      style: TextStyle(
-                                        fontSize: 9,
-                                        fontWeight: FontWeight.w800,
-                                        color: Color(0xFF78350F),
-                                        letterSpacing: 0.5,
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                            ],
-                          ),
+                        child: _TemplatePlanCard(
+                          emoji: plan.emoji,
+                          name: plan.name,
+                          exerciseCount: plan.exercises.length,
+                          isFree: plan.isFreeDefault,
                         ),
                       );
                     }
@@ -171,11 +174,10 @@ class ActivityPickerSheet extends StatelessWidget {
                     if (isPro) {
                       return GestureDetector(
                         onTap: () {
-                          // TODO: navigate to workout creation screen
-                          ScaffoldMessenger.of(ctx).showSnackBar(
-                            const SnackBar(
-                              content: Text('Workout builder coming soon'),
-                              duration: Duration(seconds: 2),
+                          Navigator.of(ctx).pop();
+                          Navigator.of(context).push(
+                            MaterialPageRoute(
+                              builder: (_) => const SplitBuilderScreen(),
                             ),
                           );
                         },
@@ -338,6 +340,101 @@ class ActivityPickerSheet extends StatelessWidget {
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+/// Reusable template/plan card for the horizontal scroller.
+class _TemplatePlanCard extends StatelessWidget {
+  final String emoji;
+  final String name;
+  final int exerciseCount;
+  final bool isFree;
+  final String? splitDayLabel;
+
+  const _TemplatePlanCard({
+    required this.emoji,
+    required this.name,
+    required this.exerciseCount,
+    required this.isFree,
+    this.splitDayLabel,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 130,
+      decoration: BoxDecoration(
+        gradient: AppColors.warmGradient,
+        borderRadius: BorderRadius.circular(16),
+      ),
+      padding: const EdgeInsets.all(12),
+      child: Stack(
+        children: [
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(emoji, style: const TextStyle(fontSize: 28)),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    name,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.bold,
+                      color: AppColors.textOnYellow,
+                    ),
+                  ),
+                  if (splitDayLabel != null && splitDayLabel != name)
+                    Text(
+                      splitDayLabel!,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 10,
+                        fontWeight: FontWeight.w500,
+                        color: AppColors.textOnYellow.withValues(alpha: 0.8),
+                      ),
+                    ),
+                  Text(
+                    '$exerciseCount exercises',
+                    style: TextStyle(
+                      fontSize: 11,
+                      color: AppColors.textOnYellow.withValues(alpha: 0.7),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+          if (isFree)
+            Positioned(
+              top: 0,
+              right: 0,
+              child: Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                decoration: BoxDecoration(
+                  color: AppColors.primaryLemonDark,
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: const Text(
+                  'FREE',
+                  style: TextStyle(
+                    fontSize: 9,
+                    fontWeight: FontWeight.w800,
+                    color: Color(0xFF78350F),
+                    letterSpacing: 0.5,
+                  ),
+                ),
+              ),
+            ),
+        ],
       ),
     );
   }

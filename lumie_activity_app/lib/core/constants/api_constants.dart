@@ -51,6 +51,12 @@ class ApiConstants {
   static const String adminDeleteTask = '/admin/delete_task';
   static const String adminRewardCalc = '/admin/reward-calc';
 
+  // Workout
+  static const String exercises = '/exercises';
+  static const String workoutTemplates = '/workout-templates';
+  static const String workoutSessions = '/workout-sessions';
+  static const String personalRecords = '/personal-records';
+
   // Timeouts
   static const Duration connectTimeout = Duration(seconds: 10);
   static const Duration receiveTimeout = Duration(seconds: 30);

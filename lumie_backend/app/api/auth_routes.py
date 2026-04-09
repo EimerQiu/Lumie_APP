@@ -82,6 +82,14 @@ async def get_current_user_info(user_id: str = Depends(get_current_user_id)):
     Returns user details from token.
     """
     user = await auth_service.get_current_user(user_id)
+    # Read subscription tier from the nested subscription dict
+    sub = user.subscription or {}
+    tier_str = sub.get("tier", "free") if isinstance(sub, dict) else "free"
+    from ..models.user import SubscriptionTier
+    try:
+        tier = SubscriptionTier(tier_str)
+    except ValueError:
+        tier = SubscriptionTier.FREE
     return TokenResponse(
         access_token="",  # Not returned on /me endpoint
         user_id=user.user_id,
@@ -89,6 +97,7 @@ async def get_current_user_info(user_id: str = Depends(get_current_user_id)):
         role=user.role,
         profile_complete=user.profile_complete,
         email_verified=user.email_verified,
+        subscription_tier=tier,
     )
 
 

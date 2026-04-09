@@ -55,6 +55,11 @@ import 'features/settings/providers/activity_goal_provider.dart';
 import 'features/settings/screens/activity_goal_screen.dart';
 import 'features/activity/providers/today_steps_provider.dart';
 import 'core/services/ring_sync_service.dart';
+import 'features/workout/providers/exercise_library_provider.dart';
+import 'features/workout/providers/workout_template_provider.dart';
+import 'features/workout/providers/active_session_provider.dart';
+import 'features/workout/screens/exercise_library_screen.dart';
+import 'features/workout/screens/split_builder_screen.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -95,6 +100,9 @@ class LumieActivityApp extends StatelessWidget {
           create: (_) => TodayStepsProvider(),
           update: (_, ring, steps) => steps!..updateRingProvider(ring),
         ),
+        ChangeNotifierProvider(create: (_) => ExerciseLibraryProvider()),
+        ChangeNotifierProvider(create: (_) => WorkoutTemplateProvider()),
+        ChangeNotifierProvider(create: (_) => ActiveSessionProvider()),
       ],
       child: MaterialApp(
         title: 'Lumie Activity',
@@ -122,6 +130,8 @@ class LumieActivityApp extends StatelessWidget {
           '/ring/manage': (context) => const RingManagementScreen(),
           '/settings/activity-goal': (context) => const ActivityGoalScreen(),
           '/heart-rate': (context) => const HeartRateScreen(),
+          '/workout/exercises': (context) => const ExerciseLibraryScreen(),
+          '/workout/split-builder': (context) => const SplitBuilderScreen(),
         },
         onGenerateRoute: (settings) {
           // Handle routes with arguments
@@ -338,10 +348,15 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
         tasksProvider.setUserTier(authProvider.profile!.subscription.tier);
       }
 
-      // Pass auth token to ring service for backend calls
+      // Pass auth token to ring service and workout providers
       final token = authProvider.user?.accessToken;
       if (token != null) {
         ringProvider.setToken(token);
+        context.read<ExerciseLibraryProvider>().setToken(token);
+        context.read<WorkoutTemplateProvider>().setToken(token);
+        context.read<ActiveSessionProvider>().setToken(token);
+        // Pre-load workout templates
+        context.read<WorkoutTemplateProvider>().loadTemplates();
       }
 
       // Reload ring info (in case it was paired while away)
