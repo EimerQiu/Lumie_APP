@@ -31,6 +31,7 @@ from .api.hr_routes import router as hr_router
 from .api.temperature_routes import router as temperature_router
 from .api.spo2_routes import router as spo2_router
 from .api.ring_command_routes import router as ring_command_router
+from .api.workout_routes import router as workout_router
 
 # Configure logging
 logging.basicConfig(
@@ -59,6 +60,11 @@ async def lifespan(app: FastAPI):
     await seed_system_capabilities()
     skill_registry.scan_and_index()
     logger.info("Advisor v2 system initialized (capabilities seeded, skills indexed)")
+    # Seed workout system exercises + default template
+    from .services.workout_service import workout_service
+    await workout_service.seed_system_exercises()
+    await workout_service.seed_default_template()
+    logger.info("Workout system initialized (exercises seeded, default template created)")
     yield
     # Shutdown
     logger.info("Shutting down Lumie API...")
@@ -144,6 +150,7 @@ app.include_router(hr_router, prefix="/api/v1")
 app.include_router(temperature_router, prefix="/api/v1")
 app.include_router(spo2_router, prefix="/api/v1")
 app.include_router(ring_command_router, prefix="/api/v1")
+app.include_router(workout_router, prefix="/api/v1")
 
 
 @app.get("/")

@@ -114,6 +114,27 @@ async def create_indexes():
     await db.db.proactive_decisions.create_index([("run_id", 1)])
     await db.db.proactive_decisions.create_index([("user_id", 1), ("decided_at", -1)])
 
+    # Workout: exercises collection
+    await db.db.exercises.create_index("exercise_id", unique=True)
+    await db.db.exercises.create_index([("is_system", 1), ("is_active", 1)])
+    await db.db.exercises.create_index([("created_by", 1), ("is_active", 1)])
+
+    # Workout: templates collection
+    await db.db.workout_templates.create_index("template_id", unique=True)
+    await db.db.workout_templates.create_index([("user_id", 1), ("is_active", 1)])
+    await db.db.workout_templates.create_index("is_system_default")
+
+    # Workout: sessions collection
+    await db.db.workout_sessions.create_index("session_id", unique=True)
+    await db.db.workout_sessions.create_index([("user_id", 1), ("started_at", -1)])
+    await db.db.workout_sessions.create_index([("user_id", 1), ("template_id", 1)])
+
+    # Workout: personal records collection
+    await db.db.personal_records.create_index("pr_id", unique=True)
+    await db.db.personal_records.create_index(
+        [("user_id", 1), ("exercise_id", 1), ("pr_type", 1)], unique=True
+    )
+
     # HR session collection indexes
     await db.db.hr_sessions.create_index([("user_id", 1), ("started_at", -1)])
 

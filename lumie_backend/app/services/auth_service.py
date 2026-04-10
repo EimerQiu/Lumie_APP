@@ -24,6 +24,7 @@ from ..models.user import (
     AccountRole,
     AccountTypeSelection,
     EmailVerification,
+    SubscriptionTier,
 )
 from .email_service import email_service
 
@@ -215,6 +216,14 @@ class AuthService:
             data={"sub": user["user_id"], "email": user["email"]}
         )
 
+        # Read subscription tier from the nested subscription object
+        sub = user.get("subscription", {})
+        tier_str = sub.get("tier", "free") if isinstance(sub, dict) else "free"
+        try:
+            tier = SubscriptionTier(tier_str)
+        except ValueError:
+            tier = SubscriptionTier.FREE
+
         return TokenResponse(
             access_token=access_token,
             user_id=user["user_id"],
@@ -222,6 +231,7 @@ class AuthService:
             role=AccountRole(user["role"]) if user.get("role") else None,
             profile_complete=user.get("profile_complete", False),
             email_verified=True,
+            subscription_tier=tier,
         )
 
     async def select_account_type(self, user_id: str, data: AccountTypeSelection) -> TokenResponse:
