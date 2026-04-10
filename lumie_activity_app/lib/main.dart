@@ -24,7 +24,7 @@ import 'features/walk_test/screens/walk_test_screen.dart';
 import 'features/sleep/screens/sleep_screen.dart';
 import 'features/sleep/screens/sleep_history_screen.dart';
 import 'features/teams/providers/teams_provider.dart';
-import 'features/teams/screens/teams_list_screen.dart';
+import 'features/teams/screens/teams_hub_screen.dart';
 import 'features/teams/screens/create_team_screen.dart';
 import 'features/teams/screens/team_detail_screen.dart';
 import 'features/teams/screens/invite_member_screen.dart';
@@ -109,7 +109,7 @@ class LumieActivityApp extends StatelessWidget {
           '/profile/parent': (context) => const ParentProfileSetupScreen(),
           '/home': (context) => const MainNavigationScreen(),
           '/sleep/history': (context) => const SleepHistoryScreen(),
-          '/teams': (context) => const TeamsListScreen(),
+          '/teams': (context) => const TeamsHubScreen(),
           '/teams/create': (context) => const CreateTeamScreen(),
           '/settings/rest-days': (context) => const RestDaysSettingsScreen(),
           '/profile/edit': (context) => const EditProfileScreen(),

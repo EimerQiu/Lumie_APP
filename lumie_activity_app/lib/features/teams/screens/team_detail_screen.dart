@@ -1,4 +1,5 @@
 // Team Detail Screen - Shows team information with members and shared data tabs
+// This file contains both TeamDetailScreen (for standalone navigation) and TeamDetailBody (for use in TeamsHubScreen)
 
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
@@ -6,7 +7,8 @@ import '../providers/teams_provider.dart';
 import '../../../shared/models/team_models.dart';
 import 'team_dayprint_screen.dart';
 
-class TeamDetailScreen extends StatefulWidget {
+// Main screen for standalone navigation
+class TeamDetailScreen extends StatelessWidget {
   final String teamId;
 
   const TeamDetailScreen({
@@ -15,10 +17,30 @@ class TeamDetailScreen extends StatefulWidget {
   });
 
   @override
-  State<TeamDetailScreen> createState() => _TeamDetailScreenState();
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Team Details'),
+      ),
+      body: TeamDetailBody(teamId: teamId),
+    );
+  }
 }
 
-class _TeamDetailScreenState extends State<TeamDetailScreen>
+// Reusable body widget for use in TeamsHubScreen
+class TeamDetailBody extends StatefulWidget {
+  final String teamId;
+
+  const TeamDetailBody({
+    super.key,
+    required this.teamId,
+  });
+
+  @override
+  State<TeamDetailBody> createState() => _TeamDetailBodyState();
+}
+
+class _TeamDetailBodyState extends State<TeamDetailBody>
     with SingleTickerProviderStateMixin {
   late TabController _tabController;
   Team? _team;
@@ -28,7 +50,7 @@ class _TeamDetailScreenState extends State<TeamDetailScreen>
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 3, vsync: this);
+    _tabController = TabController(length: 3, initialIndex: 1, vsync: this);
     _loadData();
   }
 
@@ -71,172 +93,16 @@ class _TeamDetailScreenState extends State<TeamDetailScreen>
     }
   }
 
-  Future<void> _handleLeaveTeam() async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Leave Team'),
-        content: Text(
-          'Are you sure you want to leave "${_team?.name}"?\n\nYou will no longer have access to shared data.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('Cancel'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(context, true),
-            style: TextButton.styleFrom(foregroundColor: Colors.red),
-            child: const Text('Leave'),
-          ),
-        ],
-      ),
-    );
-
-    if (confirmed != true) return;
-
-    try {
-      await context.read<TeamsProvider>().leaveTeam(widget.teamId);
-
-      if (mounted) {
-        Navigator.pop(context);
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Successfully left team'),
-            backgroundColor: Colors.green,
-          ),
-        );
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Failed to leave team: ${e.toString()}'),
-            backgroundColor: Colors.red,
-          ),
-        );
-      }
-    }
-  }
-
-  Future<void> _handleDeleteTeam() async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Delete Team'),
-        content: Text(
-          'Are you sure you want to delete "${_team?.name}"?\n\nThis action cannot be undone. All members will lose access.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('Cancel'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(context, true),
-            style: TextButton.styleFrom(foregroundColor: Colors.red),
-            child: const Text('Delete'),
-          ),
-        ],
-      ),
-    );
-
-    if (confirmed != true) return;
-
-    try {
-      await context.read<TeamsProvider>().deleteTeam(widget.teamId);
-
-      if (mounted) {
-        Navigator.pop(context);
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Team deleted successfully'),
-            backgroundColor: Colors.green,
-          ),
-        );
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Failed to delete team: ${e.toString()}'),
-            backgroundColor: Colors.red,
-          ),
-        );
-      }
-    }
-  }
 
   @override
   Widget build(BuildContext context) {
     if (_team == null) {
-      return Scaffold(
-        appBar: AppBar(title: const Text('Team Details')),
-        body: const Center(child: Text('Team not found')),
-      );
+      return const Center(child: Text('Team not found'));
     }
 
-    final isAdmin = _team!.role == TeamRole.admin;
-
-    return Scaffold(
-      appBar: AppBar(
-        title: Text(_team!.name),
-        actions: [
-          PopupMenuButton<String>(
-            onSelected: (value) {
-              switch (value) {
-                case 'invite':
-                  Navigator.pushNamed(
-                    context,
-                    '/teams/invite',
-                    arguments: widget.teamId,
-                  );
-                  break;
-                case 'leave':
-                  _handleLeaveTeam();
-                  break;
-                case 'delete':
-                  _handleDeleteTeam();
-                  break;
-              }
-            },
-            itemBuilder: (context) => [
-              if (isAdmin)
-                const PopupMenuItem(
-                  value: 'invite',
-                  child: Row(
-                    children: [
-                      Icon(Icons.person_add_outlined, size: 20),
-                      SizedBox(width: 12),
-                      Text('Invite Member'),
-                    ],
-                  ),
-                ),
-              const PopupMenuItem(
-                value: 'leave',
-                child: Row(
-                  children: [
-                    Icon(Icons.exit_to_app, size: 20),
-                    SizedBox(width: 12),
-                    Text('Leave Team'),
-                  ],
-                ),
-              ),
-              if (isAdmin)
-                const PopupMenuItem(
-                  value: 'delete',
-                  child: Row(
-                    children: [
-                      Icon(Icons.delete_outline, size: 20, color: Colors.red),
-                      SizedBox(width: 12),
-                      Text('Delete Team', style: TextStyle(color: Colors.red)),
-                    ],
-                  ),
-                ),
-            ],
-          ),
-        ],
-        bottom: TabBar(
+    return Column(
+      children: [
+        TabBar(
           controller: _tabController,
           tabs: const [
             Tab(text: 'Members', icon: Icon(Icons.people_outline)),
@@ -244,15 +110,17 @@ class _TeamDetailScreenState extends State<TeamDetailScreen>
             Tab(text: 'Shared Data', icon: Icon(Icons.bar_chart)),
           ],
         ),
-      ),
-      body: TabBarView(
-        controller: _tabController,
-        children: [
-          _buildMembersTab(),
-          TeamDayprintScreen(teamId: widget.teamId),
-          _buildSharedDataTab(),
-        ],
-      ),
+        Expanded(
+          child: TabBarView(
+            controller: _tabController,
+            children: [
+              _buildMembersTab(),
+              TeamDayprintScreen(teamId: widget.teamId),
+              _buildSharedDataTab(),
+            ],
+          ),
+        ),
+      ],
     );
   }
 
