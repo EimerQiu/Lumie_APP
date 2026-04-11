@@ -135,8 +135,8 @@ class TaskService:
             return None, None
 
     def _format_datetime(self, dt: datetime) -> str:
-        """Format datetime to ISO string for response"""
-        return dt.isoformat()
+        """Format datetime to ISO string with Z suffix for response"""
+        return dt.strftime("%Y-%m-%dT%H:%M:%S") + "Z"
 
     def _convert_local_to_utc(self, local_time_str: str, timezone: str) -> str:
         """
@@ -173,13 +173,13 @@ class TaskService:
 
     def _task_doc_to_response(self, doc: dict) -> TaskResponse:
         """Convert a MongoDB task document to TaskResponse"""
-        # Calculate status based on done field and close_datetime
-        # done field exists → completed
-        # done doesn't exist + close_datetime passed → expired
-        # done doesn't exist + close_datetime not passed → pending
+        # Calculate status based on completed_at field and close_datetime
+        # completed_at field exists → completed
+        # completed_at doesn't exist + close_datetime passed → expired
+        # completed_at doesn't exist + close_datetime not passed → pending
         now_str = datetime.utcnow().strftime("%Y-%m-%d %H:%M")
 
-        if doc.get("done"):
+        if doc.get("completed_at"):
             task_status = TaskStatus.COMPLETED
         elif doc["close_datetime"] < now_str:
             task_status = TaskStatus.EXPIRED
@@ -200,7 +200,7 @@ class TaskService:
             task_info=doc.get("task_info"),
             note=doc.get("note"),
             attachments=doc.get("attachments", []),
-            completed_at=self._format_datetime(doc["done"]) if doc.get("done") else None,
+            completed_at=self._format_datetime(doc["completed_at"]) if doc.get("completed_at") else None,
             extension_count=doc.get("extension_count", 0),
             created_at=self._format_datetime(doc["created_at"]),
             updated_at=self._format_datetime(doc["updated_at"]),
@@ -457,7 +457,6 @@ class TaskService:
             "rpttask_id": data.rpttask_id,
             "task_info": data.task_info,
             "attachments": [],
-            "completed_at": None,
             "created_at": now,
             "updated_at": now,
         }
@@ -503,8 +502,8 @@ class TaskService:
             # Match tasks whose window overlaps with the given date
             query["open_datetime"] = {"$regex": f"^{date}"}
         else:
-            # Default: only tasks within current window and not done
-            query["done"] = {"$exists": False}
+            # Default: only tasks within current window and not completed
+            query["completed_at"] = {"$exists": False}
             query["open_datetime"] = {"$lte": now_str}
             query["close_datetime"] = {"$gt": now_str}
 
@@ -548,31 +547,23 @@ class TaskService:
                 detail="Only the assigned user can complete this task"
             )
 
-        # Check if already completed (done field exists)
-        if task.get("done"):
+        # Check if already completed (completed_at field exists)
+        if task.get("completed_at"):
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail="Task is already completed"
             )
 
-        # Set done timestamp to close_datetime so task shows as "completed" not "expired"
-        # Parse close_datetime and convert to UTC timestamp
-        try:
-            close_dt = datetime.strptime(task["close_datetime"], "%Y-%m-%d %H:%M")
-        except:
-            # Fallback to current time if parsing fails
-            close_dt = datetime.utcnow()
-
         now = datetime.utcnow()
         await db.tasks.update_one(
             {"task_id": task_id},
             {"$set": {
-                "done": close_dt,  # Set done to close_datetime for proper status calculation
+                "completed_at": now,
                 "updated_at": now,
             }}
         )
 
-        task["done"] = close_dt
+        task["completed_at"] = now
         task["updated_at"] = now
 
         # Min-interval postpone logic: only for template-generated tasks
@@ -606,7 +597,7 @@ class TaskService:
                 detail="Only the assigned user can extend this task"
             )
 
-        if task.get("done"):
+        if task.get("completed_at"):
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail="Cannot extend a completed task"
@@ -675,7 +666,7 @@ class TaskService:
                 "user_id": task["user_id"],
                 "rpttask_id": rpttask_id,
                 "open_datetime": {"$gt": now_str},
-                "done": {"$exists": False},
+                "completed_at": {"$exists": False},
             },
             sort=[("open_datetime", 1)],
         )
@@ -1028,7 +1019,6 @@ class TaskService:
                     "created_by": created_by,
                     "rpttask_id": template["id"],
                     "task_info": task_info,
-                    "completed_at": None,
                     "created_at": now,
                     "updated_at": now,
                 }

@@ -66,13 +66,18 @@ The primary skill for all task and medication queries — whether the user wants
 
 # Data Model
 
-## tasks collection fields
-- `task_name`: string — For template-generated tasks: `"{template_name} - {window_name}"` (e.g., "Daily Med - 9AM Phosphate"). Use the part after " - " as the display name.
-- `task_type`: "Medicine" | "Life" | "Study" | "Exercise" | "Work" | "Meditation" | "Love"
-- `open_datetime`: string "YYYY-MM-DD HH:MM" (UTC, no Z suffix) — window opens
-- `close_datetime`: string "YYYY-MM-DD HH:MM" (UTC, no Z suffix) — window closes
-- `done`: MongoDB datetime if completed, field ABSENT if not completed
-- `task_info`: string or null — optional notes
+## Schema
+See [`TaskResponse` in models/task.py](../../models/task.py)
+
+### Relevant fields for task queries:
+- `task_name` (string) — For template-generated: `"{template_name} - {window_name}"` (e.g., "Daily Med - 9AM Phosphate"). Extract display name from part after " - "
+- `task_type` (TaskType enum) — "Medicine", "Study", "Exercise", "Nutrition", "Work", "Hobbies", "Social", "Life"
+- `open_datetime` (string, "YYYY-MM-DD HH:MM" UTC format, no Z suffix) — window opens
+- `close_datetime` (string, "YYYY-MM-DD HH:MM" UTC format, no Z suffix) — window closes
+- `completed_at` (datetime ISO 8601 with Z suffix, if present) — field ABSENT if not completed
+- `task_info` (string or null) — optional notes
+
+**Timestamp format note:** `open_datetime` and `close_datetime` use simplified `"YYYY-MM-DD HH:MM"` format (UTC, no Z). `completed_at` uses full ISO 8601 format with Z suffix (e.g., `"2026-04-10T14:30:00Z"`).
 
 # Execution Plan
 
@@ -133,7 +138,7 @@ tasks = sorted(tasks, key=lambda t: t.get("open_datetime", ""), reverse=True)[:1
 ```python
 now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M")
 for t in tasks:
-    if t.get("done"):
+    if t.get("completed_at"):
         status = "completed"
     elif t.get("close_datetime", "") < now_str:
         status = "missed"

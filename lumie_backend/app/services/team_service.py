@@ -1285,16 +1285,16 @@ class TeamService:
         feed_items: list[dict] = []
 
         # --- 1. Completed team tasks ---
-        # Tasks use a "done" timestamp field (not a status field) to mark completion.
+        # Tasks use a "completed_at" timestamp field (not a status field) to mark completion.
         # Only show tasks explicitly belonging to this team.
         task_filter: dict = {
             "team_id": team_id,
-            "done": {"$exists": True, "$ne": None, "$gte": cutoff},
+            "completed_at": {"$exists": True, "$ne": None, "$gte": cutoff},
         }
         if before_dt:
-            task_filter["done"]["$lt"] = before_dt
+            task_filter["completed_at"]["$lt"] = before_dt
 
-        tasks_cursor = db.tasks.find(task_filter).sort("done", -1).limit(limit * 3)
+        tasks_cursor = db.tasks.find(task_filter).sort("completed_at", -1).limit(limit * 3)
         tasks = await tasks_cursor.to_list(length=None)
 
         for task in tasks:
@@ -1305,8 +1305,8 @@ class TeamService:
             has_photo = bool(image_attachments)
             item_type = "task_with_photo" if has_photo else "task_text"
 
-            done_at = task.get("done")
-            ts = done_at.isoformat() if isinstance(done_at, datetime) else str(done_at)
+            completed_at = task.get("completed_at")
+            ts = completed_at.isoformat() if isinstance(completed_at, datetime) else str(completed_at)
 
             feed_items.append({
                 "item_id": task["task_id"],

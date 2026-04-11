@@ -2,29 +2,32 @@
 
 enum TaskType {
   medicine,
-  life,
   study,
   exercise,
+  nutrition,
   work,
-  meditation,
-  love;
+  hobbies,
+  social,
+  life;
 
   String get displayName {
     switch (this) {
       case TaskType.medicine:
         return 'Medicine';
-      case TaskType.life:
-        return 'Life';
       case TaskType.study:
         return 'Study';
       case TaskType.exercise:
         return 'Exercise';
+      case TaskType.nutrition:
+        return 'Nutrition';
       case TaskType.work:
         return 'Work';
-      case TaskType.meditation:
-        return 'Meditation';
-      case TaskType.love:
-        return 'Love';
+      case TaskType.hobbies:
+        return 'Hobbies';
+      case TaskType.social:
+        return 'Social';
+      case TaskType.life:
+        return 'Life';
     }
   }
 
@@ -41,7 +44,6 @@ enum TaskType {
 enum TaskStatus {
   pending,
   completed,
-  overdue, // Legacy, maps to expired
   expired;
 
   String get displayName {
@@ -50,15 +52,12 @@ enum TaskStatus {
         return 'Pending';
       case TaskStatus.completed:
         return 'Completed';
-      case TaskStatus.overdue:
       case TaskStatus.expired:
         return 'Expired';
     }
   }
 
   static TaskStatus fromString(String value) {
-    // Normalize "overdue" to "expired"
-    if (value == 'overdue') return TaskStatus.expired;
     return TaskStatus.values.firstWhere(
       (e) => e.name == value,
       orElse: () => TaskStatus.pending,

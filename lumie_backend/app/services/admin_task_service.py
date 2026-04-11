@@ -87,13 +87,13 @@ class AdminTaskService:
                         close_time=int(close_parts[0]) * 60 + int(close_parts[1]),
                     ))
 
-        # Compute status based on done field and close_datetime
-        # done field exists → completed
-        # done doesn't exist + close_datetime passed → expired
-        # done doesn't exist + close_datetime not passed → pending
+        # Compute status based on completed_at field and close_datetime
+        # completed_at field exists → completed
+        # completed_at doesn't exist + close_datetime passed → expired
+        # completed_at doesn't exist + close_datetime not passed → pending
         now_str = datetime.utcnow().strftime("%Y-%m-%d %H:%M")
 
-        if task.get("done"):
+        if task.get("completed_at"):
             task_status = TaskStatus.COMPLETED.value
         elif task["close_datetime"] < now_str:
             task_status = TaskStatus.EXPIRED.value
@@ -263,23 +263,15 @@ class AdminTaskService:
                     detail="You do not have admin authority over this task's user",
                 )
 
-        # Check if already completed (done field exists)
-        if task.get("done"):
+        # Check if already completed (completed_at field exists)
+        if task.get("completed_at"):
             return {"message": "Task is already completed"}
-
-        # Set done timestamp to close_datetime so task shows as "completed" not "expired"
-        # Parse close_datetime and convert to UTC timestamp
-        try:
-            close_dt = datetime.strptime(task["close_datetime"], "%Y-%m-%d %H:%M")
-        except:
-            # Fallback to current time if parsing fails
-            close_dt = datetime.utcnow()
 
         now = datetime.utcnow()
         await db.tasks.update_one(
             {"task_id": task_id},
             {"$set": {
-                "done": close_dt,  # Set done to close_datetime for proper status calculation
+                "completed_at": now,
                 "updated_at": now,
             }}
         )
@@ -362,7 +354,7 @@ class AdminTaskService:
         cursor = db.tasks.find({
             "user_id": target_user_id,
             "$or": [
-                {"done": {"$exists": True}},  # Task is completed
+                {"completed_at": {"$exists": True}},  # Task is completed
                 {"close_datetime": {"$lte": now_str}},  # Task window has closed
             ]
         }).sort("close_datetime", -1).skip(offset).limit(PAGE_SIZE)

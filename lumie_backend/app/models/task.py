@@ -11,19 +11,19 @@ from enum import Enum
 class TaskType(str, Enum):
     """Task type categories"""
     MEDICINE = "Medicine"
-    LIFE = "Life"
     STUDY = "Study"
     EXERCISE = "Exercise"
+    NUTRITION = "Nutrition"
     WORK = "Work"
-    MEDITATION = "Meditation"
-    LOVE = "Love"
+    HOBBIES = "Hobbies"
+    SOCIAL = "Social"
+    LIFE = "Life"
 
 
 class TaskStatus(str, Enum):
     """Task completion status"""
     PENDING = "pending"
     COMPLETED = "completed"
-    OVERDUE = "overdue"  # Legacy alias
     EXPIRED = "expired"
 
 

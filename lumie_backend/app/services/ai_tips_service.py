@@ -56,10 +56,10 @@ async def get_ai_tips(user_id: str, days_back: int, time_zone: str) -> AiTipsRes
             ),
         )
 
-    completed = sum(1 for t in tasks if t.get("done"))
+    completed = sum(1 for t in tasks if t.get("completed_at"))
     expired = sum(
         1 for t in tasks
-        if not t.get("done") and t.get("close_datetime", now_str) < now_str
+        if not t.get("completed_at") and t.get("close_datetime", now_str) < now_str
     )
     pending = total - completed - expired
     rate = round(completed / total * 100, 1)

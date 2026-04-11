@@ -267,7 +267,7 @@ async def poll_once(db, client: httpx.AsyncClient) -> None:
     now = datetime.now(timezone.utc)
     now_ts = now.timestamp()
 
-    cursor = db.tasks.find({"done": {"$exists": False}})
+    cursor = db.tasks.find({"completed_at": {"$exists": False}})
     tasks = await cursor.to_list(length=None)
 
     # --- Phase 1: collect eligible tasks per user ---
