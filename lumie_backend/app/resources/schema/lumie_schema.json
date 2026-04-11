@@ -35,7 +35,7 @@
         "source": "string, 'ring' or 'manual' (defaults to 'ring')",
         "created_at": "datetime (UTC)"
       },
-      "notes": "bedtime and wake_time are MongoDB datetime objects (UTC). To query 'last night', compute yesterday's local date range and convert to UTC using the user's timezone. Example: yesterday_local = today_local - timedelta(days=1); yesterday_start_utc = datetime(yesterday_local.year, yesterday_local.month, yesterday_local.day, tzinfo=local_tz).astimezone(timezone.utc); yesterday_end_utc = yesterday_start_utc + timedelta(days=1); then filter bedtime $gte yesterday_start_utc $lt yesterday_end_utc."
+      "notes": "bedtime and wake_time are MongoDB datetime objects (UTC). To query 'last night', compute yesterday's local date range and convert to UTC using the user's timezone. Example: yesterday_local = today_local - timedelta(days=1); yesterday_start_utc = datetime(yesterday_local.year, yesterday_local.month, yesterday_local.day, tzinfo=local_tz).astimezone(timezone.utc); yesterday_end_utc = yesterday_start_utc + timedelta(days=1); then filter bedtime $gte yesterday_start_utc $lt yesterday_end_utc. CRITICAL: If multiple sessions exist for the same night (e.g. main sleep + brief nap), always sort by total_sleep_minutes descending to return the actual sleep session, not disruptions or junk data."
     },
     {
       "name": "activities",

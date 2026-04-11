@@ -101,6 +101,20 @@ Flutter catches this as `SubscriptionLimitException`.
 - `SECRET_KEY` — JWT signing key
 - `ANTHROPIC_API_KEY` — for AI advisor feature
 
+## Architectural Principles
+
+### Single Source of Truth for Data Structures & Queries
+- **Schema files** (`lumie_backend/app/resources/schema/lumie_schema.json`, Pydantic models in `models/`) are the **authoritative source** for:
+  - Data structure definitions (fields, types, constraints)
+  - Query patterns and rules (including sorting, filtering, timezone handling)
+  - Field descriptions and usage notes
+- **Service files** (`services/*.py`, `execution_prompt_service.py`, skill markdown files) should **reference and load** from schema files, NOT duplicate their content
+- **Why:** Prevents divergence (e.g., schema and code getting out of sync), makes maintenance easier, and ensures LLM prompts use current definitions
+
+**Example:**
+- ❌ Don't: Add query code examples in `execution_prompt_service.py` AND in skill markdown
+- ✅ Do: Define query guidance in `lumie_schema.json` notes, load it into the prompt, reference it from skills
+
 ## Development Logs
 
 After completing a feature or significant implementation work, **always** create a dev log in `docs/dev-logs/`.

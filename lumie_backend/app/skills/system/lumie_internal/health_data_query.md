@@ -110,9 +110,11 @@ week_start_utc = week_end_utc - timedelta(days=7)
 ```python
 # Last night's sleep — ALWAYS query by bedtime falling on "yesterday"
 # because sleep sessions span calendar days (e.g. 11 PM → 7 AM next day)
+# CRITICAL: Sort by total_sleep_minutes descending, NOT bedtime!
+# When multiple sessions exist (e.g. sleep + nap/junk), this ensures you get the main sleep.
 session = await db.sleep_sessions.find_one(
     {"user_id": target_user_id, "bedtime": {"$gte": yesterday_start_utc, "$lt": yesterday_end_utc}},
-    sort=[("bedtime", -1)]
+    sort=[("total_sleep_minutes", -1)]  # ← Returns longest session (actual sleep, not disruptions)
 )
 # Fields: bedtime, wake_time, total_sleep_minutes, time_awake_minutes,
 #         stages ([{stage, duration_minutes, percentage}]), resting_heart_rate,
@@ -121,6 +123,14 @@ session = await db.sleep_sessions.find_one(
 # Example: If today is Thursday 2026-04-10 at 3 PM, yesterday = Wednesday 2026-04-09
 # A sleep session from Wed 11 PM → Thu 7 AM will have bedtime = Wed 11 PM
 # This is "last night's sleep" and is what the user always means when they ask "how did I sleep?"
+
+# IMPORTANT: When multiple sessions exist for the same night (e.g. sleep + short nap/junk data),
+# return the LONGEST session (most reliable), not the latest bedtime.
+# Sort by total_sleep_minutes DESCENDING to get the main sleep, not brief disruptions.
+session = await db.sleep_sessions.find_one(
+    {"user_id": target_user_id, "bedtime": {"$gte": yesterday_start_utc, "$lt": yesterday_end_utc}},
+    sort=[("total_sleep_minutes", -1)]  # ← Sort by duration, not bedtime
+)
 ```
 
 ## Activity (`activities` collection)

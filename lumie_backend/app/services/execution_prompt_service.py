@@ -145,21 +145,10 @@ def clean_task(t):
     }}
 ```
 
-## Task Query Rules
+## Timezone Handling
 
-Tasks collection fields:
-- `task_id`: string unique ID
-- `user_id`: string, the task assignee
-- `task_name`: string
-- `task_type`: "Medicine" | "Study" | "Exercise" | "Nutrition" | "Work" | "Hobbies" | "Social" | "Life"
-- `status`: "pending" | "completed" | "expired"
-- `open_datetime`: datetime (UTC) — when the task window opens
-- `close_datetime`: datetime (UTC) — when the task window closes
-- `created_by`: string, who created the task
-- `team_id`: string (optional), for team-scoped tasks
-- `task_info`: string (optional), extra notes
+All timestamps are stored in UTC in MongoDB. To query by user's local date (e.g., "today" or "last night"):
 
-To query today's or yesterday's tasks/sleep for a user in their local timezone:
 ```python
 # user_timezone, ZoneInfo, timezone, datetime, timedelta are all pre-loaded variables
 local_tz = ZoneInfo(user_timezone)          # use user_timezone variable directly
@@ -169,28 +158,15 @@ today_local = datetime.now(local_tz).date()
 today_start_utc = datetime(today_local.year, today_local.month, today_local.day, tzinfo=local_tz).astimezone(timezone.utc)
 today_end_utc = today_start_utc + timedelta(days=1)
 
-# Yesterday range in UTC (for "last night" sleep queries):
+# Yesterday range in UTC (for "last night"):
 yesterday_start_utc = today_start_utc - timedelta(days=1)
 yesterday_end_utc = today_start_utc
-
-# CRITICAL: Sleep spans calendar days (e.g. 11 PM → 7 AM next day)
-# "Last night" always means the most recent sleep session (bedtime yesterday evening)
-# Query by bedtime falling on "yesterday" — this captures sleep that started the night before
-# Example: If today is Thu 2026-04-10, yesterday = Wed 2026-04-09
-# A sleep session Wed 11 PM → Thu 7 AM has bedtime = Wed 11 PM (within yesterday range)
-sessions = await db.sleep_sessions.find({{
-    "user_id": target_user_id,
-    "bedtime": {{"$gte": yesterday_start_utc, "$lt": yesterday_end_utc}},
-}}).to_list(10)
-
-# Query today's tasks (open_datetime stored as string 'YYYY-MM-DD HH:mm'):
-start_str = today_start_utc.strftime("%Y-%m-%d %H:%M")
-end_str = today_end_utc.strftime("%Y-%m-%d %H:%M")
-tasks = await db.tasks.find({{
-    "user_id": target_user_id,
-    "open_datetime": {{"$gte": start_str, "$lt": end_str}},
-}}).to_list(100)
 ```
+
+**For detailed query examples and data structure documentation, refer to the Database Schema section above.**
+- See `sleep_sessions` notes for sleep query guidance and sorting rules
+- See `tasks` fields for task query structure
+- See other collections for their specific query patterns
 
 ## Output Format
 
