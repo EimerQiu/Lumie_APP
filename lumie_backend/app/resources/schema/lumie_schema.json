@@ -139,15 +139,15 @@
         "created_by": "string, creator ID",
         "team_id": "string, optional, used for team tasks",
         "task_name": "string, task name",
-        "task_type": "string, Medicine|Life|Study|Exercise|Work|Meditation|Love",
+        "task_type": "string, Medicine|Study|Exercise|Nutrition|Work|Hobbies|Social|Life",
         "open_datetime": "string, start time 'YYYY-MM-DD HH:mm' (e.g. '2026-03-06 16:00', no Z suffix)",
         "close_datetime": "string, end time 'YYYY-MM-DD HH:mm' (same format as open_datetime)",
-        "done": "ISODate (MongoDB datetime) if task is completed, field is ABSENT if not completed",
+        "completed_at": "ISODate (MongoDB datetime, ISO 8601 with Z suffix) if task is completed, field is ABSENT if not completed",
         "rpttask_id": "string, associated template ID (optional)",
         "task_info": "string, notes (optional)",
         "created_at": "string, ISO datetime"
       },
-      "notes": "CRITICAL — task status is NOT stored. It is computed: (1) done field present → completed; (2) done absent AND close_datetime < now → expired; (3) done absent AND close_datetime >= now → pending. To query by status: completed={\"done\":{\"$exists\":true}}, pending={\"done\":{\"$exists\":false},\"close_datetime\":{\"$gte\":now_str}}, expired={\"done\":{\"$exists\":false},\"close_datetime\":{\"$lt\":now_str}}. open_datetime/close_datetime are plain strings — filter with string comparison: {\"open_datetime\":{\"$gte\":\"2026-03-01 00:00\",\"$lt\":\"2026-04-01 00:00\"}}. TIMEZONE CRITICAL — open_datetime and close_datetime are stored in UTC (no Z suffix, but values are UTC). When the question involves 'today', 'now', 'this week', or any local date, you MUST convert using the user's timezone from User Context. Example: if user_timezone='America/Los_Angeles' (UTC-7), then 'today local' maps to a UTC range of today+7h to tomorrow+7h. Always use zoneinfo (Python 3.9+) to compute UTC bounds: from zoneinfo import ZoneInfo; from datetime import datetime, timezone; local_tz = ZoneInfo(user_timezone); today_local = datetime.now(local_tz).date(); day_start_utc = datetime(today_local.year, today_local.month, today_local.day, tzinfo=local_tz).astimezone(timezone.utc); day_end_utc = day_start_utc + timedelta(days=1); start_str = day_start_utc.strftime('%Y-%m-%d %H:%M'); end_str = day_end_utc.strftime('%Y-%m-%d %H:%M'); then query open_datetime $gte start_str $lt end_str. Never assume UTC==local time."
+      "notes": "CRITICAL — task status is NOT stored. It is computed: (1) completed_at field present → completed; (2) completed_at absent AND close_datetime < now → expired; (3) completed_at absent AND close_datetime >= now → pending. To query by status: completed={\"completed_at\":{\"$exists\":true}}, pending={\"completed_at\":{\"$exists\":false},\"close_datetime\":{\"$gte\":now_str}}, expired={\"completed_at\":{\"$exists\":false},\"close_datetime\":{\"$lt\":now_str}}. open_datetime/close_datetime are plain strings — filter with string comparison: {\"open_datetime\":{\"$gte\":\"2026-03-01 00:00\",\"$lt\":\"2026-04-01 00:00\"}}. TIMEZONE CRITICAL — open_datetime and close_datetime are stored in UTC (no Z suffix, but values are UTC). When the question involves 'today', 'now', 'this week', or any local date, you MUST convert using the user's timezone from User Context. Example: if user_timezone='America/Los_Angeles' (UTC-7), then 'today local' maps to a UTC range of today+7h to tomorrow+7h. Always use zoneinfo (Python 3.9+) to compute UTC bounds: from zoneinfo import ZoneInfo; from datetime import datetime, timezone; local_tz = ZoneInfo(user_timezone); today_local = datetime.now(local_tz).date(); day_start_utc = datetime(today_local.year, today_local.month, today_local.day, tzinfo=local_tz).astimezone(timezone.utc); day_end_utc = day_start_utc + timedelta(days=1); start_str = day_start_utc.strftime('%Y-%m-%d %H:%M'); end_str = day_end_utc.strftime('%Y-%m-%d %H:%M'); then query open_datetime $gte start_str $lt end_str. Never assume UTC==local time."
     },
     {
       "name": "task_templates",
@@ -156,7 +156,7 @@
         "id": "string, unique template ID",
         "created_by": "string, creator ID",
         "template_name": "string",
-        "template_type": "string, Medicine|Life|Study|Exercise|Work|Meditation|Love",
+        "template_type": "string, Medicine|Study|Exercise|Nutrition|Work|Hobbies|Social|Life",
         "description": "string, optional",
         "time_window_list": "array of TimeWindow objects",
         "min_interval": "number, minimum interval in minutes",

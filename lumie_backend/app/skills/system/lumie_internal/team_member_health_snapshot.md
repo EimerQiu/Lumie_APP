@@ -61,33 +61,33 @@ Use this skill when a parent or team admin asks about a specific team member's h
 - Only access data within the team scope
 - Task queries must include team_id filter
 
-# Data Scope and Structures
+# Collection Schemas
 
-This snapshot is intentionally lightweight, but it should still use ring-synced data explicitly:
+This snapshot queries ring-synced data from these collections:
 
-- `member_profile`
-  - Source: `profiles`
-  - Fields: `name`, `age`, `icd10_code`, `timezone`
-- `recent_sleep`
-  - Source: `sleep_sessions`
-  - Fields: `bedtime`, `wake_time`, `total_sleep_minutes`, `resting_heart_rate`, `sleep_quality_score`
-- `recent_activity`
-  - Sources: `activities`, `daily_steps`
-  - `activities` fields: `activity_type_name`, `duration_minutes`, `intensity`, `start_time`
-  - `daily_steps` fields: `date_str`, `steps`, `exercise_time_seconds`, `distance_km`
-- `recent_recovery`
-  - Source: `hrv_readings`
-  - Fields: `timestamp`, `hrv_ms`, `fatigue`, `heart_rate_bpm`, `systolic_mmhg`, `diastolic_mmhg`
-- `task_adherence`
-  - Source: `tasks`
-  - Fields: `task_name`, `task_type`, `open_datetime`, `close_datetime`, `done`
+- `profiles` — [`UserProfile` / `ProfileInDB` in models/user.py](../../models/user.py)
+- `team_members` — [`TeamMember` in models/team.py](../../models/team.py)
+- `sleep_sessions` — [`SleepSessionResponse` in models/sleep.py](../../models/sleep.py)
+- `activities` — [`ActivityRecord` in models/activity.py](../../models/activity.py)
+- `daily_steps` — [`DailyStepRecord` / `DailyStepResponse` in models/steps.py](../../models/steps.py)
+- `hrv_readings` — [`HrvReadingResponse` in models/hrv.py](../../models/hrv.py)
+- `tasks` — [`TaskResponse` in models/task.py](../../models/task.py)
 
-Interpretation rules:
+### Relevant fields per domain:
 
-- Prefer the latest `sleep_sessions` record for a quick overnight snapshot.
-- Use `daily_steps` for daily movement totals; do not infer step counts from `activities`.
-- Treat blood-pressure values from `hrv_readings` as ring-estimated, not clinical cuff readings.
-- If any section has no data, return that section as empty with a short note rather than omitting it.
+- From `profiles`: `name`, `age`, `icd10_code`, `timezone`
+- From `sleep_sessions`: `bedtime`, `wake_time`, `total_sleep_minutes`, `resting_heart_rate`, `sleep_quality_score`
+- From `activities`: `activity_type_name`, `duration_minutes`, `intensity`, `start_time`
+- From `daily_steps`: `date_str`, `steps`, `exercise_time_seconds`, `distance_km`
+- From `hrv_readings`: `timestamp`, `hrv_ms`, `fatigue`, `heart_rate_bpm`, `systolic_mmhg`, `diastolic_mmhg`
+- From `tasks`: `task_name`, `task_type`, `open_datetime`, `close_datetime`, `completed_at`
+
+### Data interpretation rules:
+
+- Prefer the latest `sleep_sessions` record for overnight snapshot
+- Use `daily_steps` for daily totals; do not infer steps from `activities`
+- Blood-pressure from `hrv_readings` is ring-estimated, not clinical
+- If any section missing data, return as empty with note (don't omit)
 
 # Execution Plan
 1. Verify requester is admin of the target user's team

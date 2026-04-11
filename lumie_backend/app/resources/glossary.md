@@ -10,12 +10,12 @@
 ## Task Related
 - Med-Reminder = tasks in the tasks collection where task_type = Medicine
 - completion rate = completed / total tasks (for a given time period)
-- completed tasks = tasks where the `done` field EXISTS in MongoDB (use `{"done": {"$exists": True}}`)
-- expired tasks = `done` field absent AND `close_datetime` string < current time string
-- pending tasks = `done` field absent AND `close_datetime` string >= current time string
+- completed tasks = tasks where the `completed_at` field EXISTS in MongoDB (use `{"completed_at": {"$exists": True}}`)
+- expired tasks = `completed_at` field absent AND `close_datetime` string < current time string
+- pending tasks = `completed_at` field absent AND `close_datetime` string >= current time string
 - active tasks = current time is between open_datetime and close_datetime
 
-CRITICAL: The `status` field does NOT exist in MongoDB. Never query `{"status": "completed"}` — it will always return 0 results. Always use `{"done": {"$exists": True}}` for completed tasks.
+CRITICAL: The `status` field does NOT exist in MongoDB. Never query `{"status": "completed"}` — it will always return 0 results. Always use `{"completed_at": {"$exists": True}}` for completed tasks.
 
 ## Health Data Related
 - heart rate = avg_heart_rate or max_heart_rate (BPM)
