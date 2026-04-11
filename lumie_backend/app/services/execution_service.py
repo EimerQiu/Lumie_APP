@@ -10,6 +10,7 @@ from datetime import datetime
 from typing import Optional
 
 from ..core.config import settings
+from ..core.datetime_utils import format_utc_datetime, format_utc_datetime_with_ms
 from ..core.database import get_database
 from . import lumie_db_connector
 from . import browser_skill_runtime
@@ -89,7 +90,7 @@ async def create_execution_job(
     """Create an execution job record in MongoDB. Returns job_id."""
     db = get_database()
     job_id = str(uuid.uuid4())
-    now = datetime.utcnow().isoformat()
+    now = format_utc_datetime(datetime.utcnow())
 
     await db.execution_jobs.insert_one({
         "job_id": job_id,
@@ -165,7 +166,7 @@ async def _execute_job(
     user_id = job["user_id"]
     target_user_id = job.get("target_user_id", user_id)
     prompt = job["prompt"]
-    now = datetime.utcnow().isoformat()
+    now = format_utc_datetime(datetime.utcnow())
 
     # Update status to generating
     await db.execution_jobs.update_one(
@@ -486,7 +487,7 @@ async def _generate_script(prompt: str) -> Optional[str]:
 async def _complete_job(
     db, job_id: str, result_data, stdout: str = "", stderr: str = "",
 ) -> None:
-    now = datetime.utcnow().isoformat()
+    now = format_utc_datetime(datetime.utcnow())
     await db.execution_jobs.update_one(
         {"job_id": job_id},
         {"$set": {
@@ -537,7 +538,7 @@ async def _complete_job(
 async def _fail_job(
     db, job_id: str, error: str, stdout: str = "", stderr: str = "",
 ) -> None:
-    now = datetime.utcnow().isoformat()
+    now = format_utc_datetime(datetime.utcnow())
     await db.execution_jobs.update_one(
         {"job_id": job_id},
         {"$set": {
@@ -574,7 +575,7 @@ async def cancel_job(job_id: str, user_id: str) -> bool:
         },
         {"$set": {
             "status": "cancelled",
-            "finished_at": datetime.utcnow().isoformat(),
+            "finished_at": format_utc_datetime(datetime.utcnow()),
         }},
     )
     return result.modified_count > 0

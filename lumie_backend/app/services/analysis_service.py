@@ -10,6 +10,7 @@ from datetime import datetime
 from typing import Optional
 
 from ..core.config import settings
+from ..core.datetime_utils import format_utc_datetime, format_utc_datetime_with_ms
 from ..core.database import get_database
 from ..models.analysis import AnalysisJobStatus
 from .analysis_prompt_service import build_analysis_prompt
@@ -81,7 +82,7 @@ async def check_analysis_quota(user_id: str, subscription_tier: str) -> Optional
 
     count = await db.analysis_jobs.count_documents({
         "user_id": user_id,
-        "created_at": {"$gte": today_start.isoformat()},
+        "created_at": {"$gte": format_utc_datetime(today_start)},
         "status": {"$ne": AnalysisJobStatus.CANCELLED.value},
     })
 
@@ -138,7 +139,7 @@ async def create_analysis_job(
         "stdout": "",
         "stderr": "",
         "error": "",
-        "created_at": datetime.utcnow().isoformat(),
+        "created_at": format_utc_datetime(datetime.utcnow()),
         "started_at": None,
         "finished_at": None,
         "timeout_sec": timeout,
@@ -196,7 +197,7 @@ async def _execute_job(job_id: str) -> None:
 
         # 2. Update status → generating
         await _update_status(db, job_id, AnalysisJobStatus.GENERATING, {
-            "started_at": datetime.utcnow().isoformat(),
+            "started_at": format_utc_datetime(datetime.utcnow()),
         })
 
         # 3. Load user profile for context
@@ -271,7 +272,7 @@ async def _execute_job(job_id: str) -> None:
                         "stdout": sandbox_result.get("stdout", "")[:5000],
                         "stderr": sandbox_result.get("stderr", "")[:5000],
                         "docker_container_id": sandbox_result.get("container_id", ""),
-                        "finished_at": datetime.utcnow().isoformat(),
+                        "finished_at": format_utc_datetime(datetime.utcnow()),
                         "result": {
                             "summary": result_data.get("summary", "Analysis complete."),
                             "data": result_data.get("data"),
@@ -309,7 +310,7 @@ async def _execute_job(job_id: str) -> None:
                         "stdout": sandbox_result.get("stdout", "")[:5000],
                         "stderr": stderr[:5000],
                         "docker_container_id": sandbox_result.get("container_id", ""),
-                        "finished_at": datetime.utcnow().isoformat(),
+                        "finished_at": format_utc_datetime(datetime.utcnow()),
                         "error": _FRIENDLY_ERROR,
                         "status": AnalysisJobStatus.FAILED.value,
                     }},
@@ -344,7 +345,7 @@ async def _fail_job(db, job_id: str, internal_error: str):
         {"$set": {
             "status": AnalysisJobStatus.FAILED.value,
             "error": _FRIENDLY_ERROR,
-            "finished_at": datetime.utcnow().isoformat(),
+            "finished_at": format_utc_datetime(datetime.utcnow()),
         }},
     )
 
@@ -396,7 +397,7 @@ async def cancel_job(job_id: str, user_id: str) -> bool:
         {"job_id": job_id},
         {"$set": {
             "status": AnalysisJobStatus.CANCELLED.value,
-            "finished_at": datetime.utcnow().isoformat(),
+            "finished_at": format_utc_datetime(datetime.utcnow()),
         }},
     )
     logger.info(f"Cancelled job {job_id}")

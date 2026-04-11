@@ -4,6 +4,7 @@ from typing import Optional
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
 from ..core.database import get_database
+from ..core.datetime_utils import format_utc_datetime, format_utc_datetime_with_ms
 
 
 class RestDaysService:

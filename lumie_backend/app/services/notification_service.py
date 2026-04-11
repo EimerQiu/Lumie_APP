@@ -32,6 +32,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from ..core.database import get_database
+from ..core.datetime_utils import format_utc_datetime, format_utc_datetime_with_ms
 
 logger = logging.getLogger(__name__)
 
@@ -197,7 +198,7 @@ async def _enqueue(
         "body": body,
         "data": data or {},
         "status": "pending",
-        "created_at": datetime.now(timezone.utc).isoformat(),
+        "created_at": format_utc_datetime(datetime.now(timezone.utc)),
         "sent_at": None,
     }
     await db.notification_queue.insert_one(doc)

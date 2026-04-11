@@ -16,6 +16,7 @@ from datetime import datetime
 from typing import Any, Optional
 
 from ..core.database import get_database
+from ..core.datetime_utils import format_utc_datetime, format_utc_datetime_with_ms
 from . import skill_credential_service
 
 logger = logging.getLogger(__name__)
@@ -392,7 +393,7 @@ def _filter_sensitive(data: Any) -> Any:
         return str(data)
     # Convert datetime to ISO string
     if isinstance(data, datetime):
-        return data.isoformat()
+        return format_utc_datetime(data)
     return data
 
 
@@ -418,7 +419,7 @@ async def _write_audit_log(
             "target_user_id": target_user_id,
             "decision": decision,
             "reason": reason,
-            "created_at": datetime.utcnow().isoformat(),
+            "created_at": format_utc_datetime(datetime.utcnow()),
         })
     except Exception as e:
         logger.error(f"Failed to write audit log: {e}")

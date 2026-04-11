@@ -9,6 +9,7 @@ from datetime import datetime
 from typing import Optional
 
 from ..core.database import get_database
+from ..core.datetime_utils import format_utc_datetime, format_utc_datetime_with_ms
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +35,7 @@ async def save_credential(
     Returns the saved credential (without password in plain response).
     """
     db = get_database()
-    now = datetime.utcnow().isoformat()
+    now = format_utc_datetime(datetime.utcnow())
 
     update_fields = {
         "status": "saved_not_tested",
@@ -73,7 +74,7 @@ async def ensure_lumie_internal_credential(user_id: str, skill_id: str) -> dict:
     when a lumie_internal_data capability is enabled.
     """
     db = get_database()
-    now = datetime.utcnow().isoformat()
+    now = format_utc_datetime(datetime.utcnow())
 
     existing = await db.advisor_skill_credentials.find_one(
         {"user_id": user_id, "skill_id": skill_id}
@@ -141,7 +142,7 @@ async def update_credential_status(
 ) -> None:
     """Update the credential status after a test."""
     db = get_database()
-    now = datetime.utcnow().isoformat()
+    now = format_utc_datetime(datetime.utcnow())
     update = {"status": status, "updated_at": now}
     if test_result:
         update["last_tested_at"] = now

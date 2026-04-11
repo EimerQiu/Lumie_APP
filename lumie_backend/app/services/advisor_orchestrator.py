@@ -360,7 +360,7 @@ def _build_tools(candidates: list[SkillIndexItem]) -> list[dict]:
                     "task_name": {"type": "string", "description": "Name of the task"},
                     "task_type": {
                         "type": "string",
-                        "enum": ["Medicine", "Life", "Study", "Exercise", "Work", "Meditation", "Love"],
+                        "enum": ["Medicine", "Study", "Exercise", "Nutrition", "Work", "Hobbies", "Social", "Life"],
                         "description": "Type of task",
                     },
                     "mode": {

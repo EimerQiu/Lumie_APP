@@ -5,6 +5,7 @@ from datetime import datetime
 from typing import Optional
 
 from ..core.database import get_database
+from ..core.datetime_utils import format_utc_datetime, format_utc_datetime_with_ms
 from ..data.seed_exercises import SYSTEM_EXERCISES, ICD10_EXERCISE_FLAGS
 from ..models.workout import (
     ExerciseCreate,

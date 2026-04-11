@@ -13,6 +13,7 @@ from fastapi import HTTPException, status, UploadFile
 from zoneinfo import ZoneInfo
 
 from ..core.database import get_database
+from ..core.datetime_utils import format_utc_datetime, format_utc_datetime_with_ms
 from ..core.subscription_helpers import get_task_date_range, raise_task_date_range_error
 from ..models.task import (
     TaskType, TaskStatus,
@@ -134,10 +135,6 @@ class TaskService:
         except Exception:
             return None, None
 
-    def _format_datetime(self, dt: datetime) -> str:
-        """Format datetime to ISO string with Z suffix for response"""
-        return dt.strftime("%Y-%m-%dT%H:%M:%S") + "Z"
-
     def _convert_local_to_utc(self, local_time_str: str, timezone: str) -> str:
         """
         Convert a local time string to UTC format
@@ -200,10 +197,10 @@ class TaskService:
             task_info=doc.get("task_info"),
             note=doc.get("note"),
             attachments=doc.get("attachments", []),
-            completed_at=self._format_datetime(doc["completed_at"]) if doc.get("completed_at") else None,
+            completed_at=format_utc_datetime(doc["completed_at"]) if doc.get("completed_at") else None,
             extension_count=doc.get("extension_count", 0),
-            created_at=self._format_datetime(doc["created_at"]),
-            updated_at=self._format_datetime(doc["updated_at"]),
+            created_at=format_utc_datetime(doc["created_at"]),
+            updated_at=format_utc_datetime(doc["updated_at"]),
         )
 
     def _validate_media_upload(self, upload: UploadFile) -> tuple[str, str]:
@@ -305,7 +302,7 @@ class TaskService:
                         "thumbnail_url": thumb_url,
                         "playback_path": playback_path,
                         "playback_url": playback_url,
-                        "uploaded_at": now.isoformat(),
+                        "uploaded_at": format_utc_datetime(now),
                     }
                 )
             finally:
@@ -338,8 +335,8 @@ class TaskService:
             min_interval=doc["min_interval"],
             time_window_list=time_window_list,
             created_by=doc["created_by"],
-            created_at=self._format_datetime(doc["created_at"]),
-            updated_at=self._format_datetime(doc["updated_at"]),
+            created_at=format_utc_datetime(doc["created_at"]),
+            updated_at=format_utc_datetime(doc["updated_at"]),
         )
 
     async def _get_user_subscription_tier(self, user_id: str) -> tuple:

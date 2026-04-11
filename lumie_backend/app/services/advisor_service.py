@@ -35,7 +35,7 @@ RUN_DATA_ANALYSIS_TOOL = {
         "Examples: activity trends, medication completion rates, heart rate analysis, walk test comparisons, "
         "upcoming medication/task reminders, what tasks are due now/today, which medicines to take, "
         "meal reminders, study tasks, exercise plans, or any scheduled tasks. "
-        "The tasks system covers ALL types: Medicine, Life, Study, Exercise, Work, Meditation, Love — not just medications. "
+        "The tasks system covers ALL types: Medicine, Study, Exercise, Nutrition, Work, Hobbies, Social, Life — not just medications."
         "Do NOT use for general health knowledge questions that can be answered directly."
     ),
     "input_schema": {
@@ -82,8 +82,8 @@ CREATE_TASK_TOOL = {
             },
             "task_type": {
                 "type": "string",
-                "enum": ["Medicine", "Life", "Study", "Exercise", "Work", "Meditation", "Love"],
-                "description": "Type of task. Use Medicine for medications, Life for meals/daily habits/errands, etc.",
+                "enum": ["Medicine", "Study", "Exercise", "Nutrition", "Work", "Hobbies", "Social", "Life"],
+                "description": "Type of task. Use Medicine for medications, Nutrition for meals/fruits, Life for daily habits/errands, Social for social activities, etc.",
             },
             "mode": {
                 "type": "string",
@@ -283,7 +283,7 @@ Call run_data_analysis when the user asks a question that requires querying thei
 - Any question that asks about specific numbers/trends in their data
 - **Task/schedule questions**: "what should I do now", "what's due today", "any upcoming reminders", "what medicine should I take" — these require looking up the user's tasks
 - Any question about the user's own tasks, medications, meals, exercise plans, or schedules
-- The task system has 7 types: Medicine, Life (meals, daily habits), Study, Exercise, Work, Meditation, Love — always query ALL relevant types unless the user specifies one
+- The task system has 8 types: Medicine, Study, Exercise, Nutrition (meals, fruits), Work, Hobbies, Social, Life (daily habits, errands) — always query ALL relevant types unless the user specifies one
 
 Do NOT call the tool for:
 - General health advice or tips (e.g., "what are good stretches for arthritis")
@@ -313,7 +313,7 @@ RECURRING mode (mode="recurring") — for repeated daily tasks:
 - "Take pills at 9am and 9pm daily" → recurring: dates list, times=[09:00-10:00, 21:00-22:00]
 
 Guidelines:
-- Always pick the most appropriate task_type from: Medicine, Life, Study, Exercise, Work, Meditation, Love
+- Always pick the most appropriate task_type from: Medicine, Study, Exercise, Nutrition, Work, Hobbies, Social, Life
 - For recurring mode: if end time not specified, default close_time to 1 hour after open_time
 - For deadline mode: if start not specified, use the exact current datetime from the Context section; if "before X", close = day before X at 23:59
 - The user's timezone is: {timezone}

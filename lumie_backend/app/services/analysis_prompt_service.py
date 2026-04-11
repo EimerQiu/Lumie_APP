@@ -71,6 +71,7 @@ When the question involves "today", "now", "yesterday", "last night", "this week
 ```python
 from zoneinfo import ZoneInfo
 from datetime import datetime, timezone, timedelta
+from ..core.datetime_utils import format_utc_datetime, format_utc_datetime_with_ms
 local_tz = ZoneInfo("{user_timezone}")
 today_local = datetime.now(local_tz).date()
 
@@ -125,7 +126,7 @@ Answer this question: {question}
    class _Encoder(json.JSONEncoder):
        def default(self, obj):
            if isinstance(obj, datetime):
-               return obj.isoformat()
+               return format_utc_datetime(obj)
            if isinstance(obj, ObjectId):
                return str(obj)
            return super().default(obj)

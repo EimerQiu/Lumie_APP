@@ -29,6 +29,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from ..core.database import get_database
+from ..core.datetime_utils import format_utc_datetime, format_utc_datetime_with_ms
 
 logger = logging.getLogger(__name__)
 
@@ -49,7 +50,7 @@ async def save_message(
         "role": role,
         "content": content,
         "metadata": effective_metadata,
-        "created_at": datetime.now(timezone.utc).isoformat(),
+        "created_at": format_utc_datetime(datetime.now(timezone.utc)),
     }
     await db.chat_messages.insert_one(doc)
 
@@ -92,7 +93,7 @@ async def save_exchange(
             "role": "assistant",
             "content": assistant_reply,
             "metadata": metadata or {},
-            "created_at": now.isoformat(),
+            "created_at": format_utc_datetime(now),
         },
     ]
     await db.chat_messages.insert_many(docs)

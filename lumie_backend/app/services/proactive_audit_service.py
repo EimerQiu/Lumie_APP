@@ -8,6 +8,7 @@ Persists:
 """
 import logging
 from datetime import datetime, timezone
+from ..core.datetime_utils import format_utc_datetime, format_utc_datetime_with_ms
 
 from ..models.proactive import (
     ProactiveSkillData,
@@ -28,7 +29,7 @@ async def save_round_record(
         round_doc = {
             "round_id": round_id,
             "user_id": user_id,
-            "created_at": created_at.isoformat(),
+            "created_at": format_utc_datetime(created_at),
             "skill_data": [s.model_dump() for s in skill_data],
         }
         await db.proactive_information_rounds.insert_one(round_doc)
@@ -59,13 +60,13 @@ async def save_run_record(
 ) -> None:
     """Persist run record and decision across collections."""
     try:
-        finished_at = datetime.now(timezone.utc).isoformat()
+        finished_at = format_utc_datetime(datetime.now(timezone.utc))
 
         # 1. proactive_runs — the run envelope
         run_doc = {
             "run_id": run_id,
             "user_id": user_id,
-            "started_at": started_at.isoformat(),
+            "started_at": format_utc_datetime(started_at),
             "finished_at": finished_at,
             "round_id": round_id,
             "selected_skills": [s.skill_id for s in skill_data],

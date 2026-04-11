@@ -151,7 +151,7 @@ Tasks collection fields:
 - `task_id`: string unique ID
 - `user_id`: string, the task assignee
 - `task_name`: string
-- `task_type`: "Medicine" | "Life" | "Study" | "Exercise" | "Work" | "Meditation" | "Love"
+- `task_type`: "Medicine" | "Study" | "Exercise" | "Nutrition" | "Work" | "Hobbies" | "Social" | "Life"
 - `status`: "pending" | "completed" | "expired"
 - `open_datetime`: datetime (UTC) — when the task window opens
 - `close_datetime`: datetime (UTC) — when the task window closes

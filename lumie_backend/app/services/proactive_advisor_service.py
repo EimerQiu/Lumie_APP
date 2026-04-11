@@ -22,6 +22,7 @@ from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from ..core.config import settings
+from ..core.datetime_utils import format_utc_datetime, format_utc_datetime_with_ms
 from ..core.database import get_database
 from ..core.credential_utils import resolve_credential_key
 from ..models.proactive import ProactiveSkillData
@@ -903,7 +904,7 @@ async def run_proactive_check(user_id: str) -> dict:
             {
                 "$set": {"last_nudge": {
                     "reason": reason,
-                    "nudged_at": now_utc.isoformat(),
+                    "nudged_at": format_utc_datetime(now_utc),
                     "run_id": run_id,
                     "primary_domain": selected_domain or result.get("primary_domain"),
                     "evidence_summary": evidence_summary,
@@ -911,7 +912,7 @@ async def run_proactive_check(user_id: str) -> dict:
                 "$push": {
                     "nudge_history": {
                         "domain": selected_domain or "unknown",
-                        "nudged_at": now_utc.isoformat(),
+                        "nudged_at": format_utc_datetime(now_utc),
                         "reason": reason,
                         "evidence_summary": evidence_summary,
                         "run_id": run_id,

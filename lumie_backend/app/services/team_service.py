@@ -10,6 +10,7 @@ from fastapi import HTTPException, status
 import jwt
 
 from ..core.database import get_database
+from ..core.datetime_utils import format_utc_datetime, format_utc_datetime_with_ms
 from ..core.config import settings
 from ..core.subscription_helpers import get_team_limit, raise_subscription_limit_error
 from ..models.team import (
@@ -349,7 +350,7 @@ class TeamService:
 
         return {
             "message": "Team deleted successfully",
-            "deleted_at": now.isoformat(),
+            "deleted_at": format_utc_datetime(now),
             "recovery_deadline": (now + timedelta(days=30)).isoformat()
         }
 
@@ -511,7 +512,7 @@ class TeamService:
             "invited_email": email,
             "is_registered": invited_user is not None,
             "status": "pending",
-            "invited_at": datetime.utcnow().isoformat(),
+            "invited_at": format_utc_datetime(datetime.utcnow()),
             "invitation_link": invitation_link
         }
 
@@ -641,7 +642,7 @@ class TeamService:
         return {
             "message": "Successfully left the team",
             "team_name": team["name"],
-            "left_at": datetime.utcnow().isoformat()
+            "left_at": format_utc_datetime(datetime.utcnow())
         }
 
     async def remove_member(self, team_id: str, admin_user_id: str, target_user_id: str) -> dict:
@@ -716,7 +717,7 @@ class TeamService:
                 "user_id": target_user_id,
                 "name": target_name
             },
-            "removed_at": datetime.utcnow().isoformat()
+            "removed_at": format_utc_datetime(datetime.utcnow())
         }
 
     async def get_team_members(self, team_id: str, user_id: str) -> TeamMembersResponse:
@@ -1306,7 +1307,7 @@ class TeamService:
             item_type = "task_with_photo" if has_photo else "task_text"
 
             completed_at = task.get("completed_at")
-            ts = completed_at.isoformat() if isinstance(completed_at, datetime) else str(completed_at)
+            ts = format_utc_datetime(completed_at) if isinstance(completed_at, datetime) else str(completed_at)
 
             feed_items.append({
                 "item_id": task["task_id"],
@@ -1355,7 +1356,7 @@ class TeamService:
                     "type": "sleep_score",
                     "member_user_id": uid,
                     "member_name": name_map.get(uid, "Unknown"),
-                    "timestamp": wake_time.isoformat(),
+                    "timestamp": format_utc_datetime(wake_time),
                     "sleep_score": sleep_score,
                     "sleep_hours": sleep_hours,
                 })

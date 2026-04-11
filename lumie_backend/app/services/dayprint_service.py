@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from ..core.config import settings
+from ..core.datetime_utils import format_utc_datetime, format_utc_datetime_with_ms
 from ..core.database import get_database
 from .llm_client import chat_completion
 from .notification_service import queue_important_insight_notification
@@ -44,7 +45,7 @@ async def log_task_completed(user_id: str, task_name: str, task_type: str) -> No
         event = {
             "event_id": str(uuid.uuid4()),
             "type": "task_completed",
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "timestamp": format_utc_datetime(datetime.now(timezone.utc)),
             "data": {"task_name": task_name, "task_type": task_type},
         }
         await db.dayprints.update_one(
@@ -230,7 +231,7 @@ async def log_advisor_chat(
         new_event = {
             "event_id": str(uuid.uuid4()),
             "type": "advisor_chat",
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "timestamp": format_utc_datetime(datetime.now(timezone.utc)),
             "data": {"summary": summary, "session_id": session_id},
         }
 
@@ -295,7 +296,7 @@ async def log_important_insight(
         event = {
             "event_id": str(uuid.uuid4()),
             "type": "important_insight",
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "timestamp": format_utc_datetime(datetime.now(timezone.utc)),
             "data": {"summary": summary, "category": category, "session_id": session_id},
         }
         await db.dayprints.update_one(

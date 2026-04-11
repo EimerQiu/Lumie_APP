@@ -7,6 +7,7 @@ from datetime import datetime
 from typing import Optional
 
 from ..core.database import get_database
+from ..core.datetime_utils import format_utc_datetime, format_utc_datetime_with_ms
 
 logger = logging.getLogger(__name__)
 
@@ -49,7 +50,7 @@ SYSTEM_CAPABILITIES = [
 async def seed_system_capabilities() -> None:
     """Ensure all system capabilities exist in the database. Idempotent."""
     db = get_database()
-    now = datetime.utcnow().isoformat()
+    now = format_utc_datetime(datetime.utcnow())
     for cap in SYSTEM_CAPABILITIES:
         await db.advisor_capabilities.update_one(
             {"capability_id": cap["capability_id"]},
@@ -109,7 +110,7 @@ async def toggle_capability(user_id: str, capability_id: str, enabled: bool) -> 
     When disabling: sets status to 'disabled'.
     """
     db = get_database()
-    now = datetime.utcnow().isoformat()
+    now = format_utc_datetime(datetime.utcnow())
 
     if enabled:
         # Check if all requirements are met to go straight to 'ready'
@@ -138,7 +139,7 @@ async def toggle_capability(user_id: str, capability_id: str, enabled: bool) -> 
 async def refresh_capability_status(user_id: str, capability_id: str) -> str:
     """Recompute and update the capability status based on current requirements."""
     db = get_database()
-    now = datetime.utcnow().isoformat()
+    now = format_utc_datetime(datetime.utcnow())
 
     user_cap = await db.user_advisor_capabilities.find_one(
         {"user_id": user_id, "capability_id": capability_id}

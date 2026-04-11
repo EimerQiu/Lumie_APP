@@ -14,6 +14,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from ..core.database import get_database
+from ..core.datetime_utils import format_utc_datetime, format_utc_datetime_with_ms
 
 logger = logging.getLogger(__name__)
 
@@ -55,7 +56,7 @@ async def create_command(
     """
     db = get_database()
     request_id = str(uuid.uuid4())
-    now = datetime.now(timezone.utc).isoformat()
+    now = format_utc_datetime(datetime.now(timezone.utc))
 
     await db.ring_command_requests.insert_one({
         "request_id": request_id,
@@ -124,7 +125,7 @@ async def get_pending_command(user_id: str) -> Optional[dict]:
                 {"$set": {
                     "status": "expired",
                     "error": "Command expired before the app executed it",
-                    "completed_at": now.isoformat(),
+                    "completed_at": format_utc_datetime(now),
                 }},
             )
             continue
@@ -152,7 +153,7 @@ async def store_result(
             "status": "completed" if success else "failed",
             "result": data,
             "error": error,
-            "completed_at": datetime.now(timezone.utc).isoformat(),
+            "completed_at": format_utc_datetime(datetime.now(timezone.utc)),
         }},
     )
     return result.modified_count > 0
