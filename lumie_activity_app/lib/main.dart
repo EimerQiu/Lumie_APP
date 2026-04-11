@@ -21,7 +21,6 @@ import 'features/activity/screens/workout_session_screen.dart';
 import 'features/activity/widgets/activity_picker_sheet.dart';
 import 'features/manual_entry/screens/manual_entry_screen.dart';
 import 'features/walk_test/screens/walk_test_screen.dart';
-import 'features/sleep/screens/sleep_screen.dart';
 import 'features/sleep/screens/sleep_history_screen.dart';
 import 'features/teams/providers/teams_provider.dart';
 import 'features/teams/screens/teams_hub_screen.dart';
@@ -373,7 +372,7 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
     final screens = [
       const DashboardScreen(), // Today
       const AdvisorScreen(), // Advisor
-      const SleepScreen(), // Insights
+      const TeamsHubScreen(), // Teams
       const SettingsScreen(), // Me
     ];
 
@@ -551,9 +550,9 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
                 ),
               ),
               _NavBarItem(
-                icon: Icons.insights_outlined,
-                selectedIcon: Icons.insights,
-                label: 'Insights',
+                icon: Icons.people_outline,
+                selectedIcon: Icons.people,
+                label: 'Teams',
                 isSelected: _currentIndex == 2,
                 onTap: () => setState(() => _currentIndex = 2),
               ),
