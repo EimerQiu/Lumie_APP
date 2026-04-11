@@ -367,6 +367,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
             ),
             ...filteredPreviousTasks.map((task) {
               final canManage = _canManageTask(context, task);
+              final isTaskOwner = _isTaskOwner(context, task);
               return _AdminTaskCard(
                 task: task,
                 isAdmin: canManage,
@@ -375,7 +376,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                 resolveAttachmentUrls: _thumbnailUrlCandidates,
                 onAttachmentTap: (attachment) =>
                     _openAttachmentPreview(attachment),
-                onAddAttachment: (task.isCompleted && canManage)
+                onAddAttachment: (task.isCompleted && isTaskOwner)
                     ? () => _pickAndUploadAttachments(provider, task)
                     : null,
               );
@@ -395,6 +396,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
             ),
             ...filteredUpcomingTasks.map((task) {
               final canManage = _canManageTask(context, task);
+              final isTaskOwner = _isTaskOwner(context, task);
               return _AdminTaskCard(
                 task: task,
                 isAdmin: canManage,
@@ -403,7 +405,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                 resolveAttachmentUrls: _thumbnailUrlCandidates,
                 onAttachmentTap: (attachment) =>
                     _openAttachmentPreview(attachment),
-                onAddAttachment: (task.isCompleted && canManage)
+                onAddAttachment: (task.isCompleted && isTaskOwner)
                     ? () => _pickAndUploadAttachments(provider, task)
                     : null,
               );
@@ -817,6 +819,13 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
     }
   }
 
+  /// Check if current user is the task owner
+  bool _isTaskOwner(BuildContext context, AdminTaskData task) {
+    final authProvider = context.read<AuthProvider>();
+    final currentUserId = authProvider.user?.userId;
+    return currentUserId == task.userId;
+  }
+
   /// Check if current user can manage a task
   /// Can manage if: team admin OR personal task (no team) and task owner
   bool _canManageTask(BuildContext context, AdminTaskData task) {
@@ -1136,8 +1145,8 @@ class _AdminTaskCard extends StatelessWidget {
             ),
           ],
 
-          // Attachments (completed tasks)
-          if (task.isCompleted) ...[
+          // Attachments (completed tasks with media or upload capability)
+          if (task.isCompleted && (task.attachments.isNotEmpty || onAddAttachment != null)) ...[
             const SizedBox(height: 8),
             Row(
               children: [

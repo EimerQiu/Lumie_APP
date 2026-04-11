@@ -66,7 +66,7 @@ No new endpoints. Existing `POST /api/v1/advisor/chat` response now includes opt
 ## Testing Checklist
 
 - [ ] User asks "remind me to take my medicine at 8am tomorrow" → task created, nav chip shown
-- [ ] User asks "set a meditation reminder every morning this week" → multiple tasks created
+- [ ] User asks "set a nutrition reminder every morning this week" → multiple tasks created
 - [ ] User asks "what are my tasks today" → still routes to `run_data_analysis` (not `create_task`)
 - [ ] User asks general question → still returns direct reply without nav_hint
 - [ ] Subscription date-range limit enforced (free = 7 days)

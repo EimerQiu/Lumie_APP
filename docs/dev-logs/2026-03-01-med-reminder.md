@@ -102,7 +102,7 @@ Settings (Me tab) > "Med-Reminder" > TasksListScreen
 
 ## Task Type Categories
 
-Medicine, Life, Study, Exercise, Work, Meditation, Love
+Medicine, Study, Exercise, Nutrition, Work, Hobbies, Social, Life
 
 ## Card Gradient Colors (6 combos, selected by `taskId.hashCode % 6`)
 

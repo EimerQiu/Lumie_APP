@@ -1,12 +1,19 @@
 import 'dart:async';
+import 'dart:io';
+import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:provider/provider.dart';
+import 'package:flutter_image_compress/flutter_image_compress.dart';
+import 'package:path_provider/path_provider.dart';
 import '../../../core/theme/app_colors.dart';
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 import '../../../core/constants/api_constants.dart';
 import '../../../core/services/auth_service.dart';
+import '../../../core/services/task_service.dart';
 import '../../../shared/models/activity_models.dart';
+import '../../../shared/models/task_models.dart';
 import '../../auth/providers/auth_provider.dart';
 import '../../manual_entry/widgets/activity_type_selector.dart';
 import '../../ring/providers/ring_provider.dart';
@@ -30,6 +37,7 @@ class _HeartRateScreenState extends State<HeartRateScreen>
   RingProvider? _ringProvider;
   Timer? _disconnectConfirmTimer;
   bool _isDisconnectedConfirmed = false;
+  final GlobalKey _hrChartKey = GlobalKey();
 
   @override
   void initState() {
@@ -142,6 +150,7 @@ class _HeartRateScreenState extends State<HeartRateScreen>
         endedAt: endedAt,
         avgBpm: avgBpm,
         maxBpm: maxBpm,
+        chartKey: _hrChartKey,
       ),
     );
   }
@@ -458,54 +467,64 @@ class _HeartRateScreenState extends State<HeartRateScreen>
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        // Final BPM
-        Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          crossAxisAlignment: CrossAxisAlignment.end,
-          children: [
-            const Icon(Icons.favorite, size: 32, color: Colors.redAccent),
-            const SizedBox(width: 10),
-            Text(
-              hr.sessionAvg != null ? '${hr.sessionAvg}' : '—',
-              style: const TextStyle(
-                fontSize: 52,
-                fontWeight: FontWeight.bold,
-                color: AppColors.textPrimary,
-                height: 1.0,
+        // Wrap chart + BPM + stats for screenshot
+        RepaintBoundary(
+          key: _hrChartKey,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              // Final BPM
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  const Icon(Icons.favorite, size: 32, color: Colors.redAccent),
+                  const SizedBox(width: 10),
+                  Text(
+                    hr.sessionAvg != null ? '${hr.sessionAvg}' : '—',
+                    style: const TextStyle(
+                      fontSize: 52,
+                      fontWeight: FontWeight.bold,
+                      color: AppColors.textPrimary,
+                      height: 1.0,
+                    ),
+                  ),
+                  const SizedBox(width: 6),
+                  const Padding(
+                    padding: EdgeInsets.only(bottom: 8),
+                    child: Text(
+                      'BPM avg',
+                      style: TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w500,
+                        color: AppColors.textSecondary,
+                      ),
+                    ),
+                  ),
+                ],
               ),
-            ),
-            const SizedBox(width: 6),
-            const Padding(
-              padding: EdgeInsets.only(bottom: 8),
-              child: Text(
-                'BPM avg',
-                style: TextStyle(
-                  fontSize: 14,
-                  fontWeight: FontWeight.w500,
-                  color: AppColors.textSecondary,
+              const SizedBox(height: 4),
+              Center(
+                child: Text(
+                  _formatElapsed(hr.elapsed),
+                  style: TextStyle(fontSize: 13, color: AppColors.textSecondary),
                 ),
               ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 4),
-        Center(
-          child: Text(
-            _formatElapsed(hr.elapsed),
-            style: TextStyle(fontSize: 13, color: AppColors.textSecondary),
+              const SizedBox(height: 20),
+              // Session graph
+              if (hr.sessionReadings.length >= 2) ...[
+                SizedBox(
+                  height: 160,
+                  child: HrSessionChart(readings: hr.sessionReadings),
+                ),
+                const SizedBox(height: 8),
+              ],
+              // Stats
+              if (hr.sessionReadings.isNotEmpty) _buildSessionStatsRow(hr),
+            ],
           ),
         ),
-        const SizedBox(height: 20),
-        // Session graph
-        if (hr.sessionReadings.length >= 2) ...[
-          SizedBox(
-            height: 160,
-            child: HrSessionChart(readings: hr.sessionReadings),
-          ),
-          const SizedBox(height: 8),
-        ],
-        // Stats
-        if (hr.sessionReadings.isNotEmpty) _buildSessionStatsRow(hr),
+        // Zone bars and buttons remain outside RepaintBoundary
         if (hr.sessionReadings.isNotEmpty) ...[
           const SizedBox(height: 12),
           _buildZoneDurationBars(hr),
@@ -726,12 +745,14 @@ class _ActivityPromptSheet extends StatefulWidget {
   final DateTime endedAt;
   final int avgBpm;
   final int? maxBpm;
+  final GlobalKey? chartKey;
 
   const _ActivityPromptSheet({
     required this.startedAt,
     required this.endedAt,
     required this.avgBpm,
     this.maxBpm,
+    this.chartKey,
   });
 
   @override
@@ -747,6 +768,7 @@ class _ActivityPromptSheetState extends State<_ActivityPromptSheet> {
     if (_selectedType == null) return;
     setState(() => _saving = true);
     try {
+      // Step 1: Save activity
       final token = AuthService().token;
       if (token == null) throw Exception('Not authenticated');
       final response = await http
@@ -770,24 +792,139 @@ class _ActivityPromptSheetState extends State<_ActivityPromptSheet> {
       if (response.statusCode != 200 && response.statusCode != 201) {
         throw Exception('HTTP ${response.statusCode}');
       }
-      if (mounted) {
+
+      // Step 2: Capture screenshot (graceful — null if fails)
+      File? screenshotFile;
+      final key = widget.chartKey;
+      if (key?.currentContext != null) {
+        try {
+          final renderObject = key!.currentContext!.findRenderObject();
+          if (renderObject is RenderRepaintBoundary) {
+            final image = await renderObject.toImage(pixelRatio: 2.0).timeout(
+              const Duration(seconds: 3),
+              onTimeout: () => throw TimeoutException('Screenshot capture timed out'),
+            );
+            final byteData =
+                await image.toByteData(format: ui.ImageByteFormat.png);
+            if (byteData != null) {
+              final compressed = await FlutterImageCompress.compressWithList(
+                byteData.buffer.asUint8List(),
+                minWidth: 800,
+                minHeight: 400,
+                quality: 85,
+                format: CompressFormat.jpeg,
+              );
+              final dir = await getTemporaryDirectory();
+              final path =
+                  '${dir.path}/hr_${DateTime.now().millisecondsSinceEpoch}.jpg';
+              screenshotFile = File(path);
+              await screenshotFile.writeAsBytes(compressed);
+            }
+          }
+        } catch (_) {
+          // Screenshot capture failed — proceed without it
+          screenshotFile = null;
+        }
+      }
+
+      // Step 3: Fetch open exercise tasks
+      List<Task> exerciseTasks = [];
+      try {
+        final taskService = TaskService();
+        taskService.setToken(token);
+        final taskResponse = await taskService.getTasks();
+        exerciseTasks = taskResponse.tasks
+            .where((t) =>
+                t.taskType == TaskType.exercise &&
+                t.status == TaskStatus.pending)
+            .toList();
+      } catch (_) {
+        // Network failure or auth issue — treat as no tasks
+      }
+
+      if (!mounted) return;
+
+      // Step 4: No matching tasks — just pop + snackbar
+      if (exerciseTasks.isEmpty) {
         Navigator.pop(context);
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Row(
-              children: [
-                const Icon(Icons.check_circle, color: Colors.white, size: 18),
-                const SizedBox(width: 8),
-                Text('${_selectedType!.icon} ${_selectedType!.name} saved'),
-              ],
-            ),
-            backgroundColor: AppColors.success,
-            behavior: SnackBarBehavior.floating,
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(12),
-            ),
-          ),
+        _showSavedSnackbar(
+          context,
+          activityName: '${_selectedType!.icon} ${_selectedType!.name}',
+          taskCompleted: false,
         );
+        return;
+      }
+
+      // Step 5: Pick task (if multiple, pick earliest closing)
+      final Task targetTask;
+      if (exerciseTasks.length == 1) {
+        targetTask = exerciseTasks.first;
+      } else {
+        exerciseTasks.sort((a, b) {
+          // closeDatetime is a UTC string format "2026-04-10 14:00:00" (no Z)
+          String ensureUtcFormat(String dateStr) {
+            final normalized = dateStr.replaceAll(' ', 'T');
+            return normalized.endsWith('Z') ? normalized : '${normalized}Z';
+          }
+
+          final aDt = DateTime.parse(ensureUtcFormat(a.closeDatetime));
+          final bDt = DateTime.parse(ensureUtcFormat(b.closeDatetime));
+          return aDt.compareTo(bDt);
+        });
+        targetTask = exerciseTasks.first;
+      }
+
+      // Step 6: Show dialog
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => _ExerciseTaskDialog(taskName: targetTask.taskName),
+      ) ?? false;
+
+      if (!mounted) return;
+
+      // Step 7: Handle user response
+      if (confirmed) {
+        try {
+          // Upload screenshot if available
+          if (screenshotFile != null) {
+            await TaskService().uploadTaskAttachments(
+              taskId: targetTask.taskId,
+              files: [screenshotFile],
+            );
+          }
+          // Complete task
+          await TaskService().completeTask(targetTask.taskId);
+
+          if (mounted) {
+            Navigator.pop(context);
+            _showSavedSnackbar(
+              context,
+              activityName: '${_selectedType!.icon} ${_selectedType!.name}',
+              taskName: targetTask.taskName,
+              taskCompleted: true,
+            );
+          }
+        } catch (_) {
+          // Upload or complete failed — still pop and show basic snackbar
+          if (mounted) {
+            Navigator.pop(context);
+            _showSavedSnackbar(
+              context,
+              activityName: '${_selectedType!.icon} ${_selectedType!.name}',
+              taskCompleted: false,
+            );
+          }
+        }
+      } else {
+        // User tapped Skip
+        if (mounted) {
+          Navigator.pop(context);
+          _showSavedSnackbar(
+            context,
+            activityName: '${_selectedType!.icon} ${_selectedType!.name}',
+            taskCompleted: false,
+          );
+        }
       }
     } catch (e) {
       if (mounted) {
@@ -801,6 +938,33 @@ class _ActivityPromptSheetState extends State<_ActivityPromptSheet> {
         );
       }
     }
+  }
+
+  void _showSavedSnackbar(
+    BuildContext ctx, {
+    required String activityName,
+    required bool taskCompleted,
+    String? taskName,
+  }) {
+    final message = taskCompleted
+        ? '$activityName saved · Exercise task "$taskName" completed'
+        : '$activityName saved';
+    ScaffoldMessenger.of(ctx).showSnackBar(
+      SnackBar(
+        content: Row(
+          children: [
+            const Icon(Icons.check_circle, color: Colors.white, size: 18),
+            const SizedBox(width: 8),
+            Expanded(child: Text(message)),
+          ],
+        ),
+        backgroundColor: AppColors.success,
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(12),
+        ),
+      ),
+    );
   }
 
   @override
@@ -1014,6 +1178,43 @@ class _StatChip extends StatelessWidget {
           ],
         ),
       ),
+    );
+  }
+}
+
+// ─── Exercise Task Dialog ──────────────────────────────────────────────────
+
+class _ExerciseTaskDialog extends StatelessWidget {
+  final String taskName;
+
+  const _ExerciseTaskDialog({required this.taskName});
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+      title: const Text('Complete exercise task?'),
+      content: Text(
+        'Mark "$taskName" as completed using this workout?',
+        style: const TextStyle(fontSize: 14),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context, false),
+          child: const Text('Skip'),
+        ),
+        ElevatedButton(
+          onPressed: () => Navigator.pop(context, true),
+          style: ElevatedButton.styleFrom(
+            backgroundColor: AppColors.primaryLemon,
+            foregroundColor: AppColors.textOnYellow,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(20),
+            ),
+          ),
+          child: const Text('Yes, complete it'),
+        ),
+      ],
     );
   }
 }

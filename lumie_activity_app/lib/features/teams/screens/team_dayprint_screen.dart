@@ -555,12 +555,14 @@ List<Color> _taskTypeColors(String? taskType) {
       return [const Color(0xFF388E3C), const Color(0xFF1B5E20)];
     case 'study':
       return [const Color(0xFF7B1FA2), const Color(0xFF4A148C)];
-    case 'meditation':
+    case 'nutrition':
       return [const Color(0xFF00796B), const Color(0xFF004D40)];
-    case 'love':
+    case 'social':
       return [const Color(0xFFC62828), const Color(0xFF7F0000)];
     case 'work':
       return [const Color(0xFFE65100), const Color(0xFFBF360C)];
+    case 'hobbies':
+      return [const Color(0xFFF57C00), const Color(0xFFE65100)];
     default:
       return [const Color(0xFF37474F), const Color(0xFF263238)];
   }

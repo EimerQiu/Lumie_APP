@@ -62,6 +62,10 @@ Heart-rate measurements may need up to about 75 seconds end-to-end because the r
 - Use the `db` variable directly
 - The `user_id` and `target_user_id` variables are pre-loaded
 
+# Schema
+
+See [`RingCommandRequest` in models/ring_command.py](../../models/ring_command.py) for request structure and stored data model.
+
 # Result Data Contract
 
 The ring app posts the completed live-measurement payload into `ring_command_requests.result`.

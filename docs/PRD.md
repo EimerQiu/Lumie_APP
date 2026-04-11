@@ -3089,7 +3089,7 @@ Med-Reminder works independently of the Lumie Ring, though data may integrate wi
 Task {
   task_id: string (unique identifier),
   task_name: string (task name/description),
-  task_type: string (Medicine/Life/Study/Exercise/Work/Meditation/Love),
+  task_type: string (Medicine/Study/Exercise/Nutrition/Work/Hobbies/Social/Life),
   open_datetime: string ("yyyy-MM-dd HH:mm", start time),
   close_datetime: string ("yyyy-MM-dd HH:mm", end time),
   user_id: string (assigned user, for personal tasks),
@@ -3106,12 +3106,13 @@ Task {
 
 **Task Type Categories**:
 - `Medicine` - Medication reminders and health treatments
-- `Life` - Daily living activities and personal care
 - `Study` - Learning and educational activities
 - `Exercise` - Physical activity and fitness
+- `Nutrition` - Meals, fruits, and nutrition-related activities
 - `Work` - Work-related tasks and responsibilities
-- `Meditation` - Relaxation and mindfulness activities
-- `Love` - Family care and relationship activities
+- `Hobbies` - Leisure, hobbies, and entertainment
+- `Social` - Social activities, family time, and relationships
+- `Life` - Daily living activities, personal care, and errands
 
 #### 2.2 Task List Display
 

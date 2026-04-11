@@ -19,10 +19,10 @@ input_schema:
   properties:
     domain:
       type: string
-      description: "sleep | activity | walk_test | rest_days | hrv | heart_rate | steps | temperature | spo2"
+      description: "sleep | activity | walk_test | hrv | heart_rate | steps | temperature | spo2 | rest_days"
     time_reference:
       type: string
-      description: "last night | today | yesterday | this week | last 7 days | specific date"
+      description: "last night | today | yesterday | this week | last 7 days | specific date (not used for rest_days)"
     target_user_hint:
       type: string
 output_schema:
@@ -37,34 +37,26 @@ output_schema:
 # Purpose
 Use this skill when the user asks a focused question about one health domain: sleep, physical activity, walk test results, or rest days. The schema already describes all collection fields — write queries directly from it.
 
-# Collection Contracts
+# Collection Schemas
 
-Use these exact collections for ring-synced domains:
+See these Pydantic models for full field definitions and validation:
 
-- `sleep_sessions`
-  - `bedtime`, `wake_time`: MongoDB datetimes in UTC
-  - `total_sleep_minutes`, `time_awake_minutes`: numeric durations
-  - `stages`: array of `{stage, duration_minutes, percentage}`
-  - `resting_heart_rate`, `sleep_quality_score`
-- `daily_steps`
-  - `date_str`: `YYYY-MM-DD` string using the ring's local calendar day
-  - `steps`, `exercise_time_seconds`, `distance_km`
-- `hr_readings`
-  - `timestamp`: MongoDB datetime in UTC
-  - `bpm`
-- `hrv_readings`
-  - `timestamp`, `hrv_ms`, `heart_rate_bpm`, `fatigue`, `systolic_mmhg`, `diastolic_mmhg`, `source`
-- `temperature_readings`
-  - `timestamp`, `temp1_c`, `temp2_c`, `temp3_c`
-- `spo2_readings`
-  - `timestamp`, `spo2_percent`
+- `sleep_sessions` — [`SleepSessionResponse` in models/sleep.py](../../models/sleep.py)
+- `daily_steps` — [`DailyStepRecord` / `DailyStepResponse` in models/steps.py](../../models/steps.py)
+- `hr_readings` — [`HrDataPoint` in models/hr.py](../../models/hr.py)
+- `hrv_readings` — [`HrvDataPoint` / `HrvReadingResponse` in models/hrv.py](../../models/hrv.py)
+- `temperature_readings` — [`TemperatureDataPoint` / `TemperatureReadingResponse` in models/temperature.py](../../models/temperature.py)
+- `spo2_readings` — [`Spo2DataPoint` / `Spo2ReadingResponse` in models/spo2.py](../../models/spo2.py)
+- `activities` — [`ActivityRecord` in models/activity.py](../../models/activity.py)
+- `walk_tests` — [`WalkTestResult` in models/activity.py](../../models/activity.py)
 
-Practical interpretation rules:
+### Practical interpretation rules (data storage patterns):
 
-- `daily_steps` is one document per day, already upserted by `(user_id, date_str)`; do not expect multiple same-day rows.
-- `hr_readings`, `hrv_readings`, `temperature_readings`, and `spo2_readings` are point-in-time series keyed by `(user_id, timestamp)`.
-- `temperature_readings` are ring/skin-adjacent sensor values, not core thermometer readings.
-- `systolic_mmhg` / `diastolic_mmhg` in `hrv_readings` are ring-estimated values; summarize as trends, not diagnostic measurements.
+- `daily_steps` is one document per day, keyed by `(user_id, date_str)` — do not expect multiple same-day rows
+- `hr_readings`, `hrv_readings`, `temperature_readings`, and `spo2_readings` are point-in-time series indexed by `(user_id, timestamp)`
+- `temperature_readings` are ring/skin-adjacent sensor values, not core thermometer readings
+- `systolic_mmhg` / `diastolic_mmhg` in `hrv_readings` are ring-estimated values — summarize as trends, not clinical diagnostics
+- All timestamps from ring-synced collections are stored in UTC (MongoDB datetime type)
 
 # When To Use
 - "How did I sleep last night?"
@@ -77,6 +69,14 @@ Practical interpretation rules:
 - "How many rest days have I had?"
 - "What's my resting heart rate?"
 - Parent asking about their child's sleep or activity
+
+## Critical Context: Sleep Spans Calendar Days
+**Sleep data ALWAYS refers to the previous night + early morning, NOT the current calendar day.**
+- A user who sleeps 11 PM–7 AM had sleep that "started yesterday, ended this morning"
+- When the user asks "how did I sleep?" (at any time of day), they mean their most recent sleep session
+- Query logic: `bedtime` should be `yesterday_start_utc` to `yesterday_end_utc` (to capture sessions starting the night before)
+- Do NOT interpret "today" for sleep — always interpret as "the most recent sleep session" = "last night"
+- Pass `time_reference: "last night"` to the skill when the user asks about their sleep, not "today"
 
 # Do NOT Use When
 - User wants tasks/medications → use `tasks_query`
@@ -108,7 +108,8 @@ week_start_utc = week_end_utc - timedelta(days=7)
 
 ## Sleep (`sleep_sessions` collection)
 ```python
-# Last night's sleep
+# Last night's sleep — ALWAYS query by bedtime falling on "yesterday"
+# because sleep sessions span calendar days (e.g. 11 PM → 7 AM next day)
 session = await db.sleep_sessions.find_one(
     {"user_id": target_user_id, "bedtime": {"$gte": yesterday_start_utc, "$lt": yesterday_end_utc}},
     sort=[("bedtime", -1)]
@@ -116,6 +117,10 @@ session = await db.sleep_sessions.find_one(
 # Fields: bedtime, wake_time, total_sleep_minutes, time_awake_minutes,
 #         stages ([{stage, duration_minutes, percentage}]), resting_heart_rate,
 #         sleep_quality_score (0-100), source
+
+# Example: If today is Thursday 2026-04-10 at 3 PM, yesterday = Wednesday 2026-04-09
+# A sleep session from Wed 11 PM → Thu 7 AM will have bedtime = Wed 11 PM
+# This is "last night's sleep" and is what the user always means when they ask "how did I sleep?"
 ```
 
 ## Activity (`activities` collection)
@@ -140,14 +145,22 @@ test = await db.walk_tests.find_one(
 #         avg_heart_rate, max_heart_rate, recovery_heart_rate
 ```
 
-## Rest Days (`rest_days` collection — check schema for exact fields)
+## Rest Days (from `profiles` collection)
+
+Rest days are stored in the user profile's `rest_days` field as a `RestDaySettings` object.
+See [`RestDaySettings` in models/user.py](../../models/user.py) for structure.
+
 ```python
-rest = await db.rest_days.find(
-    {"user_id": target_user_id}
-).sort("date", -1).to_list(30)
+# Get user's rest day settings
+profile = await db.profiles.find_one({"user_id": target_user_id})
+rest_days_config = profile.get("rest_days") if profile else None
+
+# rest_days_config has:
+# - weekly_rest_days: list[int] (0=Monday, 6=Sunday)
+# - specific_dates: list[str] (YYYY-MM-DD)
 ```
 
-If the collection is unavailable or not documented in the schema/runtime, return that rest-day data is unavailable instead of guessing field names.
+If profile is unavailable or rest_days not configured, return that rest-day data is unavailable.
 
 ## Heart Rate (`hr_readings` collection)
 ```python

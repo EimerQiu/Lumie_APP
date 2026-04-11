@@ -144,7 +144,9 @@ ACTIVITY_TYPES = [
     ActivityType(id="basketball", name="Basketball", icon="🏀", category="Sports"),
     ActivityType(id="soccer", name="Soccer", icon="⚽", category="Sports"),
     ActivityType(id="tennis", name="Tennis", icon="🎾", category="Sports"),
+    ActivityType(id="golf", name="Golf", icon="⛳", category="Sports"),
     ActivityType(id="hiking", name="Hiking", icon="🥾", category="Outdoor"),
     ActivityType(id="gym", name="Gym Workout", icon="💪", category="Fitness"),
+    ActivityType(id="core_exercise", name="Core Exercise", icon="🔥", category="Fitness"),
     ActivityType(id="other", name="Other", icon="⭐", category="Other"),
 ]

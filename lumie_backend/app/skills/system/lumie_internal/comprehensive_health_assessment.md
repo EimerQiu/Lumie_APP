@@ -51,6 +51,20 @@ This skill **depends on** prior execution of `health_data_query` for 5 domains (
 - Parent asks about a team member's overall health
 - Any request for a comprehensive or multi-domain health report
 
+# Schema
+
+This skill **does not query the database directly**. Instead, it synthesizes results from 5 parallel `health_data_query` calls. See:
+
+- [`health_data_query` skill definition](health_data_query.md) for the underlying data schemas
+- [health_data_query.md](health_data_query.md#collection-schemas) for links to all Pydantic models
+
+For the schemas queried by upstream skills, refer to:
+- [`SleepSessionResponse` (models/sleep.py)](../../models/sleep.py)
+- [`ActivityRecord` (models/activity.py)](../../models/activity.py)
+- [`HrvReadingResponse` (models/hrv.py)](../../models/hrv.py)
+- [`DailyStepResponse` (models/steps.py)](../../models/steps.py)
+- [`TaskResponse` (models/task.py)](../../models/task.py)
+
 # Architecture (DAG Execution)
 
 This skill is part of a **skill dependency chain**:

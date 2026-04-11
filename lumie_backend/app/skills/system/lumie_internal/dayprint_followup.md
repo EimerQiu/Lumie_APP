@@ -92,17 +92,20 @@ This skill helps the proactive advisor detect:
 - Classify concerns by category: health, medication, mood, social, other
 - Return structured data suitable for LLM decision-making
 
-# Collection Details
-- `dayprints`: One document per day per user
-  - `date`: ISO date string (YYYY-MM-DD)
-  - `user_id`: The user whose dayprint it is
-  - `events`: Array of daily events
-    - `event_id`: UUID for this specific event
-    - `type`: Event type — focus on "important_insight" events (automatically flagged by advisor when detecting concerns)
-    - `timestamp`: ISO datetime (UTC)
-    - `data`: Object containing event-specific fields
+# Collection Schemas
 
-## Important Insight Events (Priority!)
+See:
+- [`DayprintResponse` in models/dayprint.py](../../models/dayprint.py) — dayprint structure with events array
+- [`UserProfile` in models/user.py](../../models/user.py) — user profile for timezone context
+
+### Dayprint Event Structure
+
+From `DayprintResponse.events`:
+- `type` (string) — Event type, e.g. "important_insight", "advisor_chat"
+- `timestamp` (ISO datetime, UTC)
+- `data` (dict) — Event-specific fields
+
+### Important Insight Events (Priority!)
 
 **`important_insight` events** are automatically created when the advisor detects:
 - New or worsening symptoms
@@ -110,10 +113,10 @@ This skill helps the proactive advisor detect:
 - Emotional distress or health anxiety
 - Urgent health signals
 
-**Fields in important_insight.data:**
-- `category`: One of: `symptom`, `medication`, `emotional`, `health_concern`, `urgent`, `other`
-- `summary`: Brief description (3rd person, includes user's name)
-- `session_id`: Which advisor session detected this
+**Expected fields in `important_insight.data`:**
+- `category` (string) — One of: `symptom`, `medication`, `emotional`, `health_concern`, `urgent`, `other`
+- `summary` (string) — Brief description (3rd person, includes user's name)
+- `session_id` (string) — Which advisor session detected this
 
 **These are the priority concern markers!**
 - Scan for `important_insight` events first

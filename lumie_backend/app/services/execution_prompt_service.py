@@ -173,7 +173,11 @@ today_end_utc = today_start_utc + timedelta(days=1)
 yesterday_start_utc = today_start_utc - timedelta(days=1)
 yesterday_end_utc = today_start_utc
 
-# Query sleep for last night:
+# CRITICAL: Sleep spans calendar days (e.g. 11 PM → 7 AM next day)
+# "Last night" always means the most recent sleep session (bedtime yesterday evening)
+# Query by bedtime falling on "yesterday" — this captures sleep that started the night before
+# Example: If today is Thu 2026-04-10, yesterday = Wed 2026-04-09
+# A sleep session Wed 11 PM → Thu 7 AM has bedtime = Wed 11 PM (within yesterday range)
 sessions = await db.sleep_sessions.find({{
     "user_id": target_user_id,
     "bedtime": {{"$gte": yesterday_start_utc, "$lt": yesterday_end_utc}},
