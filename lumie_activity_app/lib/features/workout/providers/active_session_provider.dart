@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/foundation.dart';
+import '../../../core/services/workout_prefs_service.dart';
 import '../../../core/services/workout_service.dart';
 import '../../../shared/models/workout_plan_models.dart';
 
@@ -41,6 +42,9 @@ class ActiveSessionProvider extends ChangeNotifier {
   bool _isComplete = false;
   bool get isComplete => _isComplete;
 
+  bool _isIncomplete = false;
+  bool get isIncomplete => _isIncomplete;
+
   DateTime? _startedAt;
   DateTime? get startedAt => _startedAt;
 
@@ -56,6 +60,9 @@ class ActiveSessionProvider extends ChangeNotifier {
   int _currentRestDuration = 60; // tracks the initial rest for progress calc
   int get currentRestDuration => _currentRestDuration;
   int _defaultRestSeconds = 60;
+
+  bool _restTimerExpired = false;
+  bool get restTimerExpired => _restTimerExpired;
 
   // Skip detection tracking (per session, resets next session)
   final Set<int> _skipDetectionExercises = {};
@@ -96,6 +103,29 @@ class ActiveSessionProvider extends ChangeNotifier {
   // Overload suggestions (loaded after save)
   List<OverloadSuggestion> _overloadSuggestions = [];
   List<OverloadSuggestion> get overloadSuggestions => _overloadSuggestions;
+
+  // Weight unit preference ('lbs' or 'kg')
+  String _weightUnit = 'lbs';
+  String get weightUnit => _weightUnit;
+
+  Future<void> loadWeightUnit() async {
+    _weightUnit = await WorkoutPrefsService.getWeightUnit();
+    notifyListeners();
+  }
+
+  Future<void> setWeightUnit(String unit) async {
+    _weightUnit = unit;
+    await WorkoutPrefsService.setWeightUnit(unit);
+    notifyListeners();
+  }
+
+  // Session goal (set before workout starts)
+  String? _sessionGoal;
+  String? get sessionGoal => _sessionGoal;
+  void setSessionGoal(String? goal) {
+    _sessionGoal = goal;
+    notifyListeners();
+  }
 
   // Session notes
   String _sessionNotes = '';
@@ -148,7 +178,9 @@ class ActiveSessionProvider extends ChangeNotifier {
     _defaultRestSeconds = template.restDurationSeconds;
     _isActive = true;
     _isComplete = false;
+    _isIncomplete = false;
     _isResting = false;
+    _restTimerExpired = false;
     _currentExerciseIndex = 0;
     _currentSetIndex = 0;
     _elapsedSeconds = 0;
@@ -159,16 +191,24 @@ class ActiveSessionProvider extends ChangeNotifier {
     _skipDetectionExercises.clear();
     _sessionPRs = [];
     _overloadSuggestions = [];
+    _sessionGoal = null;
     _sessionNotes = '';
     _lastSessionWeights.clear();
 
-    // Build exercise queue from blocks
+    // Auto-normalize set types based on block exercise count and build queue
     _exerciseQueue = [];
     for (final block in template.blocks) {
+      final autoType = block.autoSetType;
+      final groupId =
+          block.exercises.length >= 2 ? block.blockId : null;
       for (final ex in block.exercises) {
+        ex.setType = autoType;
+        ex.groupId = groupId;
         _exerciseQueue.add(SessionExerciseEntry(
           exercise: ex,
           blockName: block.name,
+          blockRestBetweenExercises: block.restBetweenExercises,
+          blockRestBetweenRounds: block.restBetweenRounds,
         ));
       }
     }
@@ -208,6 +248,9 @@ class ActiveSessionProvider extends ChangeNotifier {
     });
 
     notifyListeners();
+
+    // Load user's preferred weight unit
+    _weightUnit = await WorkoutPrefsService.getWeightUnit();
 
     // Fetch last-session weights for all exercises in background
     await _prefillWeightsFromHistory();
@@ -287,14 +330,16 @@ class ActiveSessionProvider extends ChangeNotifier {
     // Check if this exercise is in a superset/circuit group
     final currentEx = currentTemplateExercise;
     if (currentEx != null && currentEx.groupId != null) {
+      final entry = _exerciseQueue[_currentExerciseIndex];
       final nextInGroup = _findNextInGroup(
         _currentExerciseIndex,
         currentEx.groupId!,
       );
       if (nextInGroup != null) {
-        // Move to next exercise in superset without rest
+        // Move to next exercise in group WITH rest (block-level rest)
         _currentExerciseIndex = nextInGroup;
         _currentSetIndex = _setsCompletedPerExercise[nextInGroup];
+        _startRestWithDuration(entry.blockRestBetweenExercises);
         notifyListeners();
         return;
       }
@@ -306,7 +351,10 @@ class ActiveSessionProvider extends ChangeNotifier {
         // More rounds to go — rest then start next round at group start
         _currentExerciseIndex = groupStart;
         _currentSetIndex = _setsCompletedPerExercise[groupStart];
-        _startRest();
+        // Circuits use between-rounds rest; supersets use between-exercises
+        final roundRest = entry.blockRestBetweenRounds ??
+            entry.blockRestBetweenExercises;
+        _startRestWithDuration(roundRest);
         notifyListeners();
         return;
       }
@@ -390,16 +438,74 @@ class ActiveSessionProvider extends ChangeNotifier {
     }
   }
 
+  /// Compute a sensible rest duration based on set type and equipment.
+  /// Used when the exercise's defaultRestSeconds is the old 60s placeholder.
+  int _computeSmartRestSeconds() {
+    final ex = currentTemplateExercise;
+    if (ex == null) return _defaultRestSeconds;
+
+    // If the exercise has a custom rest time (not the 60s default), honour it
+    if (ex.defaultRestSeconds != 60) return ex.defaultRestSeconds;
+
+    switch (ex.setType) {
+      case SetType.superset:
+        return 75; // 60–90s → 75s
+      case SetType.circuit:
+        return 50; // 45–60s → 50s
+      case SetType.dropSet:
+        return 60;
+      case SetType.straight:
+      case SetType.failure:
+        // Compound lifts (barbell / heavy bodyweight) get 2–3 min
+        if (ex.equipmentType == 'barbell') return 150;
+        if (ex.equipmentType == 'bodyweight') return 120;
+        // Isolation / machines get 90s
+        return 90;
+    }
+  }
+
+  /// Start rest with an explicit duration override (for block-level rest).
+  /// If [seconds] is null, shows the confirm button immediately (no countdown).
+  void _startRestWithDuration(int? seconds) {
+    _isResting = true;
+    _restTimerExpired = false;
+    if (seconds == null || seconds <= 0) {
+      // No countdown — just show "Ready?" confirm immediately
+      _currentRestDuration = 0;
+      _restSecondsRemaining = 0;
+      _restTimerExpired = true;
+      _restTimer?.cancel();
+      notifyListeners();
+      return;
+    }
+    _currentRestDuration = seconds;
+    _restSecondsRemaining = seconds;
+    _restTimer?.cancel();
+    _restTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+      _restSecondsRemaining--;
+      if (_restSecondsRemaining <= 0) {
+        _restSecondsRemaining = 0;
+        _restTimerExpired = true;
+        _restTimer?.cancel();
+      }
+      notifyListeners();
+    });
+    notifyListeners();
+  }
+
   void _startRest() {
     _isResting = true;
-    _currentRestDuration =
-        currentTemplateExercise?.defaultRestSeconds ?? _defaultRestSeconds;
+    _restTimerExpired = false;
+    _currentRestDuration = _computeSmartRestSeconds();
     _restSecondsRemaining = _currentRestDuration;
     _restTimer?.cancel();
     _restTimer = Timer.periodic(const Duration(seconds: 1), (_) {
       _restSecondsRemaining--;
       if (_restSecondsRemaining <= 0) {
-        skipRest();
+        // Timer expired — do NOT auto-start next set; wait for user
+        _restSecondsRemaining = 0;
+        _restTimerExpired = true;
+        _restTimer?.cancel();
       }
       notifyListeners();
     });
@@ -408,6 +514,7 @@ class ActiveSessionProvider extends ChangeNotifier {
 
   void skipRest() {
     _isResting = false;
+    _restTimerExpired = false;
     _restTimer?.cancel();
     notifyListeners();
   }
@@ -436,6 +543,7 @@ class ActiveSessionProvider extends ChangeNotifier {
 
   /// Force-finish: mark remaining sets as skipped and go to summary.
   void finishEarly() {
+    _isIncomplete = true;
     for (int i = 0; i < _completedExercises.length; i++) {
       final completed = _setsCompletedPerExercise[i];
       for (int s = completed; s < _completedExercises[i].sets.length; s++) {
@@ -483,6 +591,8 @@ class ActiveSessionProvider extends ChangeNotifier {
         'ended_at': endedAt.toIso8601String(),
         'duration_seconds': _elapsedSeconds,
         'exercises': _completedExercises.map((e) => e.toJson()).toList(),
+        'is_incomplete': _isIncomplete,
+        'session_goal': _sessionGoal,
         'heart_rate_avg': _heartRateAvg,
         'heart_rate_max': _heartRateMax,
         'notes': _sessionNotes.isNotEmpty ? _sessionNotes : null,
@@ -574,13 +684,17 @@ class ActiveSessionProvider extends ChangeNotifier {
   }
 }
 
-/// Pairs a TemplateExercise with its parent block name.
+/// Pairs a TemplateExercise with its parent block metadata.
 class SessionExerciseEntry {
   final TemplateExercise exercise;
   final String blockName;
+  final int? blockRestBetweenExercises;
+  final int? blockRestBetweenRounds;
 
   const SessionExerciseEntry({
     required this.exercise,
     required this.blockName,
+    this.blockRestBetweenExercises,
+    this.blockRestBetweenRounds,
   });
 }

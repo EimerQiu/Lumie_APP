@@ -2,13 +2,15 @@ import 'package:flutter/material.dart';
 import '../../../core/theme/app_colors.dart';
 
 /// Top bar for the active workout session showing workout name, block,
-/// elapsed duration timer, and rest countdown timer.
+/// elapsed duration timer, rest countdown timer, session goal, and end button.
 class SessionHeader extends StatelessWidget {
   final String workoutName;
   final String blockName;
   final int elapsedSeconds;
   final bool isResting;
   final int restSecondsRemaining;
+  final String? sessionGoal;
+  final VoidCallback? onEndWorkout;
 
   const SessionHeader({
     super.key,
@@ -17,6 +19,8 @@ class SessionHeader extends StatelessWidget {
     required this.elapsedSeconds,
     required this.isResting,
     required this.restSecondsRemaining,
+    this.sessionGoal,
+    this.onEndWorkout,
   });
 
   @override
@@ -32,7 +36,7 @@ class SessionHeader extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Workout name + block
+          // Workout name + block + timers
           Row(
             children: [
               Expanded(
@@ -112,8 +116,50 @@ class SessionHeader extends StatelessWidget {
                   ),
                 ),
               ],
+              if (onEndWorkout != null) ...[
+                const SizedBox(width: 8),
+                GestureDetector(
+                  onTap: onEndWorkout,
+                  child: Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                    decoration: BoxDecoration(
+                      color: Colors.red.withAlpha(30),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: Colors.red.withAlpha(60)),
+                    ),
+                    child: Text(
+                      'End',
+                      style: TextStyle(
+                        color: Colors.red.shade300,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                ),
+              ],
             ],
           ),
+          // Session goal label
+          if (sessionGoal != null && sessionGoal!.isNotEmpty) ...[
+            const SizedBox(height: 6),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+              decoration: BoxDecoration(
+                color: AppColors.primaryLemon.withAlpha(20),
+                borderRadius: BorderRadius.circular(6),
+              ),
+              child: Text(
+                'Goal: $sessionGoal',
+                style: TextStyle(
+                  color: AppColors.primaryLemon.withAlpha(200),
+                  fontSize: 11,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+            ),
+          ],
         ],
       ),
     );

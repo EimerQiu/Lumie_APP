@@ -266,9 +266,7 @@ class _ActivityHistoryScreenState extends State<ActivityHistoryScreen> {
   }
 
   void _showActivityPicker() {
-    final tier =
-        context.read<AuthProvider>().user?.subscriptionTier ??
-        SubscriptionTier.free;
+    final tier = context.read<AuthProvider>().subscriptionTier;
     final isPro = tier != SubscriptionTier.free;
 
     showModalBottomSheet(

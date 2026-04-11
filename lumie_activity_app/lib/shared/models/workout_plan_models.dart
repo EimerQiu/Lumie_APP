@@ -300,12 +300,37 @@ class WorkoutBlock {
   int order;
   List<TemplateExercise> exercises;
 
+  /// Rest between individual exercise transitions within this block (seconds).
+  /// Only relevant for blocks with 2+ exercises (supersets / circuits).
+  /// null = no countdown timer, just show the "Ready?" confirm button.
+  int? restBetweenExercises;
+
+  /// Rest between full rounds for circuits (3+ exercises), in seconds.
+  /// null = use the smart default rest duration.
+  int? restBetweenRounds;
+
   WorkoutBlock({
     required this.blockId,
     required this.name,
     this.order = 0,
     List<TemplateExercise>? exercises,
+    this.restBetweenExercises,
+    this.restBetweenRounds,
   }) : exercises = exercises ?? [];
+
+  /// Auto-detected set type based on exercise count.
+  SetType get autoSetType {
+    if (exercises.length >= 3) return SetType.circuit;
+    if (exercises.length == 2) return SetType.superset;
+    return SetType.straight;
+  }
+
+  /// Human-readable label for the auto-detected set type.
+  String? get setTypeLabel {
+    if (exercises.length >= 3) return 'Circuit';
+    if (exercises.length == 2) return 'Superset';
+    return null; // straight — no special label
+  }
 
   factory WorkoutBlock.fromJson(Map<String, dynamic> json) {
     return WorkoutBlock(
@@ -316,6 +341,8 @@ class WorkoutBlock {
               ?.map((e) => TemplateExercise.fromJson(e as Map<String, dynamic>))
               .toList() ??
           [],
+      restBetweenExercises: json['rest_between_exercises'] as int?,
+      restBetweenRounds: json['rest_between_rounds'] as int?,
     );
   }
 
@@ -324,6 +351,10 @@ class WorkoutBlock {
         'name': name,
         'order': order,
         'exercises': exercises.map((e) => e.toJson()).toList(),
+        if (restBetweenExercises != null)
+          'rest_between_exercises': restBetweenExercises,
+        if (restBetweenRounds != null)
+          'rest_between_rounds': restBetweenRounds,
       };
 }
 

@@ -261,6 +261,14 @@ class AuthService {
     if (response.statusCode == 200) {
       final data = json.decode(response.body);
       // Keep the existing token
+      SubscriptionTier subscriptionTier = SubscriptionTier.free;
+      if (data['subscription_tier'] != null) {
+        final tierStr = data['subscription_tier'] as String;
+        subscriptionTier = SubscriptionTier.values.firstWhere(
+          (e) => e.name == tierStr,
+          orElse: () => SubscriptionTier.free,
+        );
+      }
       final authResponse = AuthResponse(
         accessToken: _token!,
         userId: data['user_id'],
@@ -269,6 +277,7 @@ class AuthService {
             ? (data['role'] == 'teen' ? AccountRole.teen : AccountRole.parent)
             : null,
         profileComplete: data['profile_complete'] ?? false,
+        subscriptionTier: subscriptionTier,
       );
       await _saveAuthState(authResponse);
       return authResponse;

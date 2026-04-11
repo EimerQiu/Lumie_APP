@@ -20,6 +20,10 @@ import '../../sleep/providers/sleep_provider.dart';
 import '../../sleep/screens/sleep_screen.dart';
 import '../../tasks/providers/tasks_provider.dart';
 import '../../wellness/screens/wellness_detail_screen.dart';
+import '../../wellness/screens/stress_detail_screen.dart';
+import '../../wellness/providers/stress_provider.dart';
+import '../../../shared/models/stress_models.dart';
+import '../../wellness/widgets/stress_timeline_chart.dart';
 import '../../../core/services/ring_sync_service.dart';
 import '../widgets/activity_summary_card.dart';
 import '../widgets/quick_actions_section.dart';
@@ -79,6 +83,7 @@ class _DashboardScreenState extends State<DashboardScreen>
         tasksProvider.loadTasks();
       }
       context.read<WellnessProvider>().load();
+      context.read<StressProvider>().load();
       context.read<SleepProvider>().load();
       context.read<ActivityGoalProvider>().load();
       context.read<TodayStepsProvider>().load();
@@ -162,12 +167,14 @@ class _DashboardScreenState extends State<DashboardScreen>
               children: [
                 _buildScoreRow(),
                 const SizedBox(height: 12),
-                _buildHrCard(),
-                const SizedBox(height: 12),
                 const ActiveTasksCard(),
                 const SizedBox(height: 12),
                 if (!_isRestDay) ...[
                   _buildMainActivityRing(),
+                  const SizedBox(height: 12),
+                  _buildHrCard(),
+                  const SizedBox(height: 12),
+                  _buildStressCard(),
                   const SizedBox(height: 24),
                   Consumer<TodayStepsProvider>(
                     builder: (context, stepsProv, _) =>
@@ -272,15 +279,24 @@ class _DashboardScreenState extends State<DashboardScreen>
           ),
           _ScoreData(
             label: 'Stress',
-            score: 0,
-            centerLabel: stress.centerLabel,
+            score: context.watch<StressProvider>().hasData
+                ? context.watch<StressProvider>().score
+                : 0,
+            centerLabel: context.watch<StressProvider>().hasData
+                ? null
+                : (stress.centerLabel),
             icon: Icons.self_improvement,
-            color: stress.color,
-            progress: stress.progress,
+            color: context.watch<StressProvider>().hasData
+                ? (context.watch<StressProvider>().today?.averageZone.displayColor ??
+                    stress.color)
+                : stress.color,
+            progress: context.watch<StressProvider>().hasData
+                ? null
+                : stress.progress,
             onTap: () => Navigator.push(
               context,
               MaterialPageRoute(
-                builder: (_) => const WellnessDetailScreen(metric: WellnessMetric.stress),
+                builder: (_) => const StressDetailScreen(),
               ),
             ),
           ),
@@ -438,6 +454,136 @@ class _DashboardScreenState extends State<DashboardScreen>
                   ),
                   const Spacer(),
                   const Icon(Icons.chevron_right, color: AppColors.textSecondary),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildStressCard() {
+    return Consumer<StressProvider>(
+      builder: (context, stress, _) {
+        if (!stress.hasData && !stress.hasBaseline) {
+          return const SizedBox.shrink();
+        }
+
+        final today = stress.today;
+        final zone = stress.currentZone;
+        final zoneColor = zone?.displayColor ??
+            today?.averageZone.displayColor ??
+            AppColors.textLight;
+        final timeline = today?.timeline ?? [];
+
+        return Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16),
+          child: GestureDetector(
+            onTap: () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const StressDetailScreen()),
+            ),
+            child: Container(
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                color: AppColors.backgroundWhite.withValues(alpha: 0.70),
+                borderRadius: BorderRadius.circular(16),
+                boxShadow: AppColors.cardShadow,
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(8),
+                        decoration: BoxDecoration(
+                          color: zoneColor.withValues(alpha: 0.12),
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        child: Icon(
+                          Icons.self_improvement,
+                          color: zoneColor,
+                          size: 20,
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text(
+                            'Stress',
+                            style: TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w600,
+                              color: AppColors.textSecondary,
+                            ),
+                          ),
+                          if (stress.hasData && today != null)
+                            Row(
+                              children: [
+                                Text(
+                                  '${today.score}',
+                                  style: const TextStyle(
+                                    fontSize: 20,
+                                    fontWeight: FontWeight.bold,
+                                    color: AppColors.textPrimary,
+                                  ),
+                                ),
+                                const SizedBox(width: 6),
+                                Container(
+                                  width: 8,
+                                  height: 8,
+                                  decoration: BoxDecoration(
+                                    color: zone?.chartColor ??
+                                        today.averageZone.chartColor,
+                                    shape: BoxShape.circle,
+                                    border: (zone ?? today.averageZone) ==
+                                            StressZone.restored
+                                        ? Border.all(
+                                            color: AppColors.surfaceLight)
+                                        : null,
+                                  ),
+                                ),
+                                const SizedBox(width: 6),
+                                Text(
+                                  today.scoreLabel,
+                                  style: TextStyle(
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w500,
+                                    color: zoneColor,
+                                  ),
+                                ),
+                              ],
+                            )
+                          else
+                            Text(
+                              zone?.label ?? 'No data',
+                              style: TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.bold,
+                                color: zoneColor,
+                              ),
+                            ),
+                        ],
+                      ),
+                      const Spacer(),
+                      const Icon(
+                          Icons.chevron_right, color: AppColors.textSecondary),
+                    ],
+                  ),
+                  if (timeline.length >= 2) ...[
+                    const SizedBox(height: 10),
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(8),
+                      child: StressTimelineChart(
+                        readings: timeline,
+                        height: 48,
+                        compact: true,
+                      ),
+                    ),
+                  ],
                 ],
               ),
             ),

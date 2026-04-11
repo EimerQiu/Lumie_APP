@@ -2,9 +2,12 @@ import 'package:flutter/material.dart';
 import '../../../core/theme/app_colors.dart';
 
 /// Full-screen rest timer displayed between sets.
+/// When the timer reaches zero, shows a "Ready? Start Next Set" button
+/// instead of automatically starting the next set.
 class RestTimerWidget extends StatelessWidget {
   final int secondsRemaining;
   final int totalRestDuration;
+  final bool timerExpired;
   final VoidCallback onSkip;
   final void Function(int delta) onAdjust;
   final String nextExerciseName;
@@ -15,6 +18,7 @@ class RestTimerWidget extends StatelessWidget {
     super.key,
     required this.secondsRemaining,
     this.totalRestDuration = 60,
+    this.timerExpired = false,
     required this.onSkip,
     required this.onAdjust,
     required this.nextExerciseName,
@@ -34,9 +38,11 @@ class RestTimerWidget extends StatelessWidget {
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
             Text(
-              'REST',
+              timerExpired ? 'REST COMPLETE' : 'REST',
               style: TextStyle(
-                color: Colors.white.withAlpha(120),
+                color: timerExpired
+                    ? AppColors.primaryLemon
+                    : Colors.white.withAlpha(120),
                 fontSize: 14,
                 fontWeight: FontWeight.w600,
                 letterSpacing: 3,
@@ -57,33 +63,44 @@ class RestTimerWidget extends StatelessWidget {
                       value: progress.clamp(0.0, 1.0),
                       strokeWidth: 6,
                       backgroundColor: Colors.white.withAlpha(20),
-                      valueColor: const AlwaysStoppedAnimation(
-                          AppColors.primaryLemon),
+                      valueColor: AlwaysStoppedAnimation(
+                        timerExpired
+                            ? AppColors.primaryLemon
+                            : AppColors.primaryLemon,
+                      ),
                     ),
                   ),
-                  Text(
-                    _format(secondsRemaining),
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 48,
-                      fontWeight: FontWeight.w700,
-                      fontFamily: 'monospace',
+                  if (timerExpired)
+                    Icon(
+                      Icons.check_circle_outline,
+                      color: AppColors.primaryLemon,
+                      size: 56,
+                    )
+                  else
+                    Text(
+                      _format(secondsRemaining),
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 48,
+                        fontWeight: FontWeight.w700,
+                        fontFamily: 'monospace',
+                      ),
                     ),
-                  ),
                 ],
               ),
             ),
             const SizedBox(height: 24),
-            // +/- 10s buttons
-            Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                _AdjustButton(label: '-10s', onTap: () => onAdjust(-10)),
-                const SizedBox(width: 16),
-                _AdjustButton(label: '+10s', onTap: () => onAdjust(10)),
-              ],
-            ),
-            const SizedBox(height: 24),
+            // +/- 10s buttons (only while timer is counting)
+            if (!timerExpired)
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  _AdjustButton(label: '-10s', onTap: () => onAdjust(-10)),
+                  const SizedBox(width: 16),
+                  _AdjustButton(label: '+10s', onTap: () => onAdjust(10)),
+                ],
+              ),
+            if (!timerExpired) const SizedBox(height: 24),
             // Next exercise info
             if (nextExerciseName.isNotEmpty) ...[
               Text(
@@ -103,6 +120,7 @@ class RestTimerWidget extends StatelessWidget {
                   fontSize: 16,
                   fontWeight: FontWeight.w600,
                 ),
+                textAlign: TextAlign.center,
               ),
               Text(
                 'Set $nextSetIndex of $totalSets',
@@ -113,21 +131,29 @@ class RestTimerWidget extends StatelessWidget {
               ),
             ],
             const SizedBox(height: 32),
-            // Skip rest button
-            SizedBox(
-              width: 200,
-              height: 44,
-              child: ElevatedButton(
-                onPressed: onSkip,
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: AppColors.primaryLemon,
-                  foregroundColor: AppColors.textOnYellow,
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(12),
+            // Primary action button
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 24),
+              child: SizedBox(
+                width: double.infinity,
+                height: 52,
+                child: ElevatedButton(
+                  onPressed: onSkip,
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppColors.primaryLemon,
+                    foregroundColor: AppColors.textOnYellow,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(14),
+                    ),
+                  ),
+                  child: Text(
+                    timerExpired ? 'Ready? Start Next Set' : 'Skip Rest',
+                    style: const TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w700,
+                    ),
                   ),
                 ),
-                child: const Text('Skip Rest',
-                    style: TextStyle(fontWeight: FontWeight.w600)),
               ),
             ),
           ],

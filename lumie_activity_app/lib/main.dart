@@ -49,6 +49,7 @@ import 'shared/models/user_models.dart';
 import 'core/services/push_notification_service.dart';
 import 'core/services/checkin_service.dart';
 import 'features/wellness/providers/wellness_provider.dart';
+import 'features/wellness/providers/stress_provider.dart';
 import 'features/sleep/providers/sleep_provider.dart';
 import 'features/settings/providers/activity_goal_provider.dart';
 import 'features/settings/screens/activity_goal_screen.dart';
@@ -92,6 +93,7 @@ class LumieActivityApp extends StatelessWidget {
           update: (_, ring, hr) => hr!..updateRingProvider(ring),
         ),
         ChangeNotifierProvider(create: (_) => WellnessProvider()),
+        ChangeNotifierProvider(create: (_) => StressProvider()),
         ChangeNotifierProvider(create: (_) => SleepProvider()),
         ChangeNotifierProvider(create: (_) => ActivityGoalProvider()),
         ChangeNotifierProvider(create: (_) => RingSyncService()..init()),
@@ -302,8 +304,10 @@ class MainNavigationScreen extends StatefulWidget {
   State<MainNavigationScreen> createState() => _MainNavigationScreenState();
 }
 
-class _MainNavigationScreenState extends State<MainNavigationScreen> {
+class _MainNavigationScreenState extends State<MainNavigationScreen>
+    with WidgetsBindingObserver {
   int _currentIndex = 0;
+  AuthProvider? _authProvider;
 
   void _handlePushPayload(Map<String, dynamic> data) {
     final navigateTo = data['navigate_to'] as String?;
@@ -334,21 +338,17 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
   @override
   void initState() {
     super.initState();
-    // Initialize TeamsProvider with user's subscription tier
+    WidgetsBinding.instance.addObserver(this);
+
+    // Initialize providers with user's subscription tier
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      final authProvider = context.read<AuthProvider>();
-      final teamsProvider = context.read<TeamsProvider>();
+      _authProvider = context.read<AuthProvider>();
       final ringProvider = context.read<RingProvider>();
 
-      final tasksProvider = context.read<TasksProvider>();
-
-      if (authProvider.profile?.subscription.tier != null) {
-        teamsProvider.setUserTier(authProvider.profile!.subscription.tier);
-        tasksProvider.setUserTier(authProvider.profile!.subscription.tier);
-      }
+      _syncSubscriptionTier();
 
       // Pass auth token to ring service and workout providers
-      final token = authProvider.user?.accessToken;
+      final token = _authProvider!.user?.accessToken;
       if (token != null) {
         ringProvider.setToken(token);
         context.read<ExerciseLibraryProvider>().setToken(token);
@@ -360,11 +360,40 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
 
       // Reload ring info (in case it was paired while away)
       ringProvider.init();
+
+      // Listen for profile changes (e.g. after refreshProfile) to propagate tier
+      _authProvider!.addListener(_onAuthChanged);
     });
 
     // Listen for notification taps to deep-link to the right screen
     PushNotificationService().setOnNotificationTap(_handlePushPayload);
     PushNotificationService().setOnNotificationReceived(_handlePushPayload);
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _authProvider?.removeListener(_onAuthChanged);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      // Refresh subscription status from backend on every foreground resume
+      _authProvider?.refreshProfile();
+    }
+  }
+
+  void _onAuthChanged() {
+    _syncSubscriptionTier();
+  }
+
+  /// Push the latest subscription tier from AuthProvider to child providers.
+  void _syncSubscriptionTier() {
+    final tier = _authProvider?.subscriptionTier ?? SubscriptionTier.free;
+    context.read<TeamsProvider>().setUserTier(tier);
+    context.read<TasksProvider>().setUserTier(tier);
   }
 
   @override
@@ -433,9 +462,7 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
   }
 
   void _showWorkoutPicker() {
-    final tier =
-        context.read<AuthProvider>().user?.subscriptionTier ??
-        SubscriptionTier.free;
+    final tier = context.read<AuthProvider>().subscriptionTier;
     final isPro = tier != SubscriptionTier.free;
 
     showModalBottomSheet(

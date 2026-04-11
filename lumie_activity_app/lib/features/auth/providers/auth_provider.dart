@@ -36,6 +36,11 @@ class AuthProvider extends ChangeNotifier {
   UserProfile? get profile => _profile;
   bool get isAuthenticated => _state == AuthState.authenticated;
 
+  /// Single source of truth for subscription tier.
+  /// Reads from the profile (refreshed from backend) with fallback to AuthResponse.
+  SubscriptionTier get subscriptionTier =>
+      _profile?.subscription.tier ?? _user?.subscriptionTier ?? SubscriptionTier.free;
+
   Future<void> refreshProfile() async {
     if (!_authService.isAuthenticated) return;
     try {

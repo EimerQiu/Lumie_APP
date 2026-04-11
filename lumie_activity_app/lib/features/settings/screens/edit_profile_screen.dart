@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import '../../../core/services/workout_prefs_service.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../shared/models/user_models.dart';
 import '../../../shared/widgets/gradient_card.dart';
@@ -28,6 +29,9 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
   HeightUnit _heightUnit = HeightUnit.cm;
   WeightUnit _weightUnit = WeightUnit.kg;
 
+  // Workout weight display unit (separate from body weight unit)
+  String _workoutWeightUnit = 'lbs';
+
   bool _isSaving = false;
   bool _isLoading = true;
   String? _errorMessage;
@@ -48,7 +52,10 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
     } catch (_) {
       // refreshProfile never throws — swallows errors internally.
     }
+    // Load workout weight unit preference
+    final wu = await WorkoutPrefsService.getWeightUnit();
     if (mounted) {
+      _workoutWeightUnit = wu;
       _applyProfile(context.read<AuthProvider>().profile);
       setState(() => _isLoading = false);
     }
@@ -297,6 +304,41 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
                           hint: _weightUnit == WeightUnit.kg ? 'e.g. 60' : 'e.g. 132',
                           keyboardType: const TextInputType.numberWithOptions(decimal: true),
                           prefixIcon: Icons.monitor_weight_outlined,
+                        ),
+                      ],
+                    ),
+                  ),
+
+                  const SizedBox(height: 16),
+
+                  // ── Workout Weight Unit ──────────────────────────────────────────
+                  GradientCard(
+                    gradient: AppColors.cardGradient,
+                    margin: EdgeInsets.zero,
+                    padding: const EdgeInsets.all(16),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text('Workout Weight Unit',
+                            style: TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.w600,
+                                color: AppColors.textPrimary)),
+                        const SizedBox(height: 4),
+                        const Text(
+                          'Unit used for logging weights during workouts.',
+                          style: TextStyle(
+                              fontSize: 13, color: AppColors.textSecondary),
+                        ),
+                        const SizedBox(height: 12),
+                        UnitSelector<String>(
+                          options: const ['lbs', 'kg'],
+                          value: _workoutWeightUnit,
+                          labelBuilder: (u) => u,
+                          onChanged: (u) {
+                            setState(() => _workoutWeightUnit = u);
+                            WorkoutPrefsService.setWeightUnit(u);
+                          },
                         ),
                       ],
                     ),

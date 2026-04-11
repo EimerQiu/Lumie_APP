@@ -1,14 +1,17 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../shared/models/workout_plan_models.dart';
 
 /// Manual logging view for machine exercises or when camera detection is skipped.
-/// Shows exercise name, set number, weight/reps input fields, and a complete button.
+/// Shows exercise name, set number, weight/reps input fields with +/- steppers,
+/// and a complete button.
 class ManualExerciseView extends StatefulWidget {
   final TemplateExercise exercise;
   final int setIndex;
   final int totalSets;
   final double? prefilledWeight;
+  final String weightUnitLabel;
   final void Function(int reps, double? weight, SetCompletionStatus status,
       String? notes) onSetComplete;
   final VoidCallback? onEnableCamera;
@@ -19,6 +22,7 @@ class ManualExerciseView extends StatefulWidget {
     required this.setIndex,
     required this.totalSets,
     this.prefilledWeight,
+    this.weightUnitLabel = 'lbs',
     required this.onSetComplete,
     this.onEnableCamera,
   });
@@ -66,6 +70,14 @@ class _ManualExerciseViewState extends State<ManualExerciseView> {
     super.dispose();
   }
 
+  void _stepValue(TextEditingController controller, double delta,
+      {bool isInt = true}) {
+    final current = double.tryParse(controller.text) ?? 0;
+    final next = (current + delta).clamp(0, 99999);
+    controller.text =
+        isInt ? next.toInt().toString() : next.toStringAsFixed(1);
+  }
+
   @override
   Widget build(BuildContext context) {
     return Padding(
@@ -111,22 +123,25 @@ class _ManualExerciseViewState extends State<ManualExerciseView> {
             ),
           ),
           const SizedBox(height: 36),
-          // Weight input
+          // Weight input with steppers
           Row(
             children: [
               Expanded(
-                child: _InputField(
+                child: _StepperInputField(
                   controller: _weightController,
-                  label: 'Weight (lbs)',
-                  keyboardType: TextInputType.number,
+                  label: 'Weight (${widget.weightUnitLabel})',
+                  step: 5,
+                  onStep: (delta) => _stepValue(_weightController, delta),
                 ),
               ),
               const SizedBox(width: 16),
               Expanded(
-                child: _InputField(
+                child: _StepperInputField(
                   controller: _repsController,
                   label: 'Reps',
-                  keyboardType: TextInputType.number,
+                  step: 1,
+                  onStep: (delta) =>
+                      _stepValue(_repsController, delta, isInt: true),
                 ),
               ),
             ],
@@ -164,11 +179,12 @@ class _ManualExerciseViewState extends State<ManualExerciseView> {
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
               TextButton(
-                onPressed: () => _completeWithStatus(SetCompletionStatus.failed),
+                onPressed: () =>
+                    _completeWithStatus(SetCompletionStatus.failed),
                 child: Text(
                   'Mark as Failed',
-                  style: TextStyle(
-                      color: Colors.red.shade300, fontSize: 13),
+                  style:
+                      TextStyle(color: Colors.red.shade300, fontSize: 13),
                 ),
               ),
               if (widget.onEnableCamera != null) ...[
@@ -210,7 +226,119 @@ class _ManualExerciseViewState extends State<ManualExerciseView> {
   }
 }
 
-// ── Input field ─────────────────────────────────────────────────────────────
+// ── Stepper input field ─────────────────────────────────────────────────────
+
+class _StepperInputField extends StatelessWidget {
+  final TextEditingController controller;
+  final String label;
+  final double step;
+  final void Function(double delta) onStep;
+
+  const _StepperInputField({
+    required this.controller,
+    required this.label,
+    required this.step,
+    required this.onStep,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          label,
+          style: TextStyle(color: Colors.white.withAlpha(120), fontSize: 12),
+        ),
+        const SizedBox(height: 6),
+        Row(
+          children: [
+            // Minus button
+            _StepButton(
+              icon: Icons.remove,
+              onTap: () => onStep(-step),
+            ),
+            const SizedBox(width: 8),
+            // Editable text field
+            Expanded(
+              child: TextField(
+                controller: controller,
+                keyboardType:
+                    const TextInputType.numberWithOptions(decimal: true),
+                inputFormatters: [
+                  FilteringTextInputFormatter.allow(RegExp(r'[\d.]')),
+                ],
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 22,
+                    fontWeight: FontWeight.w700),
+                decoration: InputDecoration(
+                  filled: true,
+                  fillColor: Colors.white.withAlpha(12),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: BorderSide(color: Colors.white.withAlpha(30)),
+                  ),
+                  enabledBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: BorderSide(color: Colors.white.withAlpha(30)),
+                  ),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide:
+                        const BorderSide(color: AppColors.primaryLemon),
+                  ),
+                  contentPadding: const EdgeInsets.symmetric(
+                      horizontal: 8, vertical: 12),
+                ),
+                onTapOutside: (_) {
+                  // Default to 0 if empty on focus loss
+                  if (controller.text.trim().isEmpty) {
+                    controller.text = '0';
+                  }
+                  FocusScope.of(context).unfocus();
+                },
+              ),
+            ),
+            const SizedBox(width: 8),
+            // Plus button
+            _StepButton(
+              icon: Icons.add,
+              onTap: () => onStep(step),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+}
+
+class _StepButton extends StatelessWidget {
+  final IconData icon;
+  final VoidCallback onTap;
+
+  const _StepButton({required this.icon, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        width: 40,
+        height: 40,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          color: Colors.white.withAlpha(15),
+          border: Border.all(color: Colors.white.withAlpha(30)),
+        ),
+        child: Icon(icon, color: Colors.white, size: 18),
+      ),
+    );
+  }
+}
+
+// ── Plain input field (for notes) ───────────────────────────────────────────
 
 class _InputField extends StatelessWidget {
   final TextEditingController controller;
@@ -231,7 +359,8 @@ class _InputField extends StatelessWidget {
       style: const TextStyle(color: Colors.white, fontSize: 18),
       decoration: InputDecoration(
         labelText: label,
-        labelStyle: TextStyle(color: Colors.white.withAlpha(120), fontSize: 13),
+        labelStyle:
+            TextStyle(color: Colors.white.withAlpha(120), fontSize: 13),
         filled: true,
         fillColor: Colors.white.withAlpha(12),
         border: OutlineInputBorder(

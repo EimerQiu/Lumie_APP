@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../shared/models/workout_plan_models.dart';
@@ -47,8 +48,9 @@ class _PostWorkoutSummaryScreenState extends State<PostWorkoutSummaryScreen>
       appBar: AppBar(
         backgroundColor: Colors.white,
         elevation: 0,
-        title: const Text('Workout Complete',
-            style: TextStyle(
+        title: Text(
+            session.isIncomplete ? 'Workout Incomplete' : 'Workout Complete',
+            style: const TextStyle(
                 color: AppColors.textPrimary, fontWeight: FontWeight.w600)),
         automaticallyImplyLeading: false,
       ),
@@ -66,9 +68,38 @@ class _PostWorkoutSummaryScreenState extends State<PostWorkoutSummaryScreen>
             ),
             const SizedBox(height: 16),
 
+            // Incomplete banner
+            if (session.isIncomplete) ...[
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.orange.shade50,
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: Colors.orange.shade200),
+                ),
+                child: Row(
+                  children: [
+                    Icon(Icons.info_outline,
+                        size: 18, color: Colors.orange.shade700),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        'This workout was ended early. Only completed sets are shown.',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: Colors.orange.shade800,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 16),
+            ],
+
             // PR celebration banner (shown after save detects PRs)
             if (session.sessionPRs.isNotEmpty) ...[
-              _PRBanner(prs: session.sessionPRs),
+              _PRBanner(prs: session.sessionPRs, weightUnit: session.weightUnit),
               const SizedBox(height: 16),
             ],
 
@@ -85,6 +116,7 @@ class _PostWorkoutSummaryScreenState extends State<PostWorkoutSummaryScreen>
               return _ExerciseBreakdownCard(
                 exerciseIndex: entry.key,
                 exercise: entry.value,
+                weightUnit: session.weightUnit,
                 onEditSet: (setIdx, reps, weight, status) {
                   session.updateSet(
                     entry.key,
@@ -272,8 +304,9 @@ class _StatItem extends StatelessWidget {
 
 class _PRBanner extends StatelessWidget {
   final List<Map<String, dynamic>> prs;
+  final String weightUnit;
 
-  const _PRBanner({required this.prs});
+  const _PRBanner({required this.prs, this.weightUnit = 'lbs'});
 
   @override
   Widget build(BuildContext context) {
@@ -325,7 +358,7 @@ class _PRBanner extends StatelessWidget {
                       style: TextStyle(fontSize: 14)),
                   Expanded(
                     child: Text(
-                      '$exerciseName — ${_prLabel(prType, value)}',
+                      '$exerciseName — ${_prLabel(prType, value, weightUnit)}',
                       style: const TextStyle(
                         fontSize: 13,
                         fontWeight: FontWeight.w600,
@@ -350,14 +383,14 @@ class _PRBanner extends StatelessWidget {
     );
   }
 
-  static String _prLabel(String type, double value) {
+  static String _prLabel(String type, double value, String weightUnit) {
     switch (type) {
       case 'max_weight':
-        return '${value.toStringAsFixed(0)} lbs (Weight)';
+        return '${value.toStringAsFixed(0)} $weightUnit (Weight)';
       case 'max_reps':
         return '${value.toStringAsFixed(0)} reps (Reps)';
       case 'max_volume':
-        return '${value.toStringAsFixed(0)} lbs (Volume)';
+        return '${value.toStringAsFixed(0)} $weightUnit (Volume)';
       default:
         return value.toStringAsFixed(0);
     }
@@ -475,6 +508,7 @@ class _SectionTitle extends StatelessWidget {
 class _ExerciseBreakdownCard extends StatelessWidget {
   final int exerciseIndex;
   final CompletedExercise exercise;
+  final String weightUnit;
   final void Function(
           int setIdx, int reps, double? weight, SetCompletionStatus? status)
       onEditSet;
@@ -482,6 +516,7 @@ class _ExerciseBreakdownCard extends StatelessWidget {
   const _ExerciseBreakdownCard({
     required this.exerciseIndex,
     required this.exercise,
+    this.weightUnit = 'lbs',
     required this.onEditSet,
   });
 
@@ -518,7 +553,7 @@ class _ExerciseBreakdownCard extends StatelessWidget {
                 ),
               ),
               Text(
-                '${exercise.totalVolume.toStringAsFixed(0)} lbs',
+                '${exercise.totalVolume.toStringAsFixed(0)} $weightUnit',
                 style: TextStyle(
                     fontSize: 12, color: AppColors.textSecondary),
               ),
@@ -570,7 +605,7 @@ class _ExerciseBreakdownCard extends StatelessWidget {
                         isSkipped
                             ? 'Skipped'
                             : s.actualWeight != null && s.actualWeight! > 0
-                                ? '${s.actualWeight!.toStringAsFixed(0)} lbs x ${s.actualReps}'
+                                ? '${s.actualWeight!.toStringAsFixed(0)} $weightUnit x ${s.actualReps}'
                                 : '${s.actualReps} reps',
                         style: TextStyle(
                           fontSize: 13,
@@ -634,8 +669,12 @@ class _ExerciseBreakdownCard extends StatelessWidget {
             children: [
               TextField(
                 controller: weightController,
-                keyboardType: TextInputType.number,
-                decoration: const InputDecoration(labelText: 'Weight (lbs)'),
+                keyboardType:
+                    const TextInputType.numberWithOptions(decimal: true),
+                inputFormatters: [
+                  FilteringTextInputFormatter.allow(RegExp(r'[\d.]')),
+                ],
+                decoration: InputDecoration(labelText: 'Weight ($weightUnit)'),
               ),
               const SizedBox(height: 8),
               TextField(

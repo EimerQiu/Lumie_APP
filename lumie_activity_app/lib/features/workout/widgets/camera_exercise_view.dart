@@ -3,6 +3,7 @@ import 'dart:io';
 import 'dart:math' as math;
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:google_mlkit_pose_detection/google_mlkit_pose_detection.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../shared/models/workout_plan_models.dart';
@@ -19,6 +20,7 @@ class CameraExerciseView extends StatefulWidget {
   final int setIndex;
   final int totalSets;
   final double? prefilledWeight;
+  final String weightUnitLabel;
   final void Function(int reps, double? weight, SetCompletionStatus status)
       onSetComplete;
   final VoidCallback onSkipDetection;
@@ -29,6 +31,7 @@ class CameraExerciseView extends StatefulWidget {
     required this.setIndex,
     required this.totalSets,
     this.prefilledWeight,
+    this.weightUnitLabel = 'lbs',
     required this.onSetComplete,
     required this.onSkipDetection,
   });
@@ -60,8 +63,15 @@ class _CameraExerciseViewState extends State<CameraExerciseView> {
   double? _weight;
   late TextEditingController _weightController;
 
+  // Editable rep counter
+  bool _editingReps = false;
+  late TextEditingController _repController;
+
   // Demo phase: true = showing full-screen demo, false = active set with camera
   bool _showingDemo = true;
+
+  // Pre-set confirmation phase: weight entry before camera starts
+  bool _showingPreSet = false;
 
   // Orientation banner
   bool _showOrientationBanner = true;
@@ -91,11 +101,13 @@ class _CameraExerciseViewState extends State<CameraExerciseView> {
       text: w?.toStringAsFixed(0) ?? '',
     );
     _weight = w;
+    _repController = TextEditingController(text: '0');
     _showingDemo = getDemoForPoseType(widget.exercise.poseType) != null;
-    // Camera init is deferred until demo completes (or if no demo)
+    // If no demo, go straight to pre-set weight confirmation
     if (!_showingDemo) {
-      _initCamera();
+      _showingPreSet = true;
     }
+    // Camera init is deferred until user confirms weight in pre-set screen
     _initPoseDetector();
   }
 
@@ -112,20 +124,34 @@ class _CameraExerciseViewState extends State<CameraExerciseView> {
         _weightController.text = w.toStringAsFixed(0);
         _weight = w;
       }
-      // Reset to demo phase for new set / new exercise
+      _repController.text = '0';
+      _editingReps = false;
+      // Reset to demo or pre-set phase for new set / new exercise
       final hasDemo = getDemoForPoseType(widget.exercise.poseType) != null;
       setState(() {
         _showingDemo = hasDemo;
+        _showingPreSet = !hasDemo; // If no demo, go straight to pre-set
         _showOrientationBanner = true;
       });
     }
   }
 
   void _onDemoComplete() {
-    setState(() => _showingDemo = false);
-    _showOrientationBanner = true;
+    // After demo, show pre-set weight confirmation (camera stays off)
+    setState(() {
+      _showingDemo = false;
+      _showingPreSet = true;
+    });
+  }
+
+  void _onPreSetConfirmed() {
+    // User confirmed weight — start camera
+    _weight = double.tryParse(_weightController.text);
+    setState(() {
+      _showingPreSet = false;
+      _showOrientationBanner = true;
+    });
     _startBannerTimer();
-    // Start camera now if not already initialized
     if (!_cameraInitialized) {
       _initCamera();
     }
@@ -269,6 +295,7 @@ class _CameraExerciseViewState extends State<CameraExerciseView> {
         if (mounted) {
           setState(() {
             _repCount++;
+            _repController.text = '$_repCount';
             _formFeedback = 'Good rep!';
             _formGood = true;
           });
@@ -359,6 +386,169 @@ class _CameraExerciseViewState extends State<CameraExerciseView> {
         : 'Face the camera DIRECTLY for this exercise';
   }
 
+  Widget _buildPreSetScreen() {
+    return Container(
+      color: const Color(0xFF1A1A2E),
+      padding: const EdgeInsets.all(32),
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          const Spacer(),
+          // Exercise name
+          Text(
+            widget.exercise.exerciseName,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 26,
+              fontWeight: FontWeight.w700,
+            ),
+            textAlign: TextAlign.center,
+          ),
+          const SizedBox(height: 10),
+          // Set number
+          Text(
+            'Set ${widget.setIndex + 1} of ${widget.totalSets}',
+            style: TextStyle(
+              color: Colors.white.withAlpha(180),
+              fontSize: 16,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            'Target: ${widget.exercise.defaultReps} reps',
+            style: TextStyle(
+              color: Colors.white.withAlpha(140),
+              fontSize: 14,
+            ),
+          ),
+          const SizedBox(height: 40),
+          // Weight input with label
+          Text(
+            'Weight for this set',
+            style: TextStyle(
+              color: Colors.white.withAlpha(150),
+              fontSize: 13,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+          const SizedBox(height: 12),
+          // +/- stepper with text field
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              _CircleButton(
+                icon: Icons.remove,
+                onTap: () {
+                  final cur = double.tryParse(_weightController.text) ?? 0;
+                  final next = (cur - 5).clamp(0, 99999).toDouble();
+                  _weightController.text = next == next.roundToDouble()
+                      ? next.toInt().toString()
+                      : next.toStringAsFixed(1);
+                  setState(() => _weight = next);
+                },
+              ),
+              const SizedBox(width: 16),
+              SizedBox(
+                width: 120,
+                child: TextField(
+                  controller: _weightController,
+                  keyboardType:
+                      const TextInputType.numberWithOptions(decimal: true),
+                  inputFormatters: [
+                    FilteringTextInputFormatter.allow(RegExp(r'[\d.]')),
+                  ],
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 32,
+                    fontWeight: FontWeight.w800,
+                  ),
+                  onChanged: (v) => _weight = double.tryParse(v),
+                  onTapOutside: (_) {
+                    if (_weightController.text.trim().isEmpty) {
+                      _weightController.text = '0';
+                      _weight = 0;
+                    }
+                    FocusScope.of(context).unfocus();
+                  },
+                  decoration: InputDecoration(
+                    suffixText: widget.weightUnitLabel,
+                    suffixStyle: TextStyle(
+                      color: Colors.white.withAlpha(120),
+                      fontSize: 16,
+                    ),
+                    filled: true,
+                    fillColor: Colors.white.withAlpha(12),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(14),
+                      borderSide:
+                          BorderSide(color: Colors.white.withAlpha(30)),
+                    ),
+                    enabledBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(14),
+                      borderSide:
+                          BorderSide(color: Colors.white.withAlpha(30)),
+                    ),
+                    focusedBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(14),
+                      borderSide:
+                          const BorderSide(color: AppColors.primaryLemon),
+                    ),
+                    contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 12, vertical: 14),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 16),
+              _CircleButton(
+                icon: Icons.add,
+                onTap: () {
+                  final cur = double.tryParse(_weightController.text) ?? 0;
+                  final next = cur + 5;
+                  _weightController.text = next == next.roundToDouble()
+                      ? next.toInt().toString()
+                      : next.toStringAsFixed(1);
+                  setState(() => _weight = next);
+                },
+              ),
+            ],
+          ),
+          const SizedBox(height: 48),
+          // Confirm button
+          SizedBox(
+            width: double.infinity,
+            height: 56,
+            child: ElevatedButton.icon(
+              onPressed: _onPreSetConfirmed,
+              icon: const Icon(Icons.videocam, size: 20),
+              label: const Text(
+                'Confirm & Start Set',
+                style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700),
+              ),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.primaryLemon,
+                foregroundColor: AppColors.textOnYellow,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(16),
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
+          TextButton(
+            onPressed: widget.onSkipDetection,
+            child: Text(
+              'Skip Camera Detection',
+              style: TextStyle(
+                  color: Colors.white.withAlpha(150), fontSize: 13),
+            ),
+          ),
+          const Spacer(),
+        ],
+      ),
+    );
+  }
+
   @override
   void dispose() {
     _bannerTimer?.cancel();
@@ -366,6 +556,7 @@ class _CameraExerciseViewState extends State<CameraExerciseView> {
     _cameraController?.dispose();
     _poseDetector?.close();
     _weightController.dispose();
+    _repController.dispose();
     super.dispose();
   }
 
@@ -378,6 +569,11 @@ class _CameraExerciseViewState extends State<CameraExerciseView> {
         exerciseName: widget.exercise.exerciseName,
         onComplete: _onDemoComplete,
       );
+    }
+
+    // ── Pre-set phase: weight confirmation before camera starts ─────────
+    if (_showingPreSet) {
+      return _buildPreSetScreen();
     }
 
     // ── Active set phase: camera + rep counting + mini PiP ────────────────
@@ -447,38 +643,104 @@ class _CameraExerciseViewState extends State<CameraExerciseView> {
                     color: Colors.white.withAlpha(180), fontSize: 13),
               ),
               const SizedBox(height: 20),
-              // Rep counter
-              Container(
-                width: 120,
-                height: 120,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: Colors.black.withAlpha(120),
-                  border: Border.all(
-                    color: AppColors.primaryLemon.withAlpha(180),
-                    width: 3,
+              // Rep counter — tappable to type directly, with +/- steppers
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  _CircleButton(
+                    icon: Icons.remove,
+                    onTap: () {
+                      if (_repCount > 0) {
+                        setState(() {
+                          _repCount--;
+                          _repController.text = '$_repCount';
+                        });
+                      }
+                    },
                   ),
-                ),
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Text(
-                      '$_repCount',
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 40,
-                        fontWeight: FontWeight.w800,
+                  const SizedBox(width: 16),
+                  GestureDetector(
+                    onTap: () => setState(() => _editingReps = true),
+                    child: Container(
+                      width: 120,
+                      height: 120,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: Colors.black.withAlpha(120),
+                        border: Border.all(
+                          color: AppColors.primaryLemon.withAlpha(180),
+                          width: 3,
+                        ),
                       ),
+                      child: _editingReps
+                          ? Center(
+                              child: SizedBox(
+                                width: 70,
+                                child: TextField(
+                                  controller: _repController,
+                                  autofocus: true,
+                                  keyboardType: TextInputType.number,
+                                  textAlign: TextAlign.center,
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 36,
+                                    fontWeight: FontWeight.w800,
+                                  ),
+                                  decoration: const InputDecoration(
+                                    border: InputBorder.none,
+                                    contentPadding: EdgeInsets.zero,
+                                    isDense: true,
+                                  ),
+                                  onSubmitted: (v) {
+                                    setState(() {
+                                      _repCount = int.tryParse(v) ?? _repCount;
+                                      _repController.text = '$_repCount';
+                                      _editingReps = false;
+                                    });
+                                  },
+                                  onTapOutside: (_) {
+                                    setState(() {
+                                      _repCount =
+                                          int.tryParse(_repController.text) ??
+                                              _repCount;
+                                      _repController.text = '$_repCount';
+                                      _editingReps = false;
+                                    });
+                                  },
+                                ),
+                              ),
+                            )
+                          : Column(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Text(
+                                  '$_repCount',
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 40,
+                                    fontWeight: FontWeight.w800,
+                                  ),
+                                ),
+                                Text(
+                                  'reps (tap to edit)',
+                                  style: TextStyle(
+                                    color: Colors.white.withAlpha(150),
+                                    fontSize: 10,
+                                  ),
+                                ),
+                              ],
+                            ),
                     ),
-                    Text(
-                      'reps',
-                      style: TextStyle(
-                        color: Colors.white.withAlpha(150),
-                        fontSize: 12,
-                      ),
-                    ),
-                  ],
-                ),
+                  ),
+                  const SizedBox(width: 16),
+                  _CircleButton(
+                    icon: Icons.add,
+                    onTap: () => setState(() {
+                      _repCount++;
+                      _repController.text = '$_repCount';
+                    }),
+                  ),
+                ],
               ),
               const SizedBox(height: 10),
               // Form feedback
@@ -503,24 +765,6 @@ class _CameraExerciseViewState extends State<CameraExerciseView> {
                   ),
                 ),
               const SizedBox(height: 12),
-              // Manual rep correction buttons
-              Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  _CircleButton(
-                    icon: Icons.remove,
-                    onTap: () {
-                      if (_repCount > 0) setState(() => _repCount--);
-                    },
-                  ),
-                  const SizedBox(width: 24),
-                  _CircleButton(
-                    icon: Icons.add,
-                    onTap: () => setState(() => _repCount++),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 12),
               // Weight input (for free weights)
               if (widget.exercise.equipmentType == 'dumbbell' ||
                   widget.exercise.equipmentType == 'barbell')
@@ -528,13 +772,17 @@ class _CameraExerciseViewState extends State<CameraExerciseView> {
                   padding: const EdgeInsets.symmetric(horizontal: 60),
                   child: TextField(
                     controller: _weightController,
-                    keyboardType: TextInputType.number,
+                    keyboardType: const TextInputType.numberWithOptions(
+                        decimal: true),
+                    inputFormatters: [
+                      FilteringTextInputFormatter.allow(RegExp(r'[\d.]')),
+                    ],
                     textAlign: TextAlign.center,
                     style:
                         const TextStyle(color: Colors.white, fontSize: 18),
                     onChanged: (v) => _weight = double.tryParse(v),
                     decoration: InputDecoration(
-                      labelText: 'Weight (lbs)',
+                      labelText: 'Weight (${widget.weightUnitLabel})',
                       labelStyle: TextStyle(
                           color: Colors.white.withAlpha(120), fontSize: 12),
                       filled: true,
