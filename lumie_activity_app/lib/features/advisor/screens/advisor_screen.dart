@@ -108,6 +108,7 @@ class _ChatTab extends StatefulWidget {
 class _ChatTabState extends State<_ChatTab> {
   final TextEditingController _input = TextEditingController();
   final ScrollController _scroll = ScrollController();
+  final FocusNode _inputFocusNode = FocusNode();
   final AdvisorV2Service _advisor = AdvisorV2Service();
   final ChatHistoryService _historyService = ChatHistoryService();
 
@@ -137,6 +138,7 @@ class _ChatTabState extends State<_ChatTab> {
   void dispose() {
     _input.dispose();
     _scroll.dispose();
+    _inputFocusNode.dispose();
     super.dispose();
   }
 
@@ -144,7 +146,9 @@ class _ChatTabState extends State<_ChatTab> {
     final prefs = await SharedPreferences.getInstance();
 
     // Check for proactive messages first
-    final proactiveMessages = await _historyService.fetchSessionMessages('proactive');
+    final proactiveMessages = await _historyService.fetchSessionMessages(
+      'proactive',
+    );
     final lastProactiveTime = proactiveMessages.isNotEmpty
         ? DateTime.tryParse(proactiveMessages.last.createdAt)
         : null;
@@ -512,32 +516,39 @@ class _ChatTabState extends State<_ChatTab> {
         Expanded(
           child: _isLoading
               ? const Center(child: CircularProgressIndicator())
-              : SelectionArea(
-                  child: ListView.builder(
-                    controller: _scroll,
-                    padding: const EdgeInsets.all(16),
-                    itemCount: _items.length + (_isTyping ? 1 : 0),
-                    itemBuilder: (context, i) {
-                      if (_isTyping && i == _items.length) {
-                        return const _TypingBubble(key: ValueKey('typing'));
-                      }
-                      final message = _items[i].message!;
-                      final showTimestamp = _shouldShowTimeForIndex(i);
-                      return _ChatBubble(
-                        key: ValueKey(i),
-                        message: message,
-                        showTimestamp: showTimestamp,
-                        timeLabel: _formatMessageTime(message),
-                        onCancelJob:
-                            message.isAnalyzing &&
-                                message.jobId != null &&
-                                message.jobId == _pendingJobId
-                            ? () => _cancelPendingJob(message.jobId!)
-                            : null,
-                        isCancelling:
-                            message.jobId == _pendingJobId && _isCancellingJob,
-                      );
-                    },
+              : GestureDetector(
+                  behavior: HitTestBehavior.translucent,
+                  onTap: () => FocusManager.instance.primaryFocus?.unfocus(),
+                  child: SelectionArea(
+                    child: ListView.builder(
+                      controller: _scroll,
+                      keyboardDismissBehavior:
+                          ScrollViewKeyboardDismissBehavior.onDrag,
+                      padding: const EdgeInsets.all(16),
+                      itemCount: _items.length + (_isTyping ? 1 : 0),
+                      itemBuilder: (context, i) {
+                        if (_isTyping && i == _items.length) {
+                          return const _TypingBubble(key: ValueKey('typing'));
+                        }
+                        final message = _items[i].message!;
+                        final showTimestamp = _shouldShowTimeForIndex(i);
+                        return _ChatBubble(
+                          key: ValueKey(i),
+                          message: message,
+                          showTimestamp: showTimestamp,
+                          timeLabel: _formatMessageTime(message),
+                          onCancelJob:
+                              message.isAnalyzing &&
+                                  message.jobId != null &&
+                                  message.jobId == _pendingJobId
+                              ? () => _cancelPendingJob(message.jobId!)
+                              : null,
+                          isCancelling:
+                              message.jobId == _pendingJobId &&
+                              _isCancellingJob,
+                        );
+                      },
+                    ),
                   ),
                 ),
         ),
@@ -593,8 +604,10 @@ class _ChatTabState extends State<_ChatTab> {
           Expanded(
             child: TextField(
               controller: _input,
+              focusNode: _inputFocusNode,
+              onTapOutside: (_) => _inputFocusNode.unfocus(),
               minLines: 1,
-              maxLines: null,
+              maxLines: 12,
               textInputAction: TextInputAction.newline,
               style: const TextStyle(
                 fontSize: 15,
@@ -629,6 +642,23 @@ class _ChatTabState extends State<_ChatTab> {
               child: const Icon(
                 Icons.send_rounded,
                 color: Colors.white,
+                size: 20,
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
+          GestureDetector(
+            onTap: () => FocusScope.of(context).unfocus(),
+            child: Container(
+              width: 44,
+              height: 44,
+              decoration: BoxDecoration(
+                color: AppColors.surfaceLight,
+                shape: BoxShape.circle,
+              ),
+              child: Icon(
+                Icons.keyboard_hide_rounded,
+                color: AppColors.textSecondary,
                 size: 20,
               ),
             ),

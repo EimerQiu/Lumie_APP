@@ -208,6 +208,10 @@ class TasksProvider extends ChangeNotifier {
     );
   }
 
+  Future<String> analyzeNutritionImages({required List<File> files}) async {
+    return await _taskService.analyzeNutritionImages(files: files);
+  }
+
   /// Extend a task's close_datetime by 10% of its duration
   Future<void> extendTask(String taskId) async {
     final updatedTask = await _taskService.extendTask(taskId);

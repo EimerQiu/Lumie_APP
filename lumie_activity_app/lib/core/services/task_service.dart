@@ -172,6 +172,39 @@ class TaskService {
     }
   }
 
+  /// Analyze nutrition images and return one concise sentence.
+  Future<String> analyzeNutritionImages({required List<File> files}) async {
+    if (_token == null) throw Exception('Not authenticated');
+    if (files.isEmpty) throw Exception('No files to analyze');
+
+    final multipartFiles = <MultipartFile>[];
+    for (final file in files) {
+      final filename = file.path.split('/').last;
+      multipartFiles.add(
+        await MultipartFile.fromFile(file.path, filename: filename),
+      );
+    }
+
+    try {
+      final response = await _dio.post(
+        '${ApiConstants.baseUrl}/tasks/nutrition/analyze-images',
+        data: FormData.fromMap({'files': multipartFiles}),
+        options: Options(headers: {'Authorization': 'Bearer $_token'}),
+      );
+      final data = response.data;
+      if (data is Map<String, dynamic> && data['summary'] is String) {
+        return data['summary'] as String;
+      }
+      throw Exception('Invalid nutrition analysis response');
+    } on DioException catch (e) {
+      final data = e.response?.data;
+      if (data is Map<String, dynamic> && data['detail'] != null) {
+        throw Exception(data['detail'].toString());
+      }
+      throw Exception('Failed to analyze nutrition images');
+    }
+  }
+
   /// Extend a task's close_datetime by 10% of its duration
   Future<Task> extendTask(String taskId) async {
     if (_token == null) throw Exception('Not authenticated');

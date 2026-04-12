@@ -186,6 +186,22 @@ async def upload_task_attachments(
     return {"uploaded": saved, "count": len(saved)}
 
 
+@router.post("/nutrition/analyze-images")
+async def analyze_nutrition_images(
+    files: list[UploadFile] = File(...),
+    user_id: str = Depends(get_current_user_id),
+):
+    """
+    Analyze selected food images and return one concise nutrition sentence.
+
+    - Frontend calls this immediately after photo selection in completion dialog
+    - Requires authentication
+    """
+    _ = user_id  # auth gate
+    summary = await task_service.analyze_nutrition_uploads(files)
+    return {"summary": summary}
+
+
 @router.post("/{task_id}/extend", response_model=TaskResponse)
 async def extend_task(
     task_id: str,
@@ -203,7 +219,7 @@ async def extend_task(
 @router.patch("/{task_id}/note", response_model=TaskResponse)
 async def update_note(
     task_id: str,
-    note: str = Body(..., embed=True, max_length=500),
+    note: str = Body(..., embed=True, max_length=1000),
     user_id: str = Depends(get_current_user_id),
 ):
     """Save a user note on a task."""

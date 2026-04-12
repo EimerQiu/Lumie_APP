@@ -27,6 +27,9 @@ class Settings(BaseSettings):
     PALEBLUEDOT_MODEL: str = os.getenv("PALEBLUEDOT_MODEL", "openai/gpt-5.4")
     # Backward-compatible fallback while environments are migrated.
     ANTHROPIC_API_KEY: str = os.getenv("ANTHROPIC_API_KEY", "")
+    OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
+    OPENAI_API_BASE_URL: str = os.getenv("OPENAI_API_BASE_URL", "https://api.openai.com/v1")
+    OPENAI_VISION_MODEL: str = os.getenv("OPENAI_VISION_MODEL", "gpt-4.1-mini")
 
     # Sandbox (AI data analysis)
     SANDBOX_MONGO_URI: str = os.getenv("SANDBOX_MONGO_URI", "")

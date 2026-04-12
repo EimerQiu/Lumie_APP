@@ -6,13 +6,18 @@ Business logic for Med-Reminder task and template operations
 import uuid
 import shutil
 import subprocess
+import base64
+import logging
+import re
 from pathlib import Path
 from datetime import datetime, timedelta
 from typing import Optional, List
 from fastapi import HTTPException, status, UploadFile
 from zoneinfo import ZoneInfo
+import httpx
 
 from ..core.database import get_database
+from ..core.config import settings
 from ..core.datetime_utils import format_utc_datetime, format_utc_datetime_with_ms
 from ..core.subscription_helpers import get_task_date_range, raise_task_date_range_error
 from ..models.task import (
@@ -23,6 +28,9 @@ from ..models.task import (
 )
 from ..models.user import SubscriptionTier
 from ..models.team import TeamRole, MemberStatus
+from .llm_client import chat_completion
+
+logger = logging.getLogger(__name__)
 
 
 class TaskService:
@@ -202,6 +210,148 @@ class TaskService:
             created_at=format_utc_datetime(doc["created_at"]),
             updated_at=format_utc_datetime(doc["updated_at"]),
         )
+
+    async def analyze_nutrition_uploads(self, files: List[UploadFile]) -> str:
+        """Analyze uploaded nutrition images and return a concise one-sentence summary."""
+        if not files:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="No files uploaded",
+            )
+        if len(files) > 99:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="At most 99 files are allowed",
+            )
+
+        content: list[dict] = [
+            {
+                "type": "text",
+                "text": (
+                    "Analyze these food photos and return concise nutrition notes in ONE line with semicolon-separated chunks. "
+                    "Do not use labels like 'first image' or 'second image'. "
+                    "Do not use angle brackets, bullets, markdown, or numbering. "
+                    "Use natural descriptive wording, not compressed shorthand. "
+                    "Always spell out macros with labels like 'protein', 'carbs', 'fat'. "
+                    "Never use slash format such as '30kcal/1g/7g/0g'. "
+                    "Do not estimate, analyze, or mention calories/kcal at all. "
+                    "Output format: "
+                    "food description in photo 1 with key nutrition details; "
+                    "food description in photo 2 with key nutrition details; "
+                    "... "
+                    "Keep estimates approximate with '~' or 'about' when uncertain. "
+                    "Preferred style example: "
+                    "'Sliced cucumbers, mostly water and fiber, negligible protein/fat/carbs; "
+                    "Salmon (about 25g protein, 15g fat), steamed broccoli (~4g protein, 11g carbs), "
+                    "and a berry smoothie (~2g protein, 35g carbs)'."
+                ),
+            }
+        ]
+
+        added = 0
+        for upload in files:
+            try:
+                media_type, _ = self._validate_media_upload(upload)
+                if media_type != "image":
+                    continue
+                image_bytes = await upload.read()
+                if not image_bytes:
+                    continue
+                content_type = (upload.content_type or "").lower()
+                if not content_type.startswith("image/"):
+                    content_type = "image/jpeg"
+                b64 = base64.b64encode(image_bytes).decode("ascii")
+                content.append(
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": f"data:{content_type};base64,{b64}"},
+                    }
+                )
+                added += 1
+            finally:
+                await upload.close()
+
+        if added == 0:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Please upload at least one image file",
+            )
+
+        async def _call_openai_direct() -> Optional[str]:
+            if not settings.OPENAI_API_KEY:
+                return None
+            url = f"{settings.OPENAI_API_BASE_URL.rstrip('/')}/chat/completions"
+            payload = {
+                "model": settings.OPENAI_VISION_MODEL,
+                "messages": [{"role": "user", "content": content}],
+                "max_tokens": 260,
+                "temperature": 0.2,
+            }
+            headers = {
+                "Authorization": f"Bearer {settings.OPENAI_API_KEY}",
+                "Content-Type": "application/json",
+            }
+            async with httpx.AsyncClient(timeout=120.0) as client:
+                resp = await client.post(url, headers=headers, json=payload)
+                if resp.status_code >= 400:
+                    logger.warning(
+                        "OpenAI nutrition analyze failed: status=%s body=%s",
+                        resp.status_code,
+                        resp.text[:500],
+                    )
+                    return None
+                data = resp.json()
+            message = ((data.get("choices") or [{}])[0] or {}).get("message") or {}
+            raw = message.get("content")
+            if isinstance(raw, str):
+                return raw
+            if isinstance(raw, list):
+                parts = [
+                    item.get("text", "")
+                    for item in raw
+                    if isinstance(item, dict) and isinstance(item.get("text"), str)
+                ]
+                return " ".join(parts)
+            return None
+
+        try:
+            direct_text = await _call_openai_direct()
+            if direct_text is not None:
+                text = " ".join(direct_text.strip().split())
+            else:
+                logger.info(
+                    "Falling back to PALEBLUEDOT vision path for nutrition analysis"
+                )
+                response = await chat_completion(
+                    messages=[{"role": "user", "content": content}],
+                    max_tokens=260,
+                    temperature=0.2,
+                )
+                text = " ".join((response.text or "").strip().split())
+            if not text:
+                raise HTTPException(
+                    status_code=status.HTTP_502_BAD_GATEWAY,
+                    detail="Nutrition analysis returned empty result",
+                )
+            # Normalize model output to plain text chunks (no angle brackets).
+            text = text.replace("<", "").replace(">", "")
+            # Enforce no-calorie output even if model ignores instructions.
+            text = re.sub(r"\(?\s*(~|about)?\s*\d+(\.\d+)?\s*(kcal|calories?)\s*\)?", "", text, flags=re.IGNORECASE)
+            text = re.sub(r"\s{2,}", " ", text).strip(" ,;")
+            max_len = 1000
+            if len(text) <= max_len:
+                return text
+            # Trim on word boundary to avoid awkward hard-cut text.
+            trimmed = text[:max_len].rsplit(" ", 1)[0].strip()
+            return (trimmed or text[:max_len]).rstrip(";, ") + "..."
+        except HTTPException:
+            raise
+        except Exception as exc:
+            logger.warning("Nutrition upload analysis failed: %s", exc)
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="Failed to analyze nutrition images",
+            )
 
     def _validate_media_upload(self, upload: UploadFile) -> tuple[str, str]:
         content_type = (upload.content_type or "").lower()

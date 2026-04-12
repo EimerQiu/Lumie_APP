@@ -446,8 +446,10 @@ class _TaskCompleteDialogState extends State<_TaskCompleteDialog> {
   final ImagePicker _imagePicker = ImagePicker();
 
   bool _isWorking = false;
+  bool _isAnalyzingNutrition = false;
   String _stageLabel = '';
   double _progress = 0;
+  String? _lastAutoNutritionNote;
 
   @override
   void initState() {
@@ -511,6 +513,61 @@ class _TaskCompleteDialogState extends State<_TaskCompleteDialog> {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Only the first 99 files were kept.')),
       );
+    }
+
+    await _analyzeNutritionFromSelectedImages();
+  }
+
+  Future<void> _analyzeNutritionFromSelectedImages() async {
+    if (_isWorking || _isAnalyzingNutrition) return;
+    if (widget.task.taskType != TaskType.nutrition) return;
+
+    final imageItems = _media.where((m) => !m.isVideo).toList();
+    if (imageItems.isEmpty) return;
+
+    setState(() => _isAnalyzingNutrition = true);
+    try {
+      final provider = context.read<TasksProvider>();
+      final compressedImages = <File>[];
+      for (final item in imageItems) {
+        final compressed = await _compressImageToLimit(item.file);
+        compressedImages.add(compressed);
+      }
+      final summary = await provider.analyzeNutritionImages(
+        files: compressedImages,
+      );
+      final normalized = summary.trim();
+      if (normalized.isEmpty || !mounted) return;
+
+      final current = _noteController.text.trim();
+      String nextText;
+      if (current.isEmpty ||
+          (_lastAutoNutritionNote != null &&
+              current == _lastAutoNutritionNote)) {
+        nextText = normalized;
+      } else if (current.contains(normalized)) {
+        nextText = current;
+      } else {
+        nextText = '$current\n$normalized';
+      }
+
+      _noteController.value = _noteController.value.copyWith(
+        text: nextText,
+        selection: TextSelection.collapsed(offset: nextText.length),
+        composing: TextRange.empty,
+      );
+      _lastAutoNutritionNote = normalized;
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Nutrition analysis failed: ${e.toString().replaceFirst('Exception: ', '')}',
+          ),
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _isAnalyzingNutrition = false);
     }
   }
 
@@ -713,119 +770,130 @@ class _TaskCompleteDialogState extends State<_TaskCompleteDialog> {
               const SizedBox(height: 12),
               Text('Mark "${widget.task.taskName}" as completed?'),
               const SizedBox(height: 16),
-              Row(
-                crossAxisAlignment: CrossAxisAlignment.end,
-                children: [
-                  Expanded(
-                    child: Container(
-                      decoration: BoxDecoration(
-                        border: Border.all(color: Colors.grey.shade300),
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      padding: const EdgeInsets.fromLTRB(10, 8, 10, 6),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          if (_media.isNotEmpty) ...[
-                            SizedBox(
-                              height: 52,
-                              child: ListView.separated(
-                                scrollDirection: Axis.horizontal,
-                                itemCount: _media.length,
-                                separatorBuilder: (context, index) =>
-                                    const SizedBox(width: 6),
-                                itemBuilder: (context, index) {
-                                  final item = _media[index];
-                                  return Stack(
-                                    clipBehavior: Clip.none,
-                                    children: [
-                                      ClipRRect(
-                                        borderRadius: BorderRadius.circular(8),
-                                        child: Container(
-                                          width: 52,
-                                          height: 52,
-                                          color: Colors.grey.shade200,
-                                          child: item.isVideo
-                                              ? const Icon(
-                                                  Icons.videocam,
-                                                  color:
-                                                      AppColors.textSecondary,
-                                                )
-                                              : Image.file(
-                                                  item.file,
-                                                  fit: BoxFit.cover,
-                                                ),
-                                        ),
-                                      ),
-                                      Positioned(
-                                        top: -6,
-                                        right: -6,
-                                        child: InkWell(
-                                          onTap: _isWorking
-                                              ? null
-                                              : () => setState(
-                                                  () => _media.removeAt(index),
-                                                ),
-                                          child: Container(
-                                            width: 18,
-                                            height: 18,
-                                            decoration: const BoxDecoration(
-                                              color: Colors.white,
-                                              shape: BoxShape.circle,
-                                            ),
-                                            child: const Icon(
-                                              Icons.close,
-                                              size: 14,
-                                              color: AppColors.textSecondary,
-                                            ),
+              Container(
+                decoration: BoxDecoration(
+                  border: Border.all(color: Colors.grey.shade300),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                padding: const EdgeInsets.fromLTRB(10, 8, 10, 6),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (_media.isNotEmpty) ...[
+                      SizedBox(
+                        height: 52,
+                        child: ListView.separated(
+                          scrollDirection: Axis.horizontal,
+                          itemCount: _media.length,
+                          separatorBuilder: (context, index) =>
+                              const SizedBox(width: 6),
+                          itemBuilder: (context, index) {
+                            final item = _media[index];
+                            return Stack(
+                              clipBehavior: Clip.none,
+                              children: [
+                                ClipRRect(
+                                  borderRadius: BorderRadius.circular(8),
+                                  child: Container(
+                                    width: 52,
+                                    height: 52,
+                                    color: Colors.grey.shade200,
+                                    child: item.isVideo
+                                        ? const Icon(
+                                            Icons.videocam,
+                                            color: AppColors.textSecondary,
+                                          )
+                                        : Image.file(
+                                            item.file,
+                                            fit: BoxFit.cover,
                                           ),
-                                        ),
+                                  ),
+                                ),
+                                Positioned(
+                                  top: -6,
+                                  right: -6,
+                                  child: InkWell(
+                                    onTap: _isWorking
+                                        ? null
+                                        : () => setState(
+                                            () => _media.removeAt(index),
+                                          ),
+                                    child: Container(
+                                      width: 18,
+                                      height: 18,
+                                      decoration: const BoxDecoration(
+                                        color: Colors.white,
+                                        shape: BoxShape.circle,
                                       ),
-                                    ],
-                                  );
-                                },
-                              ),
-                            ),
-                            const SizedBox(height: 6),
-                          ],
-                          TextField(
-                            controller: _noteController,
-                            decoration: InputDecoration(
-                              hintText: 'Add a note (optional)',
-                              hintStyle: TextStyle(color: Colors.grey[400]),
-                              border: InputBorder.none,
-                              enabledBorder: InputBorder.none,
-                              focusedBorder: InputBorder.none,
-                              disabledBorder: InputBorder.none,
-                              errorBorder: InputBorder.none,
-                              focusedErrorBorder: InputBorder.none,
-                              isDense: true,
-                              contentPadding: const EdgeInsets.symmetric(
-                                horizontal: 2,
-                                vertical: 8,
-                              ),
-                              counterText: '',
-                            ),
-                            enabled: !_isWorking,
-                            maxLines: 2,
-                            maxLength: 500,
+                                      child: const Icon(
+                                        Icons.close,
+                                        size: 14,
+                                        color: AppColors.textSecondary,
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            );
+                          },
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                    ],
+                    ConstrainedBox(
+                      constraints: const BoxConstraints(minHeight: 180),
+                      child: TextField(
+                        controller: _noteController,
+                        decoration: InputDecoration(
+                          hintText: widget.task.taskType == TaskType.nutrition
+                              ? 'Add a note (nutrition analysis will auto-fill)'
+                              : 'Add a note (optional)',
+                          hintStyle: TextStyle(
+                            color: Colors.grey[400],
+                            fontSize: 13,
                           ),
-                        ],
+                          border: InputBorder.none,
+                          enabledBorder: InputBorder.none,
+                          focusedBorder: InputBorder.none,
+                          disabledBorder: InputBorder.none,
+                          errorBorder: InputBorder.none,
+                          focusedErrorBorder: InputBorder.none,
+                          isDense: true,
+                          contentPadding: const EdgeInsets.symmetric(
+                            horizontal: 2,
+                            vertical: 8,
+                          ),
+                          counterText: '',
+                        ),
+                        style: const TextStyle(fontSize: 13),
+                        enabled: !_isWorking,
+                        minLines: 6,
+                        maxLines: 9,
+                        maxLength: 1000,
                       ),
                     ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 6),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: TextButton.icon(
+                  onPressed: _isWorking ? null : _pickMedia,
+                  icon: const Icon(
+                    Icons.photo_library_outlined,
+                    size: 20,
+                    color: AppColors.textPrimary,
                   ),
-                  const SizedBox(width: 8),
-                  IconButton(
-                    onPressed: _isWorking ? null : _pickMedia,
-                    tooltip: 'Select photos and videos',
-                    icon: const Icon(
-                      Icons.photo_library_outlined,
-                      size: 28,
+                  label: const Text(
+                    'Select photos and videos',
+                    style: TextStyle(
                       color: AppColors.textPrimary,
+                      fontSize: 13,
                     ),
                   ),
-                ],
+                ),
               ),
               if (_media.isNotEmpty)
                 Padding(
@@ -836,6 +904,30 @@ class _TaskCompleteDialogState extends State<_TaskCompleteDialog> {
                       color: AppColors.textSecondary,
                       fontSize: 12,
                     ),
+                  ),
+                ),
+              if (_isAnalyzingNutrition &&
+                  widget.task.taskType == TaskType.nutrition)
+                const Padding(
+                  padding: EdgeInsets.only(top: 6),
+                  child: Row(
+                    children: [
+                      SizedBox(
+                        width: 14,
+                        height: 14,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      ),
+                      SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          'Analyzing selected food photos...',
+                          style: TextStyle(
+                            color: AppColors.textSecondary,
+                            fontSize: 12,
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
                 ),
               if (_isWorking && _media.isNotEmpty) ...[
