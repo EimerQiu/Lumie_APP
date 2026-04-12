@@ -39,27 +39,27 @@ class WellnessDetailScreen extends StatelessWidget {
       return switch (state.fatigue.level) {
         FatigueLevel.low =>
           'Your body is recovering well. Sleep quality and resting heart rate '
-          'are within your normal range.',
+              'are within your normal range.',
         FatigueLevel.moderate =>
           'Some recovery strain detected over the last 3 nights. Consider '
-          'lighter activity today and prioritise sleep.',
+              'lighter activity today and prioritise sleep.',
         FatigueLevel.elevated =>
           'Significant fatigue markers detected. Rest today and aim for '
-          '8–10 hours of sleep. Avoid intense workouts.',
+              '8–10 hours of sleep. Avoid intense workouts.',
         _ => '',
       };
     } else {
       return switch (state.stress.level) {
         StressLevel.lower =>
           'Your stress indicators are lower than your usual baseline — '
-          'great sleep and a calm heart rate.',
+              'great sleep and a calm heart rate.',
         StressLevel.typical =>
           'Stress indicators are within your normal range based on recent '
-          'sleep and resting heart rate patterns.',
+              'sleep and resting heart rate patterns.',
         StressLevel.higher =>
           'Elevated stress markers detected. This may reflect poor sleep '
-          'quality or an elevated resting heart rate. Breathing exercises '
-          'or light activity can help.',
+              'quality or an elevated resting heart rate. Breathing exercises '
+              'or light activity can help.',
         _ => '',
       };
     }
@@ -143,9 +143,11 @@ class WellnessDetailScreen extends StatelessWidget {
           ),
           const SizedBox(height: 12),
           Text(
-            hasData ? label : (state.fatigue.level == FatigueLevel.calibrating
-                ? 'Learning your baseline'
-                : 'No data available'),
+            hasData
+                ? label
+                : (state.fatigue.level == FatigueLevel.calibrating
+                      ? 'Learning your baseline'
+                      : 'No data available'),
             style: TextStyle(
               fontSize: 24,
               fontWeight: FontWeight.bold,
@@ -217,10 +219,7 @@ class WellnessDetailScreen extends StatelessWidget {
           const SizedBox(height: 8),
           Text(
             'Baseline from ${ctx.nightsInBaseline} nights of data.',
-            style: const TextStyle(
-              fontSize: 11,
-              color: AppColors.textLight,
-            ),
+            style: const TextStyle(fontSize: 11, color: AppColors.textLight),
           ),
         ],
       ),
@@ -412,7 +411,11 @@ class WellnessDetailScreen extends StatelessWidget {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Icon(Icons.info_outline, size: 16, color: AppColors.textSecondary),
+          const Icon(
+            Icons.info_outline,
+            size: 16,
+            color: AppColors.textSecondary,
+          ),
           const SizedBox(width: 10),
           Expanded(
             child: Text(
@@ -444,7 +447,9 @@ class WellnessDetailScreen extends StatelessWidget {
       child: Column(
         children: [
           Icon(
-            isCalibrating ? Icons.nights_stay_outlined : Icons.ring_volume_outlined,
+            isCalibrating
+                ? Icons.nights_stay_outlined
+                : Icons.ring_volume_outlined,
             size: 36,
             color: AppColors.textLight,
           ),
@@ -464,7 +469,7 @@ class WellnessDetailScreen extends StatelessWidget {
           Text(
             isCalibrating
                 ? 'Keep wearing your ring while you sleep. '
-                  'Fatigue and stress signals appear after 5 nights of tracked sleep.'
+                      'Fatigue and stress signals appear after 5 nights of tracked sleep.'
                 : 'Wear your Lumie Ring to sleep to start tracking fatigue and stress.',
             style: const TextStyle(
               fontSize: 13,

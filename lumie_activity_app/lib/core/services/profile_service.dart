@@ -155,6 +155,33 @@ class ProfileService {
     }
   }
 
+  /// Look up a single ICD-10 code by its code string.
+  /// Returns null if the code is not found.
+  Future<ICD10Code?> getICD10ByCode(String code) async {
+    // Handle quick-select values locally
+    if (code == 'None') {
+      return const ICD10Code(
+        code: 'None',
+        description: 'No chronic condition',
+        category: 'Quick Select',
+      );
+    }
+    if (code == 'Other') {
+      return const ICD10Code(
+        code: 'Other',
+        description: 'Condition not listed',
+        category: 'Quick Select',
+      );
+    }
+    // Search for the exact code
+    final results = await searchICD10Codes(code, limit: 50);
+    for (final r in results) {
+      if (r.code == code) return r;
+    }
+    // If not found, return a generic object so the user sees something
+    return ICD10Code(code: code, description: code, category: 'Unknown');
+  }
+
   /// Search ICD-10 codes
   Future<List<ICD10Code>> searchICD10Codes(
     String query, {

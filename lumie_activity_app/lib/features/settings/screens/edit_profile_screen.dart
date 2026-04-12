@@ -1,11 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import '../../../core/services/profile_service.dart';
 import '../../../core/services/workout_prefs_service.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../shared/models/user_models.dart';
 import '../../../shared/widgets/gradient_card.dart';
 import '../../auth/providers/auth_provider.dart';
 import '../../auth/widgets/auth_text_field.dart';
+import '../../auth/widgets/icd10_search_field.dart';
 import '../../auth/widgets/unit_selector.dart';
 
 class EditProfileScreen extends StatefulWidget {
@@ -32,6 +34,10 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
   // Workout weight display unit (separate from body weight unit)
   String _workoutWeightUnit = 'lbs';
 
+  // ICD-10 condition code
+  ICD10Code? _selectedIcd10;
+  bool _icd10Modified = false;
+
   bool _isSaving = false;
   bool _isLoading = true;
   String? _errorMessage;
@@ -47,16 +53,33 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
 
   /// Fetch the latest profile from the backend, then prefill all fields.
   Future<void> _refreshAndPrefill() async {
+    final authProvider = context.read<AuthProvider>();
     try {
-      await context.read<AuthProvider>().refreshProfile();
+      await authProvider.refreshProfile();
     } catch (_) {
       // refreshProfile never throws — swallows errors internally.
     }
     // Load workout weight unit preference
     final wu = await WorkoutPrefsService.getWeightUnit();
+
+    // Resolve the stored ICD-10 code string to a full ICD10Code object
+    final profile = authProvider.profile;
+    if (profile?.icd10Code != null && profile!.icd10Code!.isNotEmpty) {
+      try {
+        _selectedIcd10 = await ProfileService().getICD10ByCode(profile.icd10Code!);
+      } catch (_) {
+        // If lookup fails, show the raw code so the user still sees something
+        _selectedIcd10 = ICD10Code(
+          code: profile.icd10Code!,
+          description: profile.icd10Code!,
+          category: 'Unknown',
+        );
+      }
+    }
+
     if (mounted) {
       _workoutWeightUnit = wu;
-      _applyProfile(context.read<AuthProvider>().profile);
+      _applyProfile(profile);
       setState(() => _isLoading = false);
     }
   }
@@ -141,10 +164,17 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
       debugPrint('[EditProfile] save advisorName="$advisorName"');
       debugPrint('[EditProfile] save aiAdvisorName="$aiAdvisorName"');
 
+      // ICD-10: null = don't touch, empty string = clear, code = update
+      String? icd10Code;
+      if (_icd10Modified) {
+        icd10Code = _selectedIcd10?.code ?? '';
+      }
+
       final success = await context.read<AuthProvider>().updateProfile(
         age: age,
         height: height,
         weight: weight,
+        icd10Code: icd10Code,
         // Send empty string to clear; null means "don't touch this field".
         // We always send both so clearing works.
         advisorName: advisorName.isEmpty ? null : advisorName,
@@ -308,6 +338,31 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
                       ],
                     ),
                   ),
+
+                  // ── ICD-10 Condition (teen only) ─────────────────────────────
+                  if (context.read<AuthProvider>().profile?.role == AccountRole.teen) ...[
+                    const SizedBox(height: 16),
+                    GradientCard(
+                      gradient: AppColors.cardGradient,
+                      margin: EdgeInsets.zero,
+                      padding: const EdgeInsets.all(16),
+                      child: ICD10SearchField(
+                        selectedCode: _selectedIcd10,
+                        onSelected: (code) {
+                          setState(() {
+                            _selectedIcd10 = code;
+                            _icd10Modified = true;
+                          });
+                        },
+                        onClear: () {
+                          setState(() {
+                            _selectedIcd10 = null;
+                            _icd10Modified = true;
+                          });
+                        },
+                      ),
+                    ),
+                  ],
 
                   const SizedBox(height: 16),
 
