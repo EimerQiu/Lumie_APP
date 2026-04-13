@@ -3,6 +3,7 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../../../core/constants/api_constants.dart';
+import '../../../core/services/task_service.dart';
 import '../../../core/services/team_service.dart';
 import '../../../shared/models/team_models.dart';
 
@@ -203,6 +204,19 @@ class _TeamDayprintScreenState extends State<TeamDayprintScreen> {
 
 // ─── Feed Card dispatcher ─────────────────────────────────────────────────────
 
+Future<void> _openTaskDetail(BuildContext context, String taskId) async {
+  try {
+    final task = await TaskService().getTaskById(taskId);
+    if (!context.mounted) return;
+    Navigator.pushNamed(context, '/tasks/detail', arguments: task);
+  } catch (_) {
+    if (!context.mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Failed to load task details')),
+    );
+  }
+}
+
 class _FeedCard extends StatelessWidget {
   final TeamFeedItem item;
 
@@ -210,13 +224,23 @@ class _FeedCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final isTask = item.type == TeamFeedItemType.taskWithPhoto ||
+        item.type == TeamFeedItemType.taskText;
+
+    final card = switch (item.type) {
+      TeamFeedItemType.taskWithPhoto => _ImageFeedCard(item: item),
+      TeamFeedItemType.taskText => _TextFeedCard(item: item),
+      TeamFeedItemType.sleepScore => _SleepFeedCard(item: item),
+    };
+
     return Padding(
       padding: const EdgeInsets.only(bottom: 8),
-      child: switch (item.type) {
-        TeamFeedItemType.taskWithPhoto => _ImageFeedCard(item: item),
-        TeamFeedItemType.taskText => _TextFeedCard(item: item),
-        TeamFeedItemType.sleepScore => _SleepFeedCard(item: item),
-      },
+      child: isTask
+          ? GestureDetector(
+              onTap: () => _openTaskDetail(context, item.itemId),
+              child: card,
+            )
+          : card,
     );
   }
 }

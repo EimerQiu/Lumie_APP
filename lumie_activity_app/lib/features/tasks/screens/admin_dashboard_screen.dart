@@ -371,6 +371,11 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
               return _AdminTaskCard(
                 task: task,
                 isAdmin: canManage,
+                onTap: () => Navigator.pushNamed(
+                  context,
+                  '/tasks/detail',
+                  arguments: task,
+                ),
                 onComplete: () => _completeTask(provider, task),
                 onDelete: () => _deleteTask(provider, task),
                 resolveAttachmentUrls: _thumbnailUrlCandidates,
@@ -400,6 +405,11 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
               return _AdminTaskCard(
                 task: task,
                 isAdmin: canManage,
+                onTap: () => Navigator.pushNamed(
+                  context,
+                  '/tasks/detail',
+                  arguments: task,
+                ),
                 onComplete: () => _completeTask(provider, task),
                 onDelete: () => _deleteTask(provider, task),
                 resolveAttachmentUrls: _thumbnailUrlCandidates,
@@ -900,6 +910,7 @@ class _AdminTaskCard extends StatelessWidget {
   final bool isAdmin;
   final VoidCallback onComplete;
   final VoidCallback onDelete;
+  final VoidCallback onTap;
   final List<String> Function(TaskAttachment) resolveAttachmentUrls;
   final ValueChanged<TaskAttachment> onAttachmentTap;
   final VoidCallback? onAddAttachment;
@@ -909,6 +920,7 @@ class _AdminTaskCard extends StatelessWidget {
     required this.isAdmin,
     required this.onComplete,
     required this.onDelete,
+    required this.onTap,
     required this.resolveAttachmentUrls,
     required this.onAttachmentTap,
     this.onAddAttachment,
@@ -961,7 +973,11 @@ class _AdminTaskCard extends StatelessWidget {
           borderRadius: BorderRadius.circular(12),
           side: BorderSide(color: AppColors.surfaceLight),
         ),
-        child: _buildTaskContent(context),
+        clipBehavior: Clip.hardEdge,
+        child: InkWell(
+          onTap: onTap,
+          child: _buildTaskContent(context),
+        ),
       );
     }
 
@@ -983,10 +999,10 @@ class _AdminTaskCard extends StatelessWidget {
       confirmDismiss: (direction) async {
         if (direction == DismissDirection.startToEnd) {
           onComplete();
-          return false; // Don't dismiss - task stays visible
+          return false;
         } else {
           onDelete();
-          return false; // Handled by delete callback
+          return false;
         }
       },
       child: Card(
@@ -996,7 +1012,11 @@ class _AdminTaskCard extends StatelessWidget {
           borderRadius: BorderRadius.circular(12),
           side: BorderSide(color: AppColors.surfaceLight),
         ),
-        child: _buildTaskContent(context),
+        clipBehavior: Clip.hardEdge,
+        child: InkWell(
+          onTap: onTap,
+          child: _buildTaskContent(context),
+        ),
       ),
     );
   }
@@ -1059,6 +1079,7 @@ class _AdminTaskCard extends StatelessWidget {
           if (task.note != null && task.note!.isNotEmpty) ...[
             const SizedBox(height: 4),
             Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Icon(
                   Icons.sticky_note_2_outlined,
@@ -1074,8 +1095,7 @@ class _AdminTaskCard extends StatelessWidget {
                       color: Colors.grey[600],
                       fontStyle: FontStyle.italic,
                     ),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
+                    softWrap: true,
                   ),
                 ),
               ],
@@ -1146,7 +1166,8 @@ class _AdminTaskCard extends StatelessWidget {
           ],
 
           // Attachments (completed tasks with media or upload capability)
-          if (task.isCompleted && (task.attachments.isNotEmpty || onAddAttachment != null)) ...[
+          if (task.isCompleted &&
+              (task.attachments.isNotEmpty || onAddAttachment != null)) ...[
             const SizedBox(height: 8),
             Row(
               children: [

@@ -124,6 +124,50 @@ class TaskService {
     _handleError(response, 'get tasks');
   }
 
+  /// Update an existing task's mutable fields.
+  ///
+  /// [sendTeamId] / [sendUserId]: when true the field is always included in the
+  /// request body (even as null), so the backend's model_fields_set picks it up
+  /// and performs the reassignment. Pass false to leave the field untouched.
+  Future<Task> updateTask({
+    required String taskId,
+    String? taskName,
+    String? taskType,
+    String? openDatetime,
+    String? closeDatetime,
+    String? timezone,
+    String? taskInfo,
+    bool sendTeamId = false,
+    String? teamId, // null = make personal
+    bool sendUserId = false,
+    String? userId, // null = assign to self
+  }) async {
+    if (_token == null) throw Exception('Not authenticated');
+
+    final body = <String, dynamic>{};
+    if (taskName != null) body['task_name'] = taskName;
+    if (taskType != null) body['task_type'] = taskType;
+    if (openDatetime != null) body['open_datetime'] = openDatetime;
+    if (closeDatetime != null) body['close_datetime'] = closeDatetime;
+    if (timezone != null) body['timezone'] = timezone;
+    if (taskInfo != null) body['task_info'] = taskInfo;
+    // Always include these when the caller explicitly signals a change,
+    // including the null case (personal / self).
+    if (sendTeamId) body['team_id'] = teamId;
+    if (sendUserId) body['user_id'] = userId;
+
+    final response = await http.patch(
+      Uri.parse('${ApiConstants.baseUrl}/tasks/$taskId'),
+      headers: _headers,
+      body: json.encode(body),
+    );
+
+    if (response.statusCode == 200) {
+      return Task.fromJson(json.decode(response.body));
+    }
+    _handleError(response, 'update task');
+  }
+
   /// Complete a task
   Future<Task> completeTask(String taskId) async {
     if (_token == null) throw Exception('Not authenticated');
@@ -455,6 +499,17 @@ class TaskService {
       return AdminTaskListResponse.fromJson(json.decode(response.body));
     }
     _handleError(response, 'get admin tasks');
+  }
+
+  /// Fetch full detail for a single task by ID.
+  Future<AdminTaskData> getTaskById(String taskId) async {
+    if (_token == null) throw Exception('Not authenticated');
+    final uri = Uri.parse('${ApiConstants.baseUrl}/admin/tasks/$taskId');
+    final response = await http.get(uri, headers: _headers);
+    if (response.statusCode == 200) {
+      return AdminTaskData.fromJson(json.decode(response.body));
+    }
+    _handleError(response, 'get task by id');
   }
 
   /// Admin complete a task

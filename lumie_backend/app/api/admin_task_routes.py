@@ -72,6 +72,15 @@ async def admin_delete_task(
     )
 
 
+@router.get("/tasks/{task_id}", response_model=AdminTaskData)
+async def get_task_by_id(
+    task_id: str,
+    user_id: str = Depends(get_current_user_id),
+):
+    """Fetch full detail for a single task by ID."""
+    return await admin_task_service.get_task_by_id(task_id, user_id)
+
+
 @router.get("/reward-calc")
 async def get_reward_calc_tasks(
     email: str = Query(..., description="Member email (required)"),

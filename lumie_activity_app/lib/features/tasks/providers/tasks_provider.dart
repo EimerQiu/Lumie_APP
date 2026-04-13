@@ -222,6 +222,50 @@ class TasksProvider extends ChangeNotifier {
     }
   }
 
+  /// Update a task's editable fields and reload the task list.
+  ///
+  /// Pass [sendTeamId]/[sendUserId] = true together with the new value
+  /// (including null for "make personal" / "assign to self") to trigger a
+  /// team/user reassignment on the backend.
+  Future<Task> updateTask({
+    required String taskId,
+    String? taskName,
+    String? taskType,
+    String? openDatetime,
+    String? closeDatetime,
+    String? taskInfo,
+    bool sendTeamId = false,
+    String? teamId,
+    bool sendUserId = false,
+    String? userId,
+  }) async {
+    String deviceTimezone = _getDeviceTimezone();
+    if (deviceTimezone == 'UTC' || deviceTimezone.isEmpty) {
+      deviceTimezone = tz.local.name;
+    }
+
+    final updated = await _taskService.updateTask(
+      taskId: taskId,
+      taskName: taskName,
+      taskType: taskType,
+      openDatetime: openDatetime,
+      closeDatetime: closeDatetime,
+      timezone: deviceTimezone,
+      taskInfo: taskInfo,
+      sendTeamId: sendTeamId,
+      teamId: teamId,
+      sendUserId: sendUserId,
+      userId: userId,
+    );
+
+    final idx = _tasks.indexWhere((t) => t.taskId == taskId);
+    if (idx != -1) {
+      _tasks[idx] = updated;
+      notifyListeners();
+    }
+    return updated;
+  }
+
   /// Save a note on a task
   Future<void> updateNote(String taskId, String note) async {
     final updatedTask = await _taskService.updateNote(taskId, note);

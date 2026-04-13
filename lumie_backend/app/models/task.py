@@ -42,6 +42,25 @@ class TaskCreate(BaseModel):
     task_info: Optional[str] = Field(None, max_length=500)
 
 
+class TaskUpdate(BaseModel):
+    """Request model for editing an existing task (all fields optional).
+
+    Fields present in the request body (including explicit null) are updated;
+    fields absent from the body are left unchanged. Use model_fields_set to
+    distinguish 'not sent' from 'sent as null'.
+    """
+    task_name: Optional[str] = Field(None, min_length=1, max_length=200)
+    task_type: Optional[TaskType] = None
+    open_datetime: Optional[str] = Field(None, description="yyyy-MM-dd HH:mm in user's local timezone")
+    close_datetime: Optional[str] = Field(None, description="yyyy-MM-dd HH:mm in user's local timezone")
+    timezone: str = Field(default="UTC", description="User's timezone for time conversion")
+    task_info: Optional[str] = Field(None, max_length=500)
+    # null = make personal; a team_id = assign to that team
+    team_id: Optional[str] = Field(None, description="null to make private, team_id to move to a team")
+    # null = assign to self; a user_id = assign to that member (admin only)
+    user_id: Optional[str] = Field(None, description="Assigned user; null = self")
+
+
 class TaskResponse(BaseModel):
     """Response model for a single task"""
     task_id: str

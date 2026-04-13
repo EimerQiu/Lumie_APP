@@ -44,6 +44,9 @@ import 'features/tasks/screens/create_template_screen.dart';
 import 'features/tasks/screens/batch_generate_screen.dart';
 import 'features/tasks/screens/admin_dashboard_screen.dart';
 import 'features/tasks/screens/reward_calc_screen.dart';
+import 'features/tasks/screens/task_detail_screen.dart';
+import 'features/tasks/screens/edit_task_screen.dart';
+import 'shared/models/task_models.dart';
 import 'shared/models/activity_models.dart';
 import 'shared/models/user_models.dart';
 import 'core/services/push_notification_service.dart';
@@ -174,6 +177,18 @@ class LumieActivityApp extends StatelessWidget {
             // Placeholder for subscription upgrade screen
             return MaterialPageRoute(
               builder: (context) => const SubscriptionUpgradeScreen(),
+            );
+          } else if (settings.name == '/tasks/detail') {
+            final arg = settings.arguments;
+            return MaterialPageRoute(
+              builder: (context) => arg is AdminTaskData
+                  ? TaskDetailScreen.fromAdminTask(task: arg)
+                  : TaskDetailScreen.fromTask(task: arg as Task),
+            );
+          } else if (settings.name == '/tasks/edit') {
+            final arg = settings.arguments as EditTaskArgs;
+            return MaterialPageRoute(
+              builder: (context) => EditTaskScreen(args: arg),
             );
           } else if (settings.name?.startsWith('/invite/') == true) {
             // Handle invitation link: /invite/{token}

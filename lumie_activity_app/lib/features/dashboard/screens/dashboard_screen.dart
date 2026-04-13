@@ -87,6 +87,7 @@ class _DashboardScreenState extends State<DashboardScreen>
       context.read<SleepProvider>().load();
       context.read<ActivityGoalProvider>().load();
       context.read<TodayStepsProvider>().load();
+      context.read<HeartRateProvider>().fetchDailyHistory();
     });
   }
 
@@ -397,7 +398,7 @@ class _DashboardScreenState extends State<DashboardScreen>
   Widget _buildHrCard() {
     return Consumer2<RingProvider, HeartRateProvider>(
       builder: (context, ring, hr, _) {
-        if (!ring.isPaired) return const SizedBox.shrink();
+        if (!ring.isPaired && !ring.isConnected) return const SizedBox.shrink();
         final connected = ring.isConnected;
         final bpmText = connected
             ? (hr.latestHr != null ? '${hr.latestHr} BPM' : 'Tap to measure')

@@ -22,7 +22,7 @@ from ..core.datetime_utils import format_utc_datetime, format_utc_datetime_with_
 from ..core.subscription_helpers import get_task_date_range, raise_task_date_range_error
 from ..models.task import (
     TaskType, TaskStatus,
-    TaskCreate, TaskResponse, TaskListResponse,
+    TaskCreate, TaskUpdate, TaskResponse, TaskListResponse,
     TemplateCreate, TemplateUpdate, TemplateResponse, TemplateListResponse,
     TimeWindow, BatchGenerateRequest, BatchGenerateResponse,
 )
@@ -663,6 +663,115 @@ class TaskService:
             tasks=task_responses,
             total=len(task_responses),
         )
+
+    async def update_task(self, task_id: str, user_id: str, data: TaskUpdate) -> TaskResponse:
+        """
+        Edit an existing task's mutable fields.
+
+        Only the task owner or the task creator can update a task.
+        Datetime fields, when provided, are expected in the user's local timezone
+        and are converted to UTC for storage (same as create_task).
+        """
+        db = get_database()
+
+        task = await db.tasks.find_one({"task_id": task_id})
+        if not task:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Task not found",
+            )
+
+        # Permission: task owner or creator
+        if task["user_id"] != user_id and task.get("created_by") != user_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You do not have permission to edit this task",
+            )
+
+        updates: dict = {}
+        if data.task_name is not None:
+            updates["task_name"] = data.task_name
+        if data.task_type is not None:
+            updates["task_type"] = data.task_type.value
+        if data.task_info is not None:
+            updates["task_info"] = data.task_info
+
+        # Resolve final open/close (existing or newly provided)
+        new_open = task["open_datetime"]
+        new_close = task["close_datetime"]
+        if data.open_datetime is not None:
+            new_open = self._convert_local_to_utc(data.open_datetime, data.timezone)
+            updates["open_datetime"] = new_open
+        if data.close_datetime is not None:
+            new_close = self._convert_local_to_utc(data.close_datetime, data.timezone)
+            updates["close_datetime"] = new_close
+
+        if new_close <= new_open:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="End time must be after start time",
+            )
+
+        # ── Team / user reassignment ────────────────────────────────────────
+        # Only act when the client explicitly sent these fields (model_fields_set).
+        if "team_id" in data.model_fields_set:
+            new_team_id = data.team_id  # None = make personal
+            if new_team_id is not None:
+                # Verify the requester is a member of the target team
+                membership = await db.team_members.find_one({
+                    "team_id": new_team_id,
+                    "user_id": user_id,
+                    "status": MemberStatus.MEMBER.value,
+                })
+                if not membership:
+                    raise HTTPException(
+                        status_code=status.HTTP_403_FORBIDDEN,
+                        detail="You are not a member of the target team",
+                    )
+            updates["team_id"] = new_team_id
+
+        if "user_id" in data.model_fields_set:
+            new_user_id = data.user_id or user_id  # None = assign to self
+            if new_user_id != user_id:
+                # Only admins can reassign to another member
+                team_id_for_check = updates.get("team_id", task.get("team_id"))
+                if not team_id_for_check:
+                    raise HTTPException(
+                        status_code=status.HTTP_403_FORBIDDEN,
+                        detail="Cannot assign to another user without a team",
+                    )
+                membership = await db.team_members.find_one({
+                    "team_id": team_id_for_check,
+                    "user_id": user_id,
+                    "role": TeamRole.ADMIN.value,
+                    "status": MemberStatus.MEMBER.value,
+                })
+                if not membership:
+                    raise HTTPException(
+                        status_code=status.HTTP_403_FORBIDDEN,
+                        detail="Only team admins can reassign tasks to other members",
+                    )
+                # Verify target user is in the team
+                target_member = await db.team_members.find_one({
+                    "team_id": team_id_for_check,
+                    "user_id": new_user_id,
+                    "status": MemberStatus.MEMBER.value,
+                })
+                if not target_member:
+                    raise HTTPException(
+                        status_code=status.HTTP_404_NOT_FOUND,
+                        detail="Target user is not a member of the team",
+                    )
+            updates["user_id"] = new_user_id
+
+        if not updates:
+            return self._task_doc_to_response(task)
+
+        updates["updated_at"] = datetime.utcnow()
+        await db.tasks.update_one({"task_id": task_id}, {"$set": updates})
+
+        updated = await db.tasks.find_one({"task_id": task_id})
+        return self._task_doc_to_response(updated)
 
     async def complete_task(self, task_id: str, user_id: str) -> TaskResponse:
         """

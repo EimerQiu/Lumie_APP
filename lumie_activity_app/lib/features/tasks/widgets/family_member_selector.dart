@@ -29,11 +29,13 @@ class FamilyMemberSelection {
 class FamilyMemberSelector extends StatefulWidget {
   final FamilyMemberSelection? initialSelection;
   final ValueChanged<FamilyMemberSelection> onChanged;
+  final bool showMemberSelector;
 
   const FamilyMemberSelector({
     super.key,
     this.initialSelection,
     required this.onChanged,
+    this.showMemberSelector = true,
   });
 
   @override
@@ -109,15 +111,15 @@ class _FamilyMemberSelectorState extends State<FamilyMemberSelector> {
   }
 
   void _selectTeam(Team team) {
-    if (_isAdminMode) {
-      // Admin mode: select team and require member selection
+    if (_isAdminMode && widget.showMemberSelector) {
+      // Admin mode with member picker visible: load members before confirming
       setState(() {
         _selectedTeamId = team.teamId;
         _selectedMemberId = null;
       });
       _loadTeamMembers(team.teamId);
     } else {
-      // Member mode: select team directly without member selection
+      // Member mode, or admin with member picker hidden: confirm immediately
       setState(() {
         _selectedTeamId = team.teamId;
         _selectedMemberId = null;
@@ -194,8 +196,8 @@ class _FamilyMemberSelectorState extends State<FamilyMemberSelector> {
           ),
         ),
 
-        // Member selection (only when admin mode and team is selected)
-        if (_isAdminMode && _selectedTeamId != null) ...[
+        // Member selection (only when admin mode, team is selected, and enabled)
+        if (widget.showMemberSelector && _isAdminMode && _selectedTeamId != null) ...[
           const SizedBox(height: 12),
           const Text(
             'Select Member',

@@ -121,6 +121,29 @@ class AdminTaskService:
             family_name=family_name,
         )
 
+    async def get_task_by_id(self, task_id: str, requesting_user_id: str) -> AdminTaskData:
+        """Fetch a single task by ID. Caller must be a team admin or the task owner."""
+        db = get_database()
+        task = await db.tasks.find_one({"task_id": task_id})
+        if not task:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task not found")
+
+        # Allow access if requester is the task owner
+        if task["user_id"] == requesting_user_id:
+            return await self._enrich_task(task)
+
+        # Otherwise require admin of a shared team
+        admin_team_ids = await self._verify_admin_of_any_team(requesting_user_id)
+        if task.get("team_id") and task["team_id"] in admin_team_ids:
+            return await self._enrich_task(task)
+
+        # Also allow if the task owner is a member of any of the admin's teams
+        member_ids = await self._get_team_member_ids(admin_team_ids)
+        if task["user_id"] in member_ids:
+            return await self._enrich_task(task)
+
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
     async def get_admin_task_list(
         self,
         admin_user_id: str,

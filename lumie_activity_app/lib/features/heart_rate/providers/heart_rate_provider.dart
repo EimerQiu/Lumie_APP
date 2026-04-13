@@ -80,6 +80,9 @@ class HeartRateProvider extends ChangeNotifier {
 
     if (!justReconnected) return;
 
+    // Reload daily history when ring reconnects
+    fetchDailyHistory();
+
     if (_measureState == HrMeasureState.measuring) {
       // Re-subscribe to the new characteristic so the stream stays live.
       // Also resends 0x28/0x09/0x19 start commands in case the ring lost state.

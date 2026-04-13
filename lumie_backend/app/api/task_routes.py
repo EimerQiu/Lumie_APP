@@ -12,7 +12,7 @@ from ..services.task_service import task_service
 from ..services.ai_tips_service import get_ai_tips
 from ..services.dayprint_service import log_task_completed
 from ..models.task import (
-    TaskCreate, TaskResponse, TaskListResponse,
+    TaskCreate, TaskUpdate, TaskResponse, TaskListResponse,
     TemplateCreate, TemplateUpdate, TemplateResponse, TemplateListResponse,
     BatchGenerateRequest, BatchGenerateResponse,
     AiTipsRequest, AiTipsResponse,
@@ -152,6 +152,21 @@ async def get_tasks(
     - Sorted by open_datetime ascending
     """
     return await task_service.get_tasks(user_id, date=date, timezone=timezone)
+
+
+@router.patch("/{task_id}", response_model=TaskResponse)
+async def update_task(
+    task_id: str,
+    data: TaskUpdate,
+    user_id: str = Depends(get_current_user_id),
+):
+    """
+    Edit a task's name, type, time window, or description.
+
+    - Only the task owner or creator can edit
+    - Datetime fields are in the user's local timezone; include `timezone` for correct conversion
+    """
+    return await task_service.update_task(task_id, user_id, data)
 
 
 @router.post("/{task_id}/complete", response_model=TaskResponse)
