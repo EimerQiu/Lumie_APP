@@ -167,7 +167,7 @@ class _TeamDayprintScreenState extends State<TeamDayprintScreen> {
                   Expanded(
                     child: Column(
                       children: leftItems
-                          .map((item) => _FeedCard(item: item))
+                          .map((item) => _FeedCard(item: item, onRefresh: _loadFeed))
                           .toList(),
                     ),
                   ),
@@ -175,7 +175,7 @@ class _TeamDayprintScreenState extends State<TeamDayprintScreen> {
                   Expanded(
                     child: Column(
                       children: rightItems
-                          .map((item) => _FeedCard(item: item))
+                          .map((item) => _FeedCard(item: item, onRefresh: _loadFeed))
                           .toList(),
                     ),
                   ),
@@ -204,11 +204,22 @@ class _TeamDayprintScreenState extends State<TeamDayprintScreen> {
 
 // ─── Feed Card dispatcher ─────────────────────────────────────────────────────
 
-Future<void> _openTaskDetail(BuildContext context, String taskId) async {
+Future<void> _openTaskDetail(
+  BuildContext context,
+  String taskId, {
+  VoidCallback? onRefresh,
+}) async {
   try {
     final task = await TaskService().getTaskById(taskId);
     if (!context.mounted) return;
-    Navigator.pushNamed(context, '/tasks/detail', arguments: task);
+    final result = await Navigator.pushNamed(
+      context,
+      '/tasks/detail',
+      arguments: task,
+    );
+    if (result == true && context.mounted) {
+      onRefresh?.call();
+    }
   } catch (_) {
     if (!context.mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
@@ -219,8 +230,9 @@ Future<void> _openTaskDetail(BuildContext context, String taskId) async {
 
 class _FeedCard extends StatelessWidget {
   final TeamFeedItem item;
+  final VoidCallback? onRefresh;
 
-  const _FeedCard({required this.item});
+  const _FeedCard({required this.item, this.onRefresh});
 
   @override
   Widget build(BuildContext context) {
@@ -237,7 +249,11 @@ class _FeedCard extends StatelessWidget {
       padding: const EdgeInsets.only(bottom: 8),
       child: isTask
           ? GestureDetector(
-              onTap: () => _openTaskDetail(context, item.itemId),
+              onTap: () => _openTaskDetail(
+                context,
+                item.itemId,
+                onRefresh: onRefresh,
+              ),
               child: card,
             )
           : card,

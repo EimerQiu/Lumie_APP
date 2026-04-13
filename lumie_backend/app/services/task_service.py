@@ -228,22 +228,17 @@ class TaskService:
             {
                 "type": "text",
                 "text": (
-                    "Analyze these food photos and return concise nutrition notes in ONE line with semicolon-separated chunks. "
-                    "Do not use labels like 'first image' or 'second image'. "
-                    "Do not use angle brackets, bullets, markdown, or numbering. "
-                    "Use natural descriptive wording, not compressed shorthand. "
-                    "Always spell out macros with labels like 'protein', 'carbs', 'fat'. "
-                    "Never use slash format such as '30kcal/1g/7g/0g'. "
-                    "Do not estimate, analyze, or mention calories/kcal at all. "
-                    "Output format: "
-                    "food description in photo 1 with key nutrition details; "
-                    "food description in photo 2 with key nutrition details; "
-                    "... "
-                    "Keep estimates approximate with '~' or 'about' when uncertain. "
-                    "Preferred style example: "
-                    "'Sliced cucumbers, mostly water and fiber, negligible protein/fat/carbs; "
-                    "Salmon (about 25g protein, 15g fat), steamed broccoli (~4g protein, 11g carbs), "
-                    "and a berry smoothie (~2g protein, 35g carbs)'."
+                    "Look at the food image(s) provided and describe ONLY the food items you can actually see. "
+                    "Do NOT invent, assume, or add any food that is not clearly visible in the image. "
+                    "If one image is provided, write one description. "
+                    "If multiple images are provided, separate each image's description with a semicolon. "
+                    "Each description should name the food and include approximate macros (protein, carbs, fat). "
+                    "Rules: no calories/kcal; no markdown, bullets, or numbering; no labels like 'image 1'; "
+                    "spell out macro names fully; use '~' or 'about' for estimates. "
+                    "Example for one image: "
+                    "'Fried egg (about 6g protein, 5g fat) and black coffee (negligible macros)'. "
+                    "Example for two images: "
+                    "'Fried egg (about 6g protein, 5g fat); Salmon (~25g protein, 15g fat) with steamed broccoli (~4g protein, 7g carbs)'."
                 ),
             }
         ]
@@ -284,8 +279,8 @@ class TaskService:
             payload = {
                 "model": settings.OPENAI_VISION_MODEL,
                 "messages": [{"role": "user", "content": content}],
-                "max_tokens": 260,
-                "temperature": 0.2,
+                "max_tokens": 120 * added,  # ~120 tokens per image, prevents padding
+                "temperature": 0.1,
             }
             headers = {
                 "Authorization": f"Bearer {settings.OPENAI_API_KEY}",

@@ -371,11 +371,16 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
               return _AdminTaskCard(
                 task: task,
                 isAdmin: canManage,
-                onTap: () => Navigator.pushNamed(
-                  context,
-                  '/tasks/detail',
-                  arguments: task,
-                ),
+                onTap: () async {
+                  final result = await Navigator.pushNamed(
+                    context,
+                    '/tasks/detail',
+                    arguments: task,
+                  );
+                  if (result == true && context.mounted) {
+                    provider.loadTasks();
+                  }
+                },
                 onComplete: () => _completeTask(provider, task),
                 onDelete: () => _deleteTask(provider, task),
                 resolveAttachmentUrls: _thumbnailUrlCandidates,
@@ -405,11 +410,16 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
               return _AdminTaskCard(
                 task: task,
                 isAdmin: canManage,
-                onTap: () => Navigator.pushNamed(
-                  context,
-                  '/tasks/detail',
-                  arguments: task,
-                ),
+                onTap: () async {
+                  final result = await Navigator.pushNamed(
+                    context,
+                    '/tasks/detail',
+                    arguments: task,
+                  );
+                  if (result == true && context.mounted) {
+                    provider.loadTasks();
+                  }
+                },
                 onComplete: () => _completeTask(provider, task),
                 onDelete: () => _deleteTask(provider, task),
                 resolveAttachmentUrls: _thumbnailUrlCandidates,

@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:video_player/video_player.dart';
+import 'package:provider/provider.dart';
 import '../../../core/constants/api_constants.dart';
 import '../../../core/theme/app_colors.dart';
+import '../providers/tasks_provider.dart';
 import '../../../shared/models/task_models.dart';
 import 'edit_task_screen.dart';
 
@@ -439,85 +441,56 @@ class TaskDetailScreen extends StatelessWidget {
                         const SizedBox(height: 12),
                       ],
 
-                      // Details
-                      _SectionLabel(label: 'Details'),
-                      const SizedBox(height: 6),
-                      _SectionCard(children: [
-                        if (_data.username != null) ...[
-                          _InfoRow(
-                            icon: Icons.person_outline,
-                            label: 'User',
-                            value: _data.username!,
+                      const SizedBox(height: 24),
+
+                      // Edit button
+                      SizedBox(
+                        width: double.infinity,
+                        child: OutlinedButton.icon(
+                          icon: const Icon(Icons.edit_outlined, size: 16),
+                          label: const Text('Edit Task'),
+                          onPressed: () async {
+                            final result = await Navigator.pushNamed(
+                              context,
+                              '/tasks/edit',
+                              arguments: _editArgs,
+                            );
+                            // Pop detail screen with true so the parent list refreshes
+                            if (result != null && context.mounted) {
+                              Navigator.of(context).pop(true);
+                            }
+                          },
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: AppColors.textSecondary,
+                            side: const BorderSide(color: AppColors.surfaceLight),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(10),
+                            ),
+                            padding: const EdgeInsets.symmetric(vertical: 14),
                           ),
-                          const Divider(height: 1),
-                        ],
-                        if (_data.extensionCount > 0) ...[
-                          _InfoRow(
-                            icon: Icons.update_outlined,
-                            label: 'Extended',
-                            value: '${_data.extensionCount}×',
-                          ),
-                          const Divider(height: 1),
-                        ],
-                        _InfoRow(
-                          icon: Icons.fingerprint,
-                          label: 'Task ID',
-                          value: _data.taskId,
-                          mono: true,
                         ),
-                        if (_data.rpttaskId != null) ...[
-                          const Divider(height: 1),
-                          _InfoRow(
-                            icon: Icons.repeat_outlined,
-                            label: 'Template ID',
-                            value: _data.rpttaskId!,
-                            mono: true,
+                      ),
+                      const SizedBox(height: 10),
+
+                      // Delete button
+                      SizedBox(
+                        width: double.infinity,
+                        child: OutlinedButton.icon(
+                          icon: const Icon(Icons.delete_outline, size: 16),
+                          label: const Text('Delete Task'),
+                          onPressed: () => _confirmDelete(context),
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: AppColors.error,
+                            side: BorderSide(
+                              color: AppColors.error.withValues(alpha: 0.4),
+                            ),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(10),
+                            ),
+                            padding: const EdgeInsets.symmetric(vertical: 14),
                           ),
-                        ],
-                        if (_data.teamId != null) ...[
-                          const Divider(height: 1),
-                          _InfoRow(
-                            icon: Icons.group_outlined,
-                            label: 'Team ID',
-                            value: _data.teamId!,
-                            mono: true,
-                          ),
-                        ],
-                        if (_data.userId != null) ...[
-                          const Divider(height: 1),
-                          _InfoRow(
-                            icon: Icons.badge_outlined,
-                            label: 'User ID',
-                            value: _data.userId!,
-                            mono: true,
-                          ),
-                        ],
-                        if (_data.createdBy != null) ...[
-                          const Divider(height: 1),
-                          _InfoRow(
-                            icon: Icons.edit_outlined,
-                            label: 'Created by',
-                            value: _data.createdBy!,
-                            mono: true,
-                          ),
-                        ],
-                        if (_data.createdAt != null) ...[
-                          const Divider(height: 1),
-                          _InfoRow(
-                            icon: Icons.calendar_today_outlined,
-                            label: 'Created',
-                            value: _formatDt(_data.createdAt!),
-                          ),
-                        ],
-                        if (_data.updatedAt != null) ...[
-                          const Divider(height: 1),
-                          _InfoRow(
-                            icon: Icons.history_outlined,
-                            label: 'Updated',
-                            value: _formatDt(_data.updatedAt!),
-                          ),
-                        ],
-                      ]),
+                        ),
+                      ),
                     ],
                   ),
                 ),
@@ -527,6 +500,47 @@ class TaskDetailScreen extends StatelessWidget {
         ),
       ],
     );
+  }
+
+  Future<void> _confirmDelete(BuildContext context) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Delete Task'),
+        content: Text('Delete "${_data.taskName}"? This cannot be undone.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: TextButton.styleFrom(foregroundColor: AppColors.error),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !context.mounted) return;
+    try {
+      await context.read<TasksProvider>().deleteTask(_data.taskId);
+      if (context.mounted) {
+        Navigator.of(context).pop(true); // signal parent list to refresh
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Task deleted')),
+        );
+      }
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Failed: ${e.toString().replaceFirst('Exception: ', '')}',
+            ),
+          ),
+        );
+      }
+    }
   }
 
   Widget _buildHeader(List<Color> colors) {
@@ -689,14 +703,12 @@ class _InfoRow extends StatelessWidget {
   final String label;
   final String value;
   final Color? valueColor;
-  final bool mono;
 
   const _InfoRow({
     required this.icon,
     required this.label,
     required this.value,
     this.valueColor,
-    this.mono = false,
   });
 
   @override
@@ -724,7 +736,7 @@ class _InfoRow extends StatelessWidget {
                   fontSize: 13,
                   color: valueColor ?? AppColors.textPrimary,
                   fontWeight: FontWeight.w500,
-                  fontFamily: mono ? 'monospace' : null,
+                  fontFamily: null,
                 ),
                 softWrap: true,
               ),
