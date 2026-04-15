@@ -408,6 +408,7 @@ class TaskService {
     String? userId,
     String? taskInfo,
     String timezone = 'UTC',
+    int frequencyMinutes = 1440,
   }) async {
     if (_token == null) throw Exception('Not authenticated');
 
@@ -423,6 +424,7 @@ class TaskService {
         if (userId != null) 'user_id': userId,
         if (taskInfo != null) 'task_info': taskInfo,
         'timezone': timezone,
+        'frequency_minutes': frequencyMinutes,
       }),
     );
 
@@ -442,6 +444,7 @@ class TaskService {
     String? userId,
     String? taskInfo,
     String timezone = 'UTC',
+    int frequencyMinutes = 1440,
   }) async {
     if (_token == null) throw Exception('Not authenticated');
 
@@ -457,6 +460,7 @@ class TaskService {
         if (userId != null) 'user_id': userId,
         if (taskInfo != null) 'task_info': taskInfo,
         'timezone': timezone,
+        'frequency_minutes': frequencyMinutes,
       }),
     );
 

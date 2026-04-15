@@ -353,6 +353,7 @@ class TasksProvider extends ChangeNotifier {
     String? teamId,
     String? userId,
     String? taskInfo,
+    int frequencyMinutes = 1440,
   }) async {
     final deviceTimezone = _getDeviceTimezone();
     return await _taskService.batchPreview(
@@ -364,6 +365,7 @@ class TasksProvider extends ChangeNotifier {
       userId: userId,
       taskInfo: taskInfo,
       timezone: deviceTimezone,
+      frequencyMinutes: frequencyMinutes,
     );
   }
 
@@ -376,6 +378,7 @@ class TasksProvider extends ChangeNotifier {
     String? teamId,
     String? userId,
     String? taskInfo,
+    int frequencyMinutes = 1440,
   }) async {
     final deviceTimezone = _getDeviceTimezone();
     await _taskService.batchGenerate(
@@ -387,6 +390,7 @@ class TasksProvider extends ChangeNotifier {
       userId: userId,
       taskInfo: taskInfo,
       timezone: deviceTimezone,
+      frequencyMinutes: frequencyMinutes,
     );
     await loadTasks();
   }

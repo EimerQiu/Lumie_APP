@@ -1189,6 +1189,26 @@ class TaskService:
 
     # ============ Batch Generation ============
 
+    def _compute_template_span_minutes(self, template: dict) -> int:
+        """
+        Compute the time span in minutes from the first window's open time
+        to the last window's close time (accounting for is_next_day).
+        """
+        windows = template.get("time_window_list", [])
+        if not windows:
+            return 0
+
+        def time_to_minutes(t: str) -> int:
+            h, m = map(int, t.split(":"))
+            return h * 60 + m
+
+        open_mins = [time_to_minutes(w["open_time"]) for w in windows]
+        close_mins = [
+            time_to_minutes(w["close_time"]) + (1440 if w.get("is_next_day", False) else 0)
+            for w in windows
+        ]
+        return max(close_mins) - min(open_mins)
+
     def _generate_tasks_from_template(
         self,
         template: dict,
@@ -1200,9 +1220,15 @@ class TaskService:
         team_id: Optional[str] = None,
         task_info: Optional[str] = None,
         timezone: str = "UTC",
+        frequency_minutes: int = 1440,
     ) -> List[dict]:
         """
-        Generate task documents from a template for a date range
+        Generate task documents from a template for a date range.
+
+        The template repeats every `frequency_minutes`. Window open/close times are
+        treated as offsets from midnight of the anchor date, so for day-aligned
+        frequencies (daily, weekly, monthly) windows land at their absolute HH:mm
+        times; for sub-day frequencies (hourly) windows shift with each cycle.
 
         Args:
             template: Template document
@@ -1214,6 +1240,7 @@ class TaskService:
             team_id: Optional team ID
             task_info: Optional task info
             timezone: User's timezone for converting local times to UTC
+            frequency_minutes: How often the template repeats (must be > template span)
 
         Returns:
             List of task documents ready for insertion
@@ -1222,32 +1249,33 @@ class TaskService:
 
         start = dt.strptime(start_date, "%Y-%m-%d")
         end = dt.strptime(end_date, "%Y-%m-%d")
+        end_of_range = end + timedelta(days=1)  # exclusive upper bound (full end day)
         now = datetime.utcnow()
+        now_str = now.strftime("%Y-%m-%d %H:%M")
 
         tasks = []
-        current_date = start
+        current_anchor = start  # always starts at midnight of start_date
 
-        while current_date <= end:
-            date_str = current_date.strftime("%Y-%m-%d")
-
+        while current_anchor < end_of_range:
             for window in template.get("time_window_list", []):
                 window_name = window["name"]
                 open_time = window["open_time"]
                 close_time = window["close_time"]
                 is_next_day = window.get("is_next_day", False)
 
-                open_datetime_local = f"{date_str} {open_time}"
-
+                # Window times are offsets from the anchor (midnight for day-aligned anchors)
+                open_h, open_m = map(int, open_time.split(":"))
+                close_h, close_m = map(int, close_time.split(":"))
+                open_dt_local = current_anchor + timedelta(hours=open_h, minutes=open_m)
+                close_dt_local = current_anchor + timedelta(hours=close_h, minutes=close_m)
                 if is_next_day:
-                    next_day = current_date + timedelta(days=1)
-                    close_datetime_local = f"{next_day.strftime('%Y-%m-%d')} {close_time}"
-                else:
-                    close_datetime_local = f"{date_str} {close_time}"
+                    close_dt_local += timedelta(days=1)
+
+                open_datetime_local = open_dt_local.strftime("%Y-%m-%d %H:%M")
+                close_datetime_local = close_dt_local.strftime("%Y-%m-%d %H:%M")
 
                 open_datetime = self._convert_local_to_utc(open_datetime_local, timezone)
                 close_datetime = self._convert_local_to_utc(close_datetime_local, timezone)
-
-                now_str = now.strftime("%Y-%m-%d %H:%M")
 
                 # Skip windows that have already closed
                 if close_datetime <= now_str:
@@ -1275,7 +1303,7 @@ class TaskService:
                 }
                 tasks.append(task_doc)
 
-            current_date += timedelta(days=1)
+            current_anchor += timedelta(minutes=frequency_minutes)
 
         return tasks
 
@@ -1307,6 +1335,14 @@ class TaskService:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="You can only use your own templates"
+            )
+
+        # Validate frequency against template span
+        span = self._compute_template_span_minutes(template)
+        if data.frequency_minutes <= span:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Frequency ({data.frequency_minutes} min) must be greater than the template's time span ({span} min). Choose a longer repeat interval."
             )
 
         # Determine assigned user
@@ -1348,6 +1384,7 @@ class TaskService:
             team_id=data.team_id,
             task_info=data.task_info,
             timezone=data.timezone,
+            frequency_minutes=data.frequency_minutes,
         )
 
         if not task_docs:
@@ -1397,23 +1434,34 @@ class TaskService:
                 detail="Template not found"
             )
 
+        # Validate frequency against template span
+        span = self._compute_template_span_minutes(template)
+        if data.frequency_minutes <= span:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Frequency ({data.frequency_minutes} min) must be greater than the template's time span ({span} min). Choose a longer repeat interval."
+            )
+
         # Build preview using local times so the user sees their own timezone
         from datetime import datetime as dt
         start = dt.strptime(data.start_date, "%Y-%m-%d")
         end = dt.strptime(data.end_date, "%Y-%m-%d")
+        end_of_range = end + timedelta(days=1)
         now_str = datetime.utcnow().strftime("%Y-%m-%d %H:%M")
 
         preview_tasks = []
-        current_date = start
-        while current_date <= end:
-            date_str = current_date.strftime("%Y-%m-%d")
+        current_anchor = start
+        while current_anchor < end_of_range:
             for window in template.get("time_window_list", []):
-                open_local = f"{date_str} {window['open_time']}"
+                open_h, open_m = map(int, window["open_time"].split(":"))
+                close_h, close_m = map(int, window["close_time"].split(":"))
+                open_dt = current_anchor + timedelta(hours=open_h, minutes=open_m)
+                close_dt = current_anchor + timedelta(hours=close_h, minutes=close_m)
                 if window.get("is_next_day", False):
-                    next_day = current_date + timedelta(days=1)
-                    close_local = f"{next_day.strftime('%Y-%m-%d')} {window['close_time']}"
-                else:
-                    close_local = f"{date_str} {window['close_time']}"
+                    close_dt += timedelta(days=1)
+
+                open_local = open_dt.strftime("%Y-%m-%d %H:%M")
+                close_local = close_dt.strftime("%Y-%m-%d %H:%M")
 
                 # Skip windows that would already be past by the time they're created
                 close_utc = self._convert_local_to_utc(close_local, data.timezone)
@@ -1425,7 +1473,7 @@ class TaskService:
                     "open_datetime": open_local,
                     "close_datetime": close_local,
                 })
-            current_date += timedelta(days=1)
+            current_anchor += timedelta(minutes=data.frequency_minutes)
 
         return {
             "template_id": data.template_id,

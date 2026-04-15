@@ -6,7 +6,7 @@ import '../../../core/services/hr_session_service.dart';
 import '../../../shared/models/heart_rate_models.dart';
 import '../../ring/providers/ring_provider.dart';
 
-enum HrMeasureState { idle, measuring, done }
+enum HrMeasureState { idle, measuring, paused, done }
 
 class _HrRange {
   final DateTime start;
@@ -35,6 +35,7 @@ class HeartRateProvider extends ChangeNotifier {
   StreamSubscription<int>? _hrSub;
   Timer? _elapsedTimer;
   Timer? _autoStopTimer;
+  Timer? _pauseCleanupTimer;
   Duration _elapsed = Duration.zero;
   int? _currentBpm; // latest filtered reading
 
@@ -486,8 +487,67 @@ class HeartRateProvider extends ChangeNotifier {
       ..addAll(merged);
   }
 
-  Future<void> stopMeasurement() async {
+  Future<void> pauseMeasurement() async {
     if (_measureState != HrMeasureState.measuring) return;
+
+    _elapsedTimer?.cancel();
+    _elapsedTimer = null;
+    _autoStopTimer?.cancel();
+    _autoStopTimer = null;
+
+    // Send stop command to ring — keeps BLE notifications flowing briefly.
+    await _ringProvider?.stopHrStreaming();
+
+    _measureState = HrMeasureState.paused;
+    notifyListeners();
+
+    // Keep stream alive for 30 s to catch any late readings, then cancel.
+    _pauseCleanupTimer = Timer(const Duration(seconds: 30), () async {
+      await _hrSub?.cancel();
+      _hrSub = null;
+    });
+  }
+
+  Future<void> resumeMeasurement() async {
+    if (_measureState != HrMeasureState.paused) return;
+    if (_ringProvider == null || !_ringProvider!.isConnected) return;
+
+    _pauseCleanupTimer?.cancel();
+    _pauseCleanupTimer = null;
+
+    await _hrSub?.cancel();
+    _hrSub = null;
+
+    final stream = _ringProvider!.startHrStreaming();
+    _hrSub = stream.listen(
+      _onRawReading,
+      onError: (e) => debugPrint('[HR] stream error after resume: $e'),
+    );
+    _lastRingConnected = _ringProvider?.isConnected ?? false;
+
+    _elapsedTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+      _elapsed += const Duration(seconds: 1);
+      notifyListeners();
+    });
+
+    final remaining = _maxDuration - _elapsed;
+    if (remaining > Duration.zero) {
+      _autoStopTimer = Timer(remaining, () => stopMeasurement());
+    } else {
+      stopMeasurement();
+      return;
+    }
+
+    _measureState = HrMeasureState.measuring;
+    notifyListeners();
+  }
+
+  Future<void> stopMeasurement() async {
+    if (_measureState != HrMeasureState.measuring &&
+        _measureState != HrMeasureState.paused) return;
+
+    _pauseCleanupTimer?.cancel();
+    _pauseCleanupTimer = null;
 
     // Snapshot before teardown — _sessionReadings is not cleared here,
     // but capture startedAt and endedAt while they are still meaningful.
@@ -555,6 +615,7 @@ class HeartRateProvider extends ChangeNotifier {
   void dispose() {
     _elapsedTimer?.cancel();
     _autoStopTimer?.cancel();
+    _pauseCleanupTimer?.cancel();
     _hrSub?.cancel();
     _ringProvider?.removeListener(_onRingStateChanged);
     super.dispose();

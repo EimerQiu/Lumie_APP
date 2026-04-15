@@ -113,6 +113,16 @@ class _HeartRateScreenState extends State<HeartRateScreen>
     provider.startMeasurement();
   }
 
+  void _pauseMeasurement(HeartRateProvider provider) {
+    _pulseController.stop();
+    provider.pauseMeasurement();
+  }
+
+  void _resumeMeasurement(HeartRateProvider provider) {
+    _pulseController.repeat(reverse: true);
+    provider.resumeMeasurement();
+  }
+
   void _stopMeasurement(HeartRateProvider provider) {
     _pulseController.stop();
     _pulseController.reset();
@@ -276,6 +286,10 @@ class _HeartRateScreenState extends State<HeartRateScreen>
           hr,
           isRingConnected: isRingConnected,
           showDisconnectedInPlace: showDisconnectedInPlace,
+        ),
+        HrMeasureState.paused => _buildPausedState(
+          hr,
+          isRingConnected: isRingConnected,
         ),
         HrMeasureState.done => _buildDoneState(hr),
       },
@@ -443,9 +457,14 @@ class _HeartRateScreenState extends State<HeartRateScreen>
           _buildZoneDurationBars(hr),
         ],
         const SizedBox(height: 20),
-        // Stop button
-        OutlinedButton(
-          onPressed: () => _stopMeasurement(hr),
+        // Pause button (no stop while measuring)
+        OutlinedButton.icon(
+          onPressed: () => _pauseMeasurement(hr),
+          icon: const Icon(Icons.pause_rounded),
+          label: const Text(
+            'Pause',
+            style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
+          ),
           style: OutlinedButton.styleFrom(
             foregroundColor: Colors.redAccent,
             side: const BorderSide(color: Colors.redAccent),
@@ -454,10 +473,151 @@ class _HeartRateScreenState extends State<HeartRateScreen>
               borderRadius: BorderRadius.circular(30),
             ),
           ),
-          child: const Text(
-            'Stop',
-            style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildPausedState(
+    HeartRateProvider hr, {
+    required bool isRingConnected,
+  }) {
+    final elapsed = hr.elapsed;
+    final mm = elapsed.inMinutes.remainder(60).toString().padLeft(2, '0');
+    final ss = elapsed.inSeconds.remainder(60).toString().padLeft(2, '0');
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        // Frozen BPM display
+        Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          crossAxisAlignment: CrossAxisAlignment.end,
+          children: [
+            const Icon(Icons.favorite, size: 36, color: Colors.redAccent),
+            const SizedBox(width: 12),
+            Text(
+              hr.liveHr != null ? '${hr.liveHr}' : '_ _',
+              style: const TextStyle(
+                fontSize: 56,
+                fontWeight: FontWeight.bold,
+                color: AppColors.textPrimary,
+                height: 1.0,
+              ),
+            ),
+            const SizedBox(width: 6),
+            const Padding(
+              padding: EdgeInsets.only(bottom: 8),
+              child: Text(
+                'BPM',
+                style: TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w500,
+                  color: AppColors.textSecondary,
+                ),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 6),
+        // Frozen elapsed + paused indicator
+        Center(
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                '$mm:$ss',
+                style: TextStyle(
+                  fontSize: 14,
+                  color: AppColors.textSecondary,
+                  fontFeatures: const [FontFeature.tabularFigures()],
+                ),
+              ),
+              const SizedBox(width: 8),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                decoration: BoxDecoration(
+                  color: Colors.orange.withValues(alpha: 0.15),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: const Text(
+                  'Paused',
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                    color: Colors.orange,
+                  ),
+                ),
+              ),
+            ],
           ),
+        ),
+        const SizedBox(height: 20),
+        // Frozen chart
+        SizedBox(
+          height: 160,
+          child: hr.sessionReadings.length < 2
+              ? Center(
+                  child: Text(
+                    'Waiting for readings…',
+                    style: TextStyle(
+                      fontSize: 13,
+                      color: AppColors.textSecondary,
+                    ),
+                  ),
+                )
+              : HrSessionChart(
+                  readings: hr.sessionReadings,
+                  backfillRanges: hr.attemptedBackfillRanges,
+                ),
+        ),
+        const SizedBox(height: 8),
+        if (hr.sessionReadings.isNotEmpty) _buildSessionStatsRow(hr),
+        if (hr.sessionReadings.isNotEmpty) ...[
+          const SizedBox(height: 12),
+          _buildZoneDurationBars(hr),
+        ],
+        const SizedBox(height: 20),
+        // Resume + Stop buttons
+        Row(
+          children: [
+            Expanded(
+              child: ElevatedButton.icon(
+                onPressed: isRingConnected ? () => _resumeMeasurement(hr) : null,
+                icon: const Icon(Icons.play_arrow_rounded),
+                label: const Text(
+                  'Resume',
+                  style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
+                ),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.redAccent,
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(vertical: 12),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(30),
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: OutlinedButton(
+                onPressed: () => _stopMeasurement(hr),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: AppColors.textSecondary,
+                  side: BorderSide(color: AppColors.textSecondary),
+                  padding: const EdgeInsets.symmetric(vertical: 12),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(30),
+                  ),
+                ),
+                child: const Text(
+                  'Stop',
+                  style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
+                ),
+              ),
+            ),
+          ],
         ),
       ],
     );

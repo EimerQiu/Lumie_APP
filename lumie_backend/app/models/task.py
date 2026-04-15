@@ -4,7 +4,7 @@ Task and Template Models for Med-Reminder Feature
 
 from datetime import datetime
 from typing import Optional, List
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from enum import Enum
 
 
@@ -149,6 +149,23 @@ class BatchGenerateRequest(BaseModel):
     user_id: Optional[str] = Field(None, description="For team tasks: assigned user")
     task_info: Optional[str] = Field(None, max_length=500)
     timezone: str = Field(default="UTC", description="User's timezone for time conversion (e.g., America/Los_Angeles)")
+    frequency_minutes: int = Field(default=1440, ge=1, description="How often the template repeats (in minutes). Must be greater than the template's time span.")
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_frequency_aliases(cls, data):
+        """Accept legacy/alternate key names from older clients."""
+        if not isinstance(data, dict):
+            return data
+        if "frequency_minutes" in data:
+            return data
+
+        for key in ("frequencyMinutes", "repeat_frequency_minutes", "repeatFrequencyMinutes", "frequency"):
+            if key in data:
+                normalized = dict(data)
+                normalized["frequency_minutes"] = data[key]
+                return normalized
+        return data
 
 
 class BatchGenerateResponse(BaseModel):

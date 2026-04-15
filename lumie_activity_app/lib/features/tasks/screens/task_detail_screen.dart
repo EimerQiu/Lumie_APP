@@ -5,6 +5,7 @@ import '../../../core/constants/api_constants.dart';
 import '../../../core/theme/app_colors.dart';
 import '../providers/tasks_provider.dart';
 import '../../../shared/models/task_models.dart';
+import '../../auth/providers/auth_provider.dart';
 import 'edit_task_screen.dart';
 
 // ─── Unified data class ───────────────────────────────────────────────────────
@@ -208,6 +209,9 @@ class TaskDetailScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colors = _colors;
+    final currentUserId = context.read<AuthProvider>().user?.userId;
+    final canEdit = currentUserId != null &&
+        (currentUserId == _data.userId || currentUserId == _data.createdBy);
 
     // Use the first attachment as a parallax hero when it's an image.
     // Videos stay in the media strip below (can't live in a SliverAppBar bg).
@@ -250,15 +254,16 @@ class TaskDetailScreen extends StatelessWidget {
                 foregroundColor: Colors.white,
                 elevation: 0,
                 actions: [
-                  IconButton(
-                    icon: const Icon(Icons.edit_outlined),
-                    tooltip: 'Edit task',
-                    onPressed: () => Navigator.pushNamed(
-                      context,
-                      '/tasks/edit',
-                      arguments: _editArgs,
+                  if (canEdit)
+                    IconButton(
+                      icon: const Icon(Icons.edit_outlined),
+                      tooltip: 'Edit task',
+                      onPressed: () => Navigator.pushNamed(
+                        context,
+                        '/tasks/edit',
+                        arguments: _editArgs,
+                      ),
                     ),
-                  ),
                 ],
                 flexibleSpace: FlexibleSpaceBar(
                   stretchModes: firstIsImage
@@ -441,56 +446,58 @@ class TaskDetailScreen extends StatelessWidget {
                         const SizedBox(height: 12),
                       ],
 
-                      const SizedBox(height: 24),
+                      if (canEdit) ...[
+                        const SizedBox(height: 24),
 
-                      // Edit button
-                      SizedBox(
-                        width: double.infinity,
-                        child: OutlinedButton.icon(
-                          icon: const Icon(Icons.edit_outlined, size: 16),
-                          label: const Text('Edit Task'),
-                          onPressed: () async {
-                            final result = await Navigator.pushNamed(
-                              context,
-                              '/tasks/edit',
-                              arguments: _editArgs,
-                            );
-                            // Pop detail screen with true so the parent list refreshes
-                            if (result != null && context.mounted) {
-                              Navigator.of(context).pop(true);
-                            }
-                          },
-                          style: OutlinedButton.styleFrom(
-                            foregroundColor: AppColors.textSecondary,
-                            side: const BorderSide(color: AppColors.surfaceLight),
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(10),
+                        // Edit button
+                        SizedBox(
+                          width: double.infinity,
+                          child: OutlinedButton.icon(
+                            icon: const Icon(Icons.edit_outlined, size: 16),
+                            label: const Text('Edit Task'),
+                            onPressed: () async {
+                              final result = await Navigator.pushNamed(
+                                context,
+                                '/tasks/edit',
+                                arguments: _editArgs,
+                              );
+                              // Pop detail screen with true so the parent list refreshes
+                              if (result != null && context.mounted) {
+                                Navigator.of(context).pop(true);
+                              }
+                            },
+                            style: OutlinedButton.styleFrom(
+                              foregroundColor: AppColors.textSecondary,
+                              side: const BorderSide(color: AppColors.surfaceLight),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(10),
+                              ),
+                              padding: const EdgeInsets.symmetric(vertical: 14),
                             ),
-                            padding: const EdgeInsets.symmetric(vertical: 14),
                           ),
                         ),
-                      ),
-                      const SizedBox(height: 10),
+                        const SizedBox(height: 10),
 
-                      // Delete button
-                      SizedBox(
-                        width: double.infinity,
-                        child: OutlinedButton.icon(
-                          icon: const Icon(Icons.delete_outline, size: 16),
-                          label: const Text('Delete Task'),
-                          onPressed: () => _confirmDelete(context),
-                          style: OutlinedButton.styleFrom(
-                            foregroundColor: AppColors.error,
-                            side: BorderSide(
-                              color: AppColors.error.withValues(alpha: 0.4),
+                        // Delete button
+                        SizedBox(
+                          width: double.infinity,
+                          child: OutlinedButton.icon(
+                            icon: const Icon(Icons.delete_outline, size: 16),
+                            label: const Text('Delete Task'),
+                            onPressed: () => _confirmDelete(context),
+                            style: OutlinedButton.styleFrom(
+                              foregroundColor: AppColors.error,
+                              side: BorderSide(
+                                color: AppColors.error.withValues(alpha: 0.4),
+                              ),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(10),
+                              ),
+                              padding: const EdgeInsets.symmetric(vertical: 14),
                             ),
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(10),
-                            ),
-                            padding: const EdgeInsets.symmetric(vertical: 14),
                           ),
                         ),
-                      ),
+                      ],
                     ],
                   ),
                 ),
