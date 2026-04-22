@@ -63,7 +63,7 @@ class _Detail {
         taskType: t.taskType.displayName,
         openDatetime: t.openDatetime,
         closeDatetime: t.closeDatetime,
-        status: t.status.displayName,
+        status: _capitalise(t.status),
         taskInfo: t.taskInfo,
         note: t.note,
         attachments: t.attachments,

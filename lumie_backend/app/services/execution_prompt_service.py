@@ -60,6 +60,7 @@ def build_lumie_db_execution_prompt(
     schema = _load_schema()
     glossary = _load_glossary()
     timezone = user_context.get("timezone", "UTC")
+    is_tasks_create = "skill_id: tasks_create" in skill_full_text
 
     # Format previous results for context if available
     prev_results_section = ""
@@ -71,6 +72,15 @@ def build_lumie_db_execution_prompt(
 These are the raw results from skills executed in prior tiers. Use them as context:
 
 {json.dumps({k: v.data if hasattr(v, 'data') else v for k, v in previous_results.items()}, indent=2, default=str)}
+"""
+
+    task_generation_guardrail = ""
+    if is_tasks_create:
+        task_generation_guardrail = """
+## Task Generation Safety Guardrails (Required)
+- For template-mode task creation, enforce `frequency_minutes >= 1440` (daily minimum).
+- Also validate `frequency_minutes > template_span_minutes` where template span is the full open→close window range.
+- If a provided frequency violates these rules, do not write any task docs; return `_result` with `created_count: 0` and a clear summary message.
 """
 
     return f"""You are generating a Python async script to query Lumie's MongoDB database.
@@ -97,6 +107,7 @@ These are the raw results from skills executed in prior tiers. Use them as conte
 {prev_results_section}
 
 {f"## Conversation Context (summary)" + chr(10) + history_summary if history_summary else ""}
+{task_generation_guardrail}
 
 ## Script Requirements
 

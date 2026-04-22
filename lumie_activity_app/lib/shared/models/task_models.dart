@@ -41,29 +41,6 @@ enum TaskType {
   }
 }
 
-enum TaskStatus {
-  pending,
-  completed,
-  expired;
-
-  String get displayName {
-    switch (this) {
-      case TaskStatus.pending:
-        return 'Pending';
-      case TaskStatus.completed:
-        return 'Completed';
-      case TaskStatus.expired:
-        return 'Expired';
-    }
-  }
-
-  static TaskStatus fromString(String value) {
-    return TaskStatus.values.firstWhere(
-      (e) => e.name == value,
-      orElse: () => TaskStatus.pending,
-    );
-  }
-}
 
 /// Helper to safely parse timestamps from backend
 /// Backend uses datetime.utcnow() which does NOT append 'Z'
@@ -84,7 +61,6 @@ class Task {
   final String? teamId;
   final String createdBy;
   final String? rpttaskId;
-  final TaskStatus status;
   final String? taskInfo;
   final String? note;
   final List<TaskAttachment> attachments;
@@ -103,7 +79,6 @@ class Task {
     this.teamId,
     required this.createdBy,
     this.rpttaskId,
-    required this.status,
     this.taskInfo,
     this.note,
     this.attachments = const [],
@@ -124,7 +99,6 @@ class Task {
       teamId: json['team_id'] as String?,
       createdBy: json['created_by'] as String,
       rpttaskId: json['rpttask_id'] as String?,
-      status: TaskStatus.fromString(json['status'] as String),
       taskInfo: json['task_info'] as String?,
       note: json['note'] as String?,
       attachments:
@@ -152,7 +126,6 @@ class Task {
       'team_id': teamId,
       'created_by': createdBy,
       'rpttask_id': rpttaskId,
-      'status': status.name,
       'task_info': taskInfo,
       'note': note,
       'attachments': attachments.map((a) => a.toJson()).toList(),
@@ -228,6 +201,39 @@ class Task {
 
   /// Whether this is a team task
   bool get isTeamTask => teamId != null;
+
+  /// Calculate status based on datetime and completion state
+  /// completed = completed_at has value
+  /// expired = completed_at does NOT exist AND close_datetime < now
+  /// pending = completed_at does NOT exist AND open_datetime < now AND close_datetime > now
+  String get status {
+    if (completedAt != null) return 'completed';
+    final now = DateTime.now();
+    final close = DateTime.parse(
+      closeDatetime.replaceAll(' ', 'T') + 'Z',
+    ).toLocal();
+    if (now.isAfter(close)) return 'expired';
+    return 'pending';
+  }
+
+  bool get isCompleted => completedAt != null;
+  bool get isExpired {
+    if (completedAt != null) return false;
+    final now = DateTime.now();
+    final close = DateTime.parse(
+      closeDatetime.replaceAll(' ', 'T') + 'Z',
+    ).toLocal();
+    return now.isAfter(close);
+  }
+
+  bool get isPending {
+    if (completedAt != null) return false;
+    final now = DateTime.now();
+    final close = DateTime.parse(
+      closeDatetime.replaceAll(' ', 'T') + 'Z',
+    ).toLocal();
+    return !now.isAfter(close);
+  }
 }
 
 class TaskListResponse {
@@ -388,12 +394,12 @@ class AdminTaskData {
   final String taskType;
   final String openDatetime;
   final String closeDatetime;
-  final String status;
   final String? rpttaskId;
   final String rpttaskName;
   final String? rpttaskInfo;
   final String? note;
   final List<TaskAttachment> attachments;
+  final String? completedAt;
   final String rpttaskType;
   final List<RptTaskItem> rpttaskList;
   final String? smallTaskId;
@@ -408,12 +414,12 @@ class AdminTaskData {
     required this.taskType,
     required this.openDatetime,
     required this.closeDatetime,
-    required this.status,
     this.rpttaskId,
     required this.rpttaskName,
     this.rpttaskInfo,
     this.note,
     this.attachments = const [],
+    this.completedAt,
     required this.rpttaskType,
     this.rpttaskList = const [],
     this.smallTaskId,
@@ -430,7 +436,6 @@ class AdminTaskData {
       taskType: json['task_type'] as String,
       openDatetime: json['open_datetime'] as String,
       closeDatetime: json['close_datetime'] as String,
-      status: json['status'] as String,
       rpttaskId: json['rpttask_id'] as String?,
       rpttaskName: json['rpttask_name'] as String,
       rpttaskInfo: json['rpttask_info'] as String?,
@@ -440,6 +445,7 @@ class AdminTaskData {
               ?.map((a) => TaskAttachment.fromJson(a as Map<String, dynamic>))
               .toList() ??
           const [],
+      completedAt: json['completed_at'] as String?,
       rpttaskType: json['rpttask_type'] as String,
       rpttaskList:
           (json['rpttask_list'] as List?)
@@ -453,10 +459,38 @@ class AdminTaskData {
     );
   }
 
-  /// Status badge color
-  bool get isCompleted => status == 'completed';
-  bool get isPending => status == 'pending';
-  bool get isExpired => status == 'expired';
+  /// Calculate status based on datetime and completion state
+  /// completed = completed_at has value
+  /// expired = completed_at does NOT exist AND close_datetime < now
+  /// pending = completed_at does NOT exist AND close_datetime >= now
+  String get status {
+    if (completedAt != null && completedAt!.isNotEmpty) return 'completed';
+    final now = DateTime.now();
+    final close = DateTime.parse(
+      closeDatetime.replaceAll(' ', 'T') + 'Z',
+    ).toLocal();
+    if (now.isAfter(close)) return 'expired';
+    return 'pending';
+  }
+
+  bool get isCompleted => completedAt != null && completedAt!.isNotEmpty;
+  bool get isPending {
+    if (isCompleted) return false;
+    final now = DateTime.now();
+    final close = DateTime.parse(
+      closeDatetime.replaceAll(' ', 'T') + 'Z',
+    ).toLocal();
+    return !now.isAfter(close);
+  }
+
+  bool get isExpired {
+    if (isCompleted) return false;
+    final now = DateTime.now();
+    final close = DateTime.parse(
+      closeDatetime.replaceAll(' ', 'T') + 'Z',
+    ).toLocal();
+    return now.isAfter(close);
+  }
 
   /// Formatted time window for display (UTC→local conversion)
   String get timeWindowText {

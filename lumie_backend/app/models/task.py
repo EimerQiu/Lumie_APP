@@ -72,7 +72,6 @@ class TaskResponse(BaseModel):
     team_id: Optional[str] = None
     created_by: str
     rpttask_id: Optional[str] = None
-    status: TaskStatus
     task_info: Optional[str] = None
     note: Optional[str] = None
     attachments: List[dict] = Field(default_factory=list)
@@ -104,7 +103,15 @@ class TemplateCreate(BaseModel):
     template_name: str = Field(..., min_length=1, max_length=200)
     template_type: TaskType = Field(default=TaskType.MEDICINE)
     description: Optional[str] = Field(None, max_length=500)
-    min_interval: int = Field(default=60, ge=0, description="Min interval in minutes")
+    min_interval: int = Field(
+        default=60,
+        ge=0,
+        description=(
+            "Minimum allowed gap (minutes) between a completed task and the next "
+            "task opening in the same template series. Used by postpone logic; "
+            "NOT the template generation cadence."
+        ),
+    )
     time_window_list: List[TimeWindow] = Field(..., min_length=1)
 
 
@@ -113,7 +120,14 @@ class TemplateUpdate(BaseModel):
     template_name: Optional[str] = Field(None, min_length=1, max_length=200)
     template_type: Optional[TaskType] = None
     description: Optional[str] = Field(None, max_length=500)
-    min_interval: Optional[int] = Field(None, ge=0, description="Min interval in minutes")
+    min_interval: Optional[int] = Field(
+        None,
+        ge=0,
+        description=(
+            "Minimum allowed gap (minutes) between completion and next open in the "
+            "same series (postpone safety rule). NOT generation cadence."
+        ),
+    )
     time_window_list: Optional[List[TimeWindow]] = Field(None, min_length=1)
 
 
@@ -149,7 +163,15 @@ class BatchGenerateRequest(BaseModel):
     user_id: Optional[str] = Field(None, description="For team tasks: assigned user")
     task_info: Optional[str] = Field(None, max_length=500)
     timezone: str = Field(default="UTC", description="User's timezone for time conversion (e.g., America/Los_Angeles)")
-    frequency_minutes: int = Field(default=1440, ge=1, description="How often the template repeats (in minutes). Must be greater than the template's time span.")
+    frequency_minutes: int = Field(
+        default=1440,
+        ge=1,
+        description=(
+            "Template generation cadence in minutes (anchor interval). Must be "
+            "greater than the template's time span. This is separate from "
+            "template.min_interval."
+        ),
+    )
 
     @model_validator(mode="before")
     @classmethod
@@ -192,12 +214,12 @@ class AdminTaskData(BaseModel):
     task_type: str
     open_datetime: str
     close_datetime: str
-    status: str
     rpttask_id: Optional[str] = None
     rpttask_name: str
     rpttask_info: Optional[str] = None
     note: Optional[str] = None
     attachments: List[dict] = Field(default_factory=list)
+    completed_at: Optional[str] = None
     rpttask_type: str
     rpttask_list: List[RptTaskItem] = []
     small_task_id: Optional[str] = None

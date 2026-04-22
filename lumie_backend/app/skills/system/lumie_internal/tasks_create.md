@@ -58,7 +58,7 @@ input_schema:
       description: "TEMPLATE mode: end date in 'yyyy-MM-dd' format (inclusive)"
     frequency_minutes:
       type: integer
-      description: "TEMPLATE mode: how often the template repeats in minutes (default: 1440 = daily). Must exceed template span. Common values: 1440 (daily), 10080 (weekly), 20160 (every 2 weeks)"
+      description: "TEMPLATE mode: repeat cadence in minutes. Advisor safety rule: minimum 1440 (daily). Must also be greater than template span."
     task_info:
       type: string
       description: "Optional notes or details for the task"
@@ -104,11 +104,20 @@ Create one or more tasks for the user. Supports:
 - "Set up medicine reminders for Emma in the Ymo family team from tomorrow through next Friday"
 - "Create a study task on May 5 from 7-9 PM in the family team for my son"
 
+**Worked example (must follow):**
+- User: "Create exercise tasks for next week in the Yumo family"
+- Template windows: 1 (Morning)
+- Date range: 7 days (inclusive)
+- Required cadence: daily (`frequency_minutes = 1440`)
+- Required result: exactly 7 tasks (1 per day), not 168
+
 # Required Inputs (by mode)
 - **deadline mode**: `task_name`, `task_type`, `mode: "deadline"`, `open_datetime`, `close_datetime`
 - **recurring mode**: `task_name`, `task_type`, `mode: "recurring"`, `dates`, `times`
 - **template mode**: `task_name`, `task_type`, `mode: "template"`, `template_id`, `start_date`, `end_date`
   - Optional: `frequency_minutes` (defaults to 1440 = daily if not provided)
+  - Advisor safety rule: always enforce `frequency_minutes >= 1440` for template mode
+  - If user says "next week" / "this week" / "for 7 days", use `frequency_minutes = 1440` (daily)
 
 # Runtime Rules
 - All time helpers are pre-loaded: `datetime`, `timedelta`, `timezone`, `ZoneInfo`, `uuid`, `asyncio`
@@ -156,9 +165,22 @@ If `mode == "recurring"`:
   - Validate each time window (close > open)
 
 If `mode == "template"`:
-  - Require `template_id`, `start_date`, `end_date`, `frequency_minutes`
+  - Require `template_id`, `start_date`, `end_date`
   - Validate `start_date` ≤ `end_date`
+  - If `frequency_minutes` missing, set to `1440`
   - Validate `frequency_minutes` > 0
+  - Safety rule for advisor-generated template tasks: enforce `frequency_minutes >= 1440` (daily minimum)
+  - Validate `frequency_minutes > template_span_minutes`
+  - Do not use `template.min_interval` as generation cadence
+  - Sanity-check count before inserts:
+    - `expected_count = anchors_in_range × template_window_count`
+    - For 7 days, 1 window, daily cadence => expected_count must be 7
+    - If expected_count is unexpectedly high (for example > 3 × days × windows), stop and return an error summary
+
+## Template Mode Policy (strict)
+- Template mode is for daily-or-longer scheduling only.
+- Never generate template tasks with sub-day cadence (`frequency_minutes < 1440`).
+- If user intent is hourly/minutely repetition, do not force template mode. Use recurring mode with explicit `dates` + `times`, or return a clarification summary with `created_count = 0`.
 
 ## Step 1.5: Resolve team name to team_id (if team_name provided)
 ```python
@@ -287,6 +309,14 @@ if not template:
 else:
     # Set frequency default to daily (1440 minutes) if not provided
     freq_minutes = frequency_minutes if frequency_minutes else 1440
+
+    # Safety rule: template mode must be daily-or-longer to avoid accidental
+    # over-generation (e.g., 168 tasks for one week).
+    if freq_minutes < 1440:
+        freq_minutes = 1440
+
+    # IMPORTANT: do not use template.min_interval as generation cadence.
+    # min_interval is a completion/postpone rule, not a repeat-anchor interval.
     
     # Parse dates
     start_dt = datetime.strptime(start_date, "%Y-%m-%d")
@@ -294,6 +324,47 @@ else:
     end_of_range = end_dt + timedelta(days=1)  # Inclusive
     now = datetime.utcnow()
     now_str = now.strftime("%Y-%m-%d %H:%M")
+
+    # Validate frequency against template span: frequency must be longer than the
+    # template's full open→close span, otherwise windows overlap and explode count.
+    def _to_min(t):
+        h, m = map(int, t.split(":"))
+        return h * 60 + m
+    wins = template.get("time_window_list", [])
+    if wins:
+        opens = [_to_min(w.get("open_time", "00:00")) for w in wins]
+        closes = [
+            _to_min(w.get("close_time", "00:00")) + (1440 if w.get("is_next_day", False) else 0)
+            for w in wins
+        ]
+        template_span = max(closes) - min(opens)
+        if freq_minutes <= template_span:
+            _result = {
+                "summary": (
+                    f"Can't create tasks: frequency ({freq_minutes} min) must be greater than "
+                    f"template span ({template_span} min)."
+                ),
+                "created_count": 0,
+                "nav_hint": "task_list",
+            }
+            # Early return - skip creation
+
+    # Expected-count sanity check before inserts.
+    # For 7-day range, 1 window, daily cadence => expected_count = 7.
+    total_days = (end_dt - start_dt).days + 1
+    win_count = max(1, len(wins))
+    anchor_count = ((total_days * 1440 - 1) // freq_minutes) + 1
+    expected_count = anchor_count * win_count
+    if expected_count > (3 * total_days * win_count):
+        _result = {
+            "summary": (
+                f"Skipped creation because expected task count ({expected_count}) is unusually high "
+                f"for {total_days} day(s) and {win_count} window(s)."
+            ),
+            "created_count": 0,
+            "nav_hint": "task_list",
+        }
+        # Early return - skip creation
 
     # Iterate through date range, applying template at each frequency
     current_anchor = start_dt

@@ -253,7 +253,7 @@ class AdminTasksProvider extends ChangeNotifier {
       taskId: taskId,
       timeZone: _getDeviceTimezone(),
     );
-    // Update local state: change status to completed
+    // Update local state: set completedAt timestamp
     _previousTasks = _previousTasks.map((t) {
       if (t.taskId == taskId) {
         return AdminTaskData(
@@ -263,12 +263,12 @@ class AdminTasksProvider extends ChangeNotifier {
           taskType: t.taskType,
           openDatetime: t.openDatetime,
           closeDatetime: t.closeDatetime,
-          status: 'completed',
           rpttaskId: t.rpttaskId,
           rpttaskName: t.rpttaskName,
           rpttaskInfo: t.rpttaskInfo,
           note: t.note,
           attachments: t.attachments,
+          completedAt: DateTime.now().toIso8601String(),
           rpttaskType: t.rpttaskType,
           rpttaskList: t.rpttaskList,
           smallTaskId: t.smallTaskId,
@@ -288,12 +288,12 @@ class AdminTasksProvider extends ChangeNotifier {
           taskType: t.taskType,
           openDatetime: t.openDatetime,
           closeDatetime: t.closeDatetime,
-          status: 'completed',
           rpttaskId: t.rpttaskId,
           rpttaskName: t.rpttaskName,
           rpttaskInfo: t.rpttaskInfo,
           note: t.note,
           attachments: t.attachments,
+          completedAt: DateTime.now().toIso8601String(),
           rpttaskType: t.rpttaskType,
           rpttaskList: t.rpttaskList,
           smallTaskId: t.smallTaskId,

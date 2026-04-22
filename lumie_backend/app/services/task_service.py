@@ -21,7 +21,7 @@ from ..core.config import settings
 from ..core.datetime_utils import format_utc_datetime, format_utc_datetime_with_ms
 from ..core.subscription_helpers import get_task_date_range, raise_task_date_range_error
 from ..models.task import (
-    TaskType, TaskStatus,
+    TaskType,
     TaskCreate, TaskUpdate, TaskResponse, TaskListResponse,
     TemplateCreate, TemplateUpdate, TemplateResponse, TemplateListResponse,
     TimeWindow, BatchGenerateRequest, BatchGenerateResponse,
@@ -178,19 +178,6 @@ class TaskService:
 
     def _task_doc_to_response(self, doc: dict) -> TaskResponse:
         """Convert a MongoDB task document to TaskResponse"""
-        # Calculate status based on completed_at field and close_datetime
-        # completed_at field exists → completed
-        # completed_at doesn't exist + close_datetime passed → expired
-        # completed_at doesn't exist + close_datetime not passed → pending
-        now_str = datetime.utcnow().strftime("%Y-%m-%d %H:%M")
-
-        if doc.get("completed_at"):
-            task_status = TaskStatus.COMPLETED
-        elif doc["close_datetime"] < now_str:
-            task_status = TaskStatus.EXPIRED
-        else:
-            task_status = TaskStatus.PENDING
-
         return TaskResponse(
             task_id=doc["task_id"],
             task_name=doc["task_name"],
@@ -201,7 +188,6 @@ class TaskService:
             team_id=doc.get("team_id"),
             created_by=doc["created_by"],
             rpttask_id=doc.get("rpttask_id"),
-            status=task_status,
             task_info=doc.get("task_info"),
             note=doc.get("note"),
             attachments=doc.get("attachments", []),
@@ -616,7 +602,7 @@ class TaskService:
         """
         Get tasks for user
 
-        Default: returns only tasks within current open/close window and not done.
+        Default: returns pending tasks that have not closed yet (includes upcoming).
         With date filter: returns all tasks for that date.
 
         Args:
@@ -644,9 +630,10 @@ class TaskService:
             # Match tasks whose window overlaps with the given date
             query["open_datetime"] = {"$regex": f"^{date}"}
         else:
-            # Default: only tasks within current window and not completed
+            # Default: all pending tasks that have not closed yet.
+            # This includes both currently-open and future tasks so users can
+            # review what was scheduled in advance (e.g., next week).
             query["completed_at"] = {"$exists": False}
-            query["open_datetime"] = {"$lte": now_str}
             query["close_datetime"] = {"$gt": now_str}
 
         cursor = db.tasks.find(query).sort("open_datetime", 1)

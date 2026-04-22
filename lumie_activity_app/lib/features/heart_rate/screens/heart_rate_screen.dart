@@ -996,7 +996,7 @@ class _ActivityPromptSheetState extends State<_ActivityPromptSheet> {
         exerciseTasks = taskResponse.tasks
             .where((t) =>
                 t.taskType == TaskType.exercise &&
-                t.status == TaskStatus.pending)
+                t.isPending)
             .toList();
       } catch (_) {
         // Network failure or auth issue — treat as no tasks

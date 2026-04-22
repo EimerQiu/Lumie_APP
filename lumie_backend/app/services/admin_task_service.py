@@ -10,7 +10,7 @@ from fastapi import HTTPException, status
 
 from ..core.database import get_database
 from ..models.task import (
-    TaskStatus, AdminTaskData, AdminTaskListResponse, RptTaskItem,
+    AdminTaskData, AdminTaskListResponse, RptTaskItem,
 )
 from ..models.team import TeamRole, MemberStatus
 
@@ -87,19 +87,6 @@ class AdminTaskService:
                         close_time=int(close_parts[0]) * 60 + int(close_parts[1]),
                     ))
 
-        # Compute status based on completed_at field and close_datetime
-        # completed_at field exists → completed
-        # completed_at doesn't exist + close_datetime passed → expired
-        # completed_at doesn't exist + close_datetime not passed → pending
-        now_str = datetime.utcnow().strftime("%Y-%m-%d %H:%M")
-
-        if task.get("completed_at"):
-            task_status = TaskStatus.COMPLETED.value
-        elif task["close_datetime"] < now_str:
-            task_status = TaskStatus.EXPIRED.value
-        else:
-            task_status = TaskStatus.PENDING.value
-
         return AdminTaskData(
             task_id=task["task_id"],
             user_id=task["user_id"],
@@ -107,12 +94,12 @@ class AdminTaskService:
             task_type=task.get("task_type", ""),
             open_datetime=task["open_datetime"],
             close_datetime=task["close_datetime"],
-            status=task_status,
             rpttask_id=task.get("rpttask_id"),
             rpttask_name=task.get("task_name", ""),
             rpttask_info=task.get("task_info"),
             note=task.get("note"),
             attachments=task.get("attachments", []),
+            completed_at=task.get("completed_at"),
             rpttask_type=task.get("task_type", ""),
             rpttask_list=rpttask_list,
             small_task_id=task.get("small_task_id"),

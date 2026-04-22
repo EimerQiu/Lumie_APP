@@ -25,11 +25,11 @@ class TasksProvider extends ChangeNotifier {
   TasksState get state => _state;
   List<Task> get tasks => _tasks;
   List<Task> get pendingTasks =>
-      _tasks.where((t) => t.status == TaskStatus.pending).toList();
+      _tasks.where((t) => t.isPending).toList();
   List<Task> get expiredTasks =>
-      _tasks.where((t) => t.status == TaskStatus.expired).toList();
+      _tasks.where((t) => t.isExpired).toList();
   List<Task> get completedTasks =>
-      _tasks.where((t) => t.status == TaskStatus.completed).toList();
+      _tasks.where((t) => t.isCompleted).toList();
 
   /// Display list: backend already filters to within-window + not-done tasks
   List<Task> get activeTasks => _tasks;

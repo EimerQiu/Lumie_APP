@@ -159,9 +159,10 @@
         "template_type": "string, Medicine|Study|Exercise|Nutrition|Work|Hobbies|Social|Life",
         "description": "string, optional",
         "time_window_list": "array of TimeWindow objects",
-        "min_interval": "number, minimum interval in minutes",
+        "min_interval": "number, minimum allowed gap (minutes) between completion time and next task open time in the same template series; used by postpone logic (e.g., medication safety gap). NOT a generation cadence.",
         "created_at": "string, ISO datetime"
-      }
+      },
+      "notes": "Do not use min_interval as the template repeat frequency. Generation cadence is controlled by batch_generate.frequency_minutes. min_interval is applied after task completion to postpone the next task if too close."
     },
     {
       "name": "teams",
