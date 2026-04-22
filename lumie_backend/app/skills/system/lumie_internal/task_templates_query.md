@@ -156,7 +156,7 @@ for t in templates:
     })
 ```
 
-## Step 3: Build summary with full template list
+## Step 3: Build summary with all template names in one sentence
 ```python
 if not templates:
     if keyword:
@@ -165,41 +165,25 @@ if not templates:
         summary = "You don't have any task templates yet."
 else:
     count = len(templates)
+    template_names = [t.get("template_name", "Unnamed") for t in template_list]
     
-    # Build header
-    if keyword:
-        header = f"Found **{count}** template(s) matching '{keyword}':"
-    elif scope == "recent":
-        header = f"Your **{count}** most recent templates:"
+    # Format names as comma-separated list with "and" before last (no markdown)
+    if count == 1:
+        names_str = template_names[0]
+    elif count == 2:
+        names_str = f"{template_names[0]} and {template_names[1]}"
     else:
-        header = f"You have **{count}** task template(s):"
+        # Join all but last with commas, then add "and" before last
+        names_str = ", ".join(template_names[:-1])
+        names_str += f", and {template_names[-1]}"
     
-    # Build detailed list of all templates
-    template_lines = [header, ""]
-    for idx, t in enumerate(template_list, 1):
-        name = t.get("template_name", "Unnamed")
-        ttype = t.get("template_type", "Unknown")
-        template_lines.append(f"{idx}. **{name}** ({ttype})")
-        
-        # Add time windows details
-        windows = t.get("time_window_details", [])
-        if windows:
-            windows_str = ", ".join(windows)
-            template_lines.append(f"   • Time windows: {windows_str}")
-        
-        # Add min interval if present
-        min_interval = t.get("min_interval", 0)
-        if min_interval > 0:
-            template_lines.append(f"   • Min interval: {min_interval} minutes")
-        
-        # Add description if present
-        description = t.get("description")
-        if description:
-            template_lines.append(f"   • Description: {description}")
-        
-        template_lines.append("")
-    
-    summary = "\n".join(template_lines).strip()
+    # Build summary with all names in one sentence (no markdown)
+    if keyword:
+        summary = f"Found {count} template(s) matching '{keyword}': {names_str}."
+    elif scope == "recent":
+        summary = f"Your {count} most recent templates: {names_str}."
+    else:
+        summary = f"You have {count} task template(s): {names_str}."
 
 _result = {
     "summary": summary,
@@ -217,32 +201,24 @@ For each template, show:
 - **Description** — if present
 - **ID** — for use in task creation
 
-Example output (all templates listed):
+Example outputs (plain text, no markdown):
+
+**All templates:**
 ```
-You have 5 task template(s):
-
-1. **Daily Meds** (Medicine)
-   • Time windows: 8:00–9:00, 12:00–1:00 PM, 6:00–7:00 PM
-   • Min interval: 60 minutes
-
-2. **Phosphate Schedule** (Medicine)
-   • Time windows: 2:00–3:00 PM
-   • Description: Take with food
-
-3. **Weekly Exercise** (Exercise)
-   • Time windows: 6:00–7:00 AM, 6:00–7:00 PM
-   • Min interval: 180 minutes
-
-4. **Study Sessions** (Study)
-   • Time windows: 3:00–4:30 PM, 7:00–8:30 PM
-   • Description: Homework + reading
-
-5. **Sleep Tracking** (Life)
-   • Time windows: 10:00 PM–8:00 AM (next day)
-   • Min interval: 1440 minutes
+You have 5 task template(s): Daily Meds, Phosphate Schedule, Weekly Exercise, Study Sessions, and Sleep Tracking.
 ```
 
-The `templates` array also includes full details (ID, created_at, etc.) for programmatic use.
+**Search results:**
+```
+Found 2 template(s) matching 'medicine': Daily Meds and Phosphate Schedule.
+```
+
+**Recent templates:**
+```
+Your 3 most recent templates: Study Sessions, Weekly Exercise, and Daily Meds.
+```
+
+The `templates` array also includes full details (type, time windows, intervals, descriptions, ID, created_at, etc.) for programmatic use if needed.
 
 # Failure Handling
 - Retry on DB connection errors

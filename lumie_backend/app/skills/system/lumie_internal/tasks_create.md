@@ -58,10 +58,16 @@ input_schema:
       description: "TEMPLATE mode: end date in 'yyyy-MM-dd' format (inclusive)"
     frequency_minutes:
       type: integer
-      description: "TEMPLATE mode: how often the template repeats in minutes (must exceed template span)"
+      description: "TEMPLATE mode: how often the template repeats in minutes (default: 1440 = daily). Must exceed template span. Common values: 1440 (daily), 10080 (weekly), 20160 (every 2 weeks)"
     task_info:
       type: string
       description: "Optional notes or details for the task"
+    team_name:
+      type: string
+      description: "Optional: Name of the team the tasks belong to (e.g. 'Yumo family'). User must be an admin of the team. If not provided, tasks are personal."
+    user_id:
+      type: string
+      description: "Optional: Assign tasks to another team member by user_id (team admins only). If not provided, assigned to the requesting user."
 output_schema:
   type: object
   properties:
@@ -84,17 +90,25 @@ Create one or more tasks for the user. Supports:
 - **Template mode**: Batch create tasks from a saved template across a date range
 
 # When To Use
+
+**Personal tasks:**
 - "Add a medicine task tomorrow at 8-9 AM"
 - "Create a work task due on May 1 from 2-4 PM"
 - "Set a dentist appointment on Friday 3-4 PM"
 - "Add medicine reminders for the next 3 days, 8 AM to 9 AM and 6 PM to 7 PM"
-- "Generate my Daily Med template for the next 2 weeks"
-- "Create tasks using the Phosphate template from April 22 to May 5, daily"
+- "Generate my Daily Med template for the next 2 weeks" (defaults to daily)
+
+**Team tasks (family, group, etc.):**
+- "Create exercise tasks for next week in the Yumo family team"
+- "Generate the Daily Meds template for my daughter in our family team"
+- "Set up medicine reminders for Emma in the Ymo family team from tomorrow through next Friday"
+- "Create a study task on May 5 from 7-9 PM in the family team for my son"
 
 # Required Inputs (by mode)
 - **deadline mode**: `task_name`, `task_type`, `mode: "deadline"`, `open_datetime`, `close_datetime`
 - **recurring mode**: `task_name`, `task_type`, `mode: "recurring"`, `dates`, `times`
-- **template mode**: `task_name`, `task_type`, `mode: "template"`, `template_id`, `start_date`, `end_date`, `frequency_minutes`
+- **template mode**: `task_name`, `task_type`, `mode: "template"`, `template_id`, `start_date`, `end_date`
+  - Optional: `frequency_minutes` (defaults to 1440 = daily if not provided)
 
 # Runtime Rules
 - All time helpers are pre-loaded: `datetime`, `timedelta`, `timezone`, `ZoneInfo`, `uuid`, `asyncio`
@@ -146,6 +160,46 @@ If `mode == "template"`:
   - Validate `start_date` ≤ `end_date`
   - Validate `frequency_minutes` > 0
 
+## Step 1.5: Resolve team name to team_id (if team_name provided)
+```python
+team_id = None
+
+if team_name:
+    team_name_lower = team_name.strip().lower()
+    
+    # Find team by name (case-insensitive) where requester is admin
+    team = await db.teams.find_one({
+        "name": {"$regex": f"^{team_name}$", "$options": "i"},
+        "is_deleted": False
+    })
+    
+    if not team:
+        _result = {
+            "summary": f"I couldn't find a team named '{team_name}'.",
+            "created_count": 0,
+            "nav_hint": "task_list",
+        }
+        # Early return - skip task creation
+    else:
+        team_id = team["team_id"]
+        
+        # Verify target_user_id is an admin of this team
+        admin_check = await db.team_members.find_one({
+            "team_id": team_id,
+            "user_id": target_user_id,
+            "role": "admin",
+            "status": "member"
+        })
+        
+        if not admin_check:
+            _result = {
+                "summary": f"You must be an admin of '{team_name}' to create tasks there.",
+                "created_count": 0,
+                "nav_hint": "task_list",
+            }
+            # Early return - skip task creation
+```
+
 ## Step 2: Convert local times to UTC
 ```python
 def local_to_utc(local_time_str: str) -> str:
@@ -176,7 +230,7 @@ for _ in range(1):  # Just one iteration
         "close_datetime": local_to_utc(close_datetime),
         "user_id": target_user_id,
         "created_by": target_user_id,
-        "team_id": None,
+        "team_id": team_id,
         "rpttask_id": None,
         "task_info": task_info,
         "attachments": [],
@@ -204,7 +258,7 @@ for date_str in dates:
                 "close_datetime": local_to_utc(close_local),
                 "user_id": target_user_id,
                 "created_by": target_user_id,
-                "team_id": None,
+                "team_id": team_id,
                 "rpttask_id": None,
                 "task_info": task_info,
                 "attachments": [],
@@ -231,6 +285,9 @@ if not template:
         "nav_hint": "task_list",
     }
 else:
+    # Set frequency default to daily (1440 minutes) if not provided
+    freq_minutes = frequency_minutes if frequency_minutes else 1440
+    
     # Parse dates
     start_dt = datetime.strptime(start_date, "%Y-%m-%d")
     end_dt = datetime.strptime(end_date, "%Y-%m-%d")
@@ -288,7 +345,7 @@ else:
                     "close_datetime": close_datetime_utc,
                     "user_id": target_user_id,
                     "created_by": target_user_id,
-                    "team_id": None,
+                    "team_id": team_id,
                     "rpttask_id": template_id,
                     "task_info": task_info,
                     "attachments": [],
@@ -300,7 +357,7 @@ else:
             except Exception as e:
                 errors.append(f"Window {current_anchor.strftime('%Y-%m-%d')}: {str(e)}")
 
-        current_anchor += timedelta(minutes=frequency_minutes)
+        current_anchor += timedelta(minutes=freq_minutes)
 ```
 
 ## Step 4: Build result
