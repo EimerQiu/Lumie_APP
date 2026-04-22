@@ -630,10 +630,10 @@ class TaskService:
             # Match tasks whose window overlaps with the given date
             query["open_datetime"] = {"$regex": f"^{date}"}
         else:
-            # Default: all pending tasks that have not closed yet.
-            # This includes both currently-open and future tasks so users can
-            # review what was scheduled in advance (e.g., next week).
+            # Default: only currently-open tasks (within their time window)
+            # pending = completed_at does NOT exist AND open_datetime <= now AND close_datetime > now
             query["completed_at"] = {"$exists": False}
+            query["open_datetime"] = {"$lte": now_str}
             query["close_datetime"] = {"$gt": now_str}
 
         cursor = db.tasks.find(query).sort("open_datetime", 1)
