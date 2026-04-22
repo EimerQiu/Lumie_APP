@@ -181,19 +181,9 @@ class _AdvisorCredentialScreenState extends State<AdvisorCredentialScreen> {
                     Text('Credentials', style: theme.textTheme.titleMedium),
                     const SizedBox(height: 12),
 
-                    // Only show base URL for non-Gmail skills
-                    if (widget.skillId != 'gmail_inbox_check') ...[
-                      TextField(
-                        controller: _baseUrlCtrl,
-                        decoration: const InputDecoration(
-                          labelText: 'Base URL',
-                          hintText: 'https://portal.example.edu',
-                          prefixIcon: Icon(Icons.link),
-                        ),
-                      ),
-                      const SizedBox(height: 12),
-                    ] else
-                      // For Gmail, show hint that base URL is automatic
+                    // Handle skills with pre-configured base URLs
+                    if (widget.skillId == 'gmail_inbox_check')
+                      // Gmail - show hint
                       Padding(
                         padding: const EdgeInsets.only(bottom: 12),
                         child: Container(
@@ -215,7 +205,70 @@ class _AdvisorCredentialScreenState extends State<AdvisorCredentialScreen> {
                             ],
                           ),
                         ),
+                      )
+                    else if (widget.skillId == 'water_usage_monitor')
+                      // Water Usage Monitor - show pre-configured URL
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 12),
+                        child: Container(
+                          padding: const EdgeInsets.all(12),
+                          decoration: BoxDecoration(
+                            color: theme.colorScheme.primaryContainer,
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Row(
+                                children: [
+                                  Icon(Icons.check_circle, color: theme.colorScheme.primary),
+                                  const SizedBox(width: 12),
+                                  Expanded(
+                                    child: Text(
+                                      'California Water Service',
+                                      style: theme.textTheme.bodySmall?.copyWith(
+                                        fontWeight: FontWeight.w600,
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 8),
+                              Row(
+                                children: [
+                                  Icon(
+                                    Icons.link,
+                                    size: 16,
+                                    color: theme.colorScheme.onPrimaryContainer,
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Expanded(
+                                    child: Text(
+                                      'https://myaccount.calwater.com',
+                                      style: theme.textTheme.bodySmall?.copyWith(
+                                        color: theme.colorScheme.onPrimaryContainer,
+                                      ),
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ],
+                          ),
+                        ),
+                      )
+                    else ...[
+                      // Other skills - editable base URL
+                      TextField(
+                        controller: _baseUrlCtrl,
+                        decoration: const InputDecoration(
+                          labelText: 'Base URL',
+                          hintText: 'https://portal.example.edu',
+                          prefixIcon: Icon(Icons.link),
+                        ),
                       ),
+                      const SizedBox(height: 12),
+                    ],
 
                     TextField(
                       controller: _usernameCtrl,

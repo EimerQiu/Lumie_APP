@@ -21,8 +21,6 @@ from . import skill_credential_service
 from . import execution_service
 from .llm_client import chat_completion
 from .skill_registry_service import skill_registry, SkillIndexItem
-from .task_service import TaskService
-from ..models.task import TaskCreate, TaskType
 
 logger = logging.getLogger(__name__)
 
@@ -138,14 +136,6 @@ async def handle_chat(
 
     if not tool_input or not tool_name:
         return {"type": "direct", "reply": preflight_text or "I'm not sure how to help with that."}
-
-    if tool_name == "create_task":
-        return await _handle_create_task(
-            user_id=user_id,
-            tool_input=tool_input,
-            timezone=ctx.get("timezone") or "UTC",
-            preflight_text=preflight_text,
-        )
 
     if tool_name == "execute_skill":
         return await _handle_skill_execution(
@@ -305,7 +295,7 @@ async def _handle_skill_execution(
 # ── Tool definitions ─────────────────────────────────────────────────────────
 
 def _build_tools(candidates: list[SkillIndexItem]) -> list[dict]:
-    """Build the tool definitions for the LLM, including execute_skill and create_task."""
+    """Build the tool definitions for the LLM, including execute_skill."""
     # Build skill enum from candidates
     skill_options = []
     for c in candidates:
@@ -346,46 +336,6 @@ def _build_tools(candidates: list[SkillIndexItem]) -> list[dict]:
                     },
                 },
                 "required": ["skill_id"],
-            },
-        },
-        {
-            "name": "create_task",
-            "description": (
-                "Call this tool when the user wants to CREATE, ADD, or SET a new task or reminder. "
-                "Supports deadline mode (single task with start/end) and recurring mode (daily tasks)."
-            ),
-            "input_schema": {
-                "type": "object",
-                "properties": {
-                    "task_name": {"type": "string", "description": "Name of the task"},
-                    "task_type": {
-                        "type": "string",
-                        "enum": ["Medicine", "Study", "Exercise", "Nutrition", "Work", "Hobbies", "Social", "Life"],
-                        "description": "Type of task",
-                    },
-                    "mode": {
-                        "type": "string",
-                        "enum": ["deadline", "recurring"],
-                        "description": "deadline = single task, recurring = repeated daily tasks",
-                    },
-                    "open_datetime": {"type": "string", "description": "DEADLINE mode: start datetime 'yyyy-MM-dd HH:mm'"},
-                    "close_datetime": {"type": "string", "description": "DEADLINE mode: end datetime 'yyyy-MM-dd HH:mm'"},
-                    "dates": {"type": "array", "items": {"type": "string"}, "description": "RECURRING mode: list of dates"},
-                    "times": {
-                        "type": "array",
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "open_time": {"type": "string"},
-                                "close_time": {"type": "string"},
-                            },
-                            "required": ["open_time", "close_time"],
-                        },
-                        "description": "RECURRING mode: time windows",
-                    },
-                    "task_info": {"type": "string", "description": "Optional notes"},
-                },
-                "required": ["task_name", "task_type", "mode"],
             },
         },
     ]
@@ -454,19 +404,16 @@ This app helps teens and young adults with chronic health conditions stay active
 
 ## Decision Rules
 
-You have two tools: `execute_skill` and `create_task`.
+You have one tool: `execute_skill`. This includes the `tasks_create` skill for creating new tasks.
 
 **Use execute_skill when:**
 - The user asks a question that requires querying their personal data
 - The user asks about their activity, sleep, tasks, medication schedule, health trends
+- The user wants to ADD, CREATE, or SET a new task or reminder
 - The user asks about school homework, email, or anything requiring external system access
 - Choose the most relevant skill from the available candidates
 - If the user mentions another person by email (e.g., "check tasks of alice@example.com"), set `target_email` to that email so we query that person's data instead of the requester's
 - If the user refers to another person without an email (e.g., "my daughter", "my son", "my child", or a team member's name), set `target_user_hint` to that exact phrase or name
-
-**Use create_task when:**
-- The user wants to ADD, CREATE, or SET a new task or reminder
-- "Remind me to...", "Add a task for...", "Set a reminder..."
 
 **Answer directly when:**
 - General health advice or tips
@@ -476,12 +423,6 @@ You have two tools: `execute_skill` and `create_task`.
 
 **Key distinction:** "What medicine should I take now?" = needs data (use execute_skill) ≠ "What medications treat diabetes?" = general knowledge (answer directly)
 {skill_summary}
-
-## create_task guidelines
-- DEADLINE mode: single task with open_datetime + close_datetime
-- RECURRING mode: dates × time windows
-- "before X" means close_datetime = day BEFORE X at 23:59
-- User's timezone: {timezone}
 
 ## Response guidelines
 - Keep replies concise: 2-4 sentences unless detailed explanation needed
@@ -707,68 +648,3 @@ async def _ensure_lumie_credentials(user_id: str) -> None:
             await skill_credential_service.ensure_lumie_internal_credential(
                 user_id, skill.skill_id
             )
-
-
-# ── create_task handler (reused from v1) ─────────────────────────────────────
-
-async def _handle_create_task(
-    user_id: str,
-    tool_input: dict,
-    timezone: str,
-    preflight_text: str,
-) -> dict:
-    task_service = TaskService()
-    task_name = tool_input.get("task_name", "Task")
-    task_type_str = tool_input.get("task_type", "Medicine")
-    mode = tool_input.get("mode", "recurring")
-    task_info = tool_input.get("task_info")
-
-    try:
-        task_type = TaskType(task_type_str)
-    except ValueError:
-        task_type = TaskType.MEDICINE
-
-    created_count = 0
-    errors = []
-
-    if mode == "deadline":
-        open_dt = tool_input.get("open_datetime")
-        close_dt = tool_input.get("close_datetime")
-        if not open_dt or not close_dt:
-            return {"type": "direct", "reply": "I need a start and end time to create this task. Could you clarify when it should be?"}
-        try:
-            task_data = TaskCreate(
-                task_name=task_name, task_type=task_type,
-                open_datetime=open_dt, close_datetime=close_dt,
-                timezone=timezone, task_info=task_info,
-            )
-            await task_service.create_task(user_id, task_data)
-            created_count = 1
-        except Exception as e:
-            errors.append(getattr(e, "detail", str(e)))
-    else:
-        times = tool_input.get("times", [])
-        dates = tool_input.get("dates", [])
-        if not times or not dates:
-            return {"type": "direct", "reply": "I need both dates and times to create recurring tasks. Could you tell me the schedule?"}
-        for date_str in dates:
-            for tw in times:
-                try:
-                    task_data = TaskCreate(
-                        task_name=task_name, task_type=task_type,
-                        open_datetime=f"{date_str} {tw.get('open_time', '08:00')}",
-                        close_datetime=f"{date_str} {tw.get('close_time', '09:00')}",
-                        timezone=timezone, task_info=task_info,
-                    )
-                    await task_service.create_task(user_id, task_data)
-                    created_count += 1
-                except Exception as e:
-                    errors.append(f"{date_str}: {getattr(e, 'detail', str(e))}")
-
-    if created_count == 0:
-        return {"type": "direct", "reply": f"I wasn't able to create the task. {errors[0] if errors else 'Unknown error'}"}
-
-    reply = f"Done! I've created **{task_name}**." if created_count == 1 else f"Done! I've created **{created_count}** **{task_name}** tasks."
-    if errors:
-        reply += f" ({len(errors)} could not be created.)"
-    return {"type": "direct", "reply": reply, "nav_hint": "task_list"}

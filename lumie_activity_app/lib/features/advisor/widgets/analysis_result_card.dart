@@ -1,6 +1,5 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
-import 'package:flutter_markdown/flutter_markdown.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../shared/models/analysis_models.dart';
 import '../../tasks/screens/tasks_list_screen.dart';
@@ -27,20 +26,12 @@ class _AnalysisResultCardState extends State<AnalysisResultCard> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         // Summary text
-        MarkdownBody(
-          data: widget.result.summary,
-          styleSheet: MarkdownStyleSheet(
-            p: const TextStyle(
-              fontSize: 14,
-              color: AppColors.textPrimary,
-              height: 1.4,
-            ),
-            strong: const TextStyle(
-              fontSize: 14,
-              color: AppColors.textPrimary,
-              fontWeight: FontWeight.bold,
-              height: 1.4,
-            ),
+        Text(
+          widget.result.summary,
+          style: const TextStyle(
+            fontSize: 14,
+            color: AppColors.textPrimary,
+            height: 1.4,
           ),
         ),
 

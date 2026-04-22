@@ -2,6 +2,7 @@
 
 Executes LLM-generated browser automation steps using Playwright.
 Supports Gmail, school portals, and other web-based services.
+Also dispatches specialized skills (e.g., water_usage_monitor) to custom handlers.
 """
 import asyncio
 import json
@@ -27,6 +28,9 @@ async def execute_browser_skill(
 ) -> dict:
     """Execute browser automation steps using Playwright.
 
+    Dispatcher: Routes specialized skills to custom handlers (e.g., water_usage_monitor).
+    Falls back to LLM-generated step execution for generic skills.
+
     Args:
         skill_id: The skill being executed (e.g., 'gmail_inbox_check')
         job_id: Unique job identifier for logging
@@ -45,6 +49,58 @@ async def execute_browser_skill(
             "failed_step": int (step index that failed),
         }
     """
+    # ── Dispatcher for specialized skills ────────────────────────────────
+    if skill_id == "water_usage_monitor":
+        try:
+            from . import water_monitor_runtime
+            username = credential.get("username", "")
+            password = credential.get("password", "")
+            base_url = credential.get("base_url", "https://myaccount.calwater.com")
+
+            result = await water_monitor_runtime.extract_water_usage(
+                username=username,
+                password=password,
+                base_url=base_url,
+                timeout_ms=timeout * 1000,
+            )
+
+            stdout = result.pop("html_snapshot", None)  # Remove snapshot before return
+            return {
+                "success": result.get("success", False),
+                "data": result,
+                "error": result.get("error"),
+                "stdout": json.dumps(result, indent=2, default=str),
+                "stderr": "" if result.get("success") else result.get("error", ""),
+                "screenshot_path": None,
+                "current_url": base_url,
+                "failed_step": None,
+            }
+        except ImportError:
+            logger.error("water_monitor_runtime not available")
+            return {
+                "success": False,
+                "data": None,
+                "error": "water_monitor_runtime module not found",
+                "stdout": "",
+                "stderr": "water_monitor_runtime import failed",
+                "screenshot_path": None,
+                "current_url": None,
+                "failed_step": None,
+            }
+        except Exception as e:
+            logger.exception(f"[{job_id}] water_usage_monitor execution failed: {e}")
+            return {
+                "success": False,
+                "data": None,
+                "error": str(e),
+                "stdout": "",
+                "stderr": str(e),
+                "screenshot_path": None,
+                "current_url": None,
+                "failed_step": None,
+            }
+
+    # ── Generic LLM-generated browser steps ───────────────────────────────
     if not async_playwright:
         return {
             "success": False,

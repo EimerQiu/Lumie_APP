@@ -275,10 +275,15 @@ async def save_skill_credential(
     if not skill:
         raise HTTPException(status_code=404, detail="Skill not found")
 
+    # Auto-fill base_url for skills with hardcoded portals
+    cred_data = request.model_dump(exclude_none=True)
+    if skill_id == "water_usage_monitor":
+        cred_data["base_url"] = "https://myaccount.calwater.com"
+
     cred = await skill_credential_service.save_credential(
         user_id=user_id,
         skill_id=resolve_credential_key(skill),
-        data=request.model_dump(exclude_none=True),
+        data=cred_data,
     )
 
     # Refresh capability status
@@ -386,10 +391,10 @@ async def test_skill_credential(
 
     # For browser/email skills, we can't fully test yet (Phase 1)
     # Mark as saved_not_tested or valid based on completeness
-    # Gmail doesn't need base_url (hardcoded to https://mail.google.com)
+    # Gmail and water_usage_monitor have hardcoded base URLs (don't need user input)
     has_required = bool(cred.get("username") and cred.get("password"))
-    if skill_id == "gmail_inbox_check":
-        # Gmail only needs username and password
+    if skill_id in ("gmail_inbox_check", "water_usage_monitor"):
+        # These skills have hardcoded base URLs, only need username and password
         pass
     else:
         # Other browser skills need base_url as well
@@ -407,7 +412,7 @@ async def test_skill_credential(
         await skill_credential_service.update_credential_status(
             user_id, cred_key, "saved_not_tested", "fields_incomplete"
         )
-        required_msg = "base_url, username, or password" if skill_id != "gmail_inbox_check" else "username or password"
+        required_msg = "username or password"
         return CredentialTestResponse(
             success=False, status="saved_not_tested",
             message=f"Some required fields are missing ({required_msg})",

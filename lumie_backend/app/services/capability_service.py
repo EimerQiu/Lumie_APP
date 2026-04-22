@@ -44,6 +44,12 @@ SYSTEM_CAPABILITIES = [
         "description": "Allow Advisor to read real-time home energy data (solar, Powerwall, Tesla, AC, temperatures)",
         "enabled": True,
     },
+    {
+        "capability_id": "external_service_integration",
+        "display_name": "Utility & Service Monitoring",
+        "description": "Allow Advisor to monitor water usage, electricity, gas, internet and other utility services using stored credentials",
+        "enabled": True,
+    },
 ]
 
 
