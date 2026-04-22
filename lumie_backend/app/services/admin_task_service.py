@@ -9,6 +9,7 @@ from typing import Optional, List
 from fastapi import HTTPException, status
 
 from ..core.database import get_database
+from ..core.datetime_utils import format_utc_datetime
 from ..models.task import (
     AdminTaskData, AdminTaskListResponse, RptTaskItem,
 )
@@ -99,7 +100,7 @@ class AdminTaskService:
             rpttask_info=task.get("task_info"),
             note=task.get("note"),
             attachments=task.get("attachments", []),
-            completed_at=task.get("completed_at"),
+            completed_at=format_utc_datetime(task["completed_at"]) if task.get("completed_at") else None,
             rpttask_type=task.get("task_type", ""),
             rpttask_list=rpttask_list,
             small_task_id=task.get("small_task_id"),
