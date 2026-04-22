@@ -225,6 +225,7 @@ class _BatchGenerateScreenState extends State<BatchGenerateScreen> {
 
             // Family member selector (for admins)
             FamilyMemberSelector(
+              initialSelection: _memberSelection,
               onChanged: (selection) =>
                   setState(() => _memberSelection = selection),
             ),

@@ -111,6 +111,14 @@ class _FamilyMemberSelectorState extends State<FamilyMemberSelector> {
   }
 
   void _selectTeam(Team team) {
+    // Persist team selection immediately so parent state survives rebuilds.
+    widget.onChanged(FamilyMemberSelection(
+      familyId: team.teamId,
+      memberId: null,
+      memberName: null,
+      teamName: team.name,
+    ));
+
     if (_isAdminMode && widget.showMemberSelector) {
       // Admin mode with member picker visible: load members before confirming
       setState(() {
@@ -124,12 +132,6 @@ class _FamilyMemberSelectorState extends State<FamilyMemberSelector> {
         _selectedTeamId = team.teamId;
         _selectedMemberId = null;
       });
-      widget.onChanged(FamilyMemberSelection(
-        familyId: team.teamId,
-        memberId: null,
-        memberName: null,
-        teamName: team.name,
-      ));
     }
   }
 
