@@ -39,6 +39,8 @@ class AdvisorChatV2Request(BaseModel):
 class AdvisorChatV2Response(BaseModel):
     type: str  # "direct" | "execution" | "guidance"
     reply: str
+    reply_class: Optional[str] = None  # clarification_needed | planned | executed | failed
+    is_write_operation_task: Optional[bool] = None
     job_id: Optional[str] = None
     skill_id: Optional[str] = None
     status: Optional[str] = None

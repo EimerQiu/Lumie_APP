@@ -6,7 +6,7 @@ runtime dispatch, and retry logic.
 import asyncio
 import logging
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional
 
 from ..core.config import settings
@@ -86,6 +86,7 @@ async def create_execution_job(
     prompt: str,
     target_user_id: Optional[str] = None,
     team_id: Optional[str] = None,
+    is_write_operation_task: bool = False,
 ) -> str:
     """Create an execution job record in MongoDB. Returns job_id."""
     db = get_database()
@@ -102,6 +103,7 @@ async def create_execution_job(
         "prompt": prompt,
         "target_user_id": target_user_id or user_id,
         "team_id": team_id,
+        "is_write_operation_task": bool(is_write_operation_task),
         "normalized_request": {},
         "status": "pending",
         "generated_script": None,
@@ -237,6 +239,7 @@ async def _execute_lumie_db(
             user_context=user_context,
             history_summary=history_summary,
             previous_results=previous_results,
+            is_write_operation_task=bool(job.get("is_write_operation_task")),
         )
 
         # If retrying, include the error context
@@ -504,9 +507,19 @@ async def _complete_job(
     try:
         job = await db.execution_jobs.find_one({"job_id": job_id})
         if job:
+            await _maybe_create_pending_clarification_from_result(db, job, result_data)
             summary = ""
             if isinstance(result_data, dict):
                 summary = result_data.get("summary", "")
+            # Guardrail: avoid "I created/updated/sent" style claims unless we can
+            # confirm actual write effects for write-operation tasks.
+            if job.get("is_write_operation_task"):
+                write_confirmed = _is_write_confirmed(result_data)
+                if summary:
+                    summary = _sanitize_non_executed_claims(summary)
+                if write_confirmed and isinstance(result_data, dict) and result_data.get("summary"):
+                    # Keep the original summary when execution is confirmed.
+                    summary = result_data.get("summary", "")
             session_id = job.get("session_id") or "default"
             user_id = job.get("user_id", "")
             prompt = job.get("prompt", "")
@@ -535,6 +548,46 @@ async def _complete_job(
         logger.warning(f"Failed to save execution result to chat history: {e}")
 
 
+async def _maybe_create_pending_clarification_from_result(db, job: dict, result_data) -> None:
+    """Persist a pending clarification action when write-intent task creation needs more info."""
+    if not isinstance(result_data, dict):
+        return
+    if job.get("skill_id") != "tasks_create":
+        return
+    if not job.get("is_write_operation_task"):
+        return
+
+    created_count = result_data.get("created_count")
+    summary = (result_data.get("summary") or "").strip()
+    if created_count != 0 or not summary:
+        return
+
+    now = datetime.utcnow()
+    await db.advisor_pending_actions.update_one(
+        {
+            "user_id": job.get("user_id"),
+            "session_id": job.get("session_id") or "default",
+            "action_type": "task_create_clarification",
+            "status": "awaiting_input",
+        },
+        {
+            "$set": {
+                "user_id": job.get("user_id"),
+                "session_id": job.get("session_id") or "default",
+                "action_type": "task_create_clarification",
+                "skill_id": "tasks_create",
+                "status": "awaiting_input",
+                "original_request": job.get("prompt", ""),
+                "clarification_prompt": summary,
+                "updated_at": now,
+                "expires_at": now + timedelta(hours=2),
+            },
+            "$setOnInsert": {"created_at": now},
+        },
+        upsert=True,
+    )
+
+
 async def _fail_job(
     db, job_id: str, error: str, stdout: str = "", stderr: str = "",
 ) -> None:
@@ -550,6 +603,50 @@ async def _fail_job(
         }},
     )
     logger.warning(f"Job {job_id} failed: {error}")
+
+
+def _is_write_confirmed(result_data) -> bool:
+    """Infer whether a write operation actually produced changes."""
+    if not isinstance(result_data, dict):
+        return False
+
+    execution_report = result_data.get("execution_report")
+    if isinstance(execution_report, dict):
+        if isinstance(execution_report.get("write_confirmed"), bool):
+            return execution_report.get("write_confirmed")
+
+    count_keys = (
+        "created_count",
+        "inserted_count",
+        "updated_count",
+        "modified_count",
+        "upserted_count",
+        "sent_count",
+    )
+    for key in count_keys:
+        value = result_data.get(key)
+        if isinstance(value, (int, float)) and value > 0:
+            return True
+    return False
+
+
+def _sanitize_non_executed_claims(text: str) -> str:
+    """Prevent success-claim hallucinations when execution isn't confirmed."""
+    lowered = (text or "").lower()
+    blocked_markers = (
+        "i created",
+        "i updated",
+        "i sent",
+        "done - i created",
+        "done — i created",
+        "done, i created",
+    )
+    if any(marker in lowered for marker in blocked_markers):
+        return (
+            "I could not confirm that the write action completed successfully yet. "
+            "Please check the latest status or try again."
+        )
+    return text
 
 
 # ── Job queries ──────────────────────────────────────────────────────────────

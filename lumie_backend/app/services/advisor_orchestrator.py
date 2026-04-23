@@ -9,7 +9,8 @@ Unified entry point that:
 """
 import asyncio
 import logging
-from datetime import datetime
+import re
+from datetime import datetime, timedelta
 from typing import Optional
 from zoneinfo import ZoneInfo
 
@@ -26,6 +27,123 @@ logger = logging.getLogger(__name__)
 
 # Layer 1 model routed through PaleBlueDot's OpenAI-compatible API.
 _MODEL = settings.PALEBLUEDOT_MODEL
+_REPLY_CLASSES = {
+    "clarification_needed",
+    "planned",
+    "executed",
+    "failed",
+}
+
+
+def _normalize_reply_class(value: Optional[str]) -> str:
+    val = (value or "").strip().lower()
+    if val in _REPLY_CLASSES:
+        return val
+    return "planned"
+
+
+def _sanitize_non_executed_claims(text: str) -> str:
+    lowered = (text or "").lower()
+    blocked_markers = (
+        "i created",
+        "i updated",
+        "i sent",
+        "done - i created",
+        "done — i created",
+        "done, i created",
+    )
+    if any(marker in lowered for marker in blocked_markers):
+        return "I have not completed that action yet. I will only confirm it after execution succeeds."
+    return text
+
+
+def _looks_like_schedule_detail(message: str) -> bool:
+    text = (message or "").strip().lower()
+    if not text:
+        return False
+    patterns = (
+        r"\bnow\b",
+        r"\btoday\b",
+        r"\btomorrow\b",
+        r"\btonight\b",
+        r"\bnext\b",
+        r"\bin \d+\s*(minute|minutes|min|hour|hours|hr|hrs|day|days)\b",
+        r"\b\d{1,2}(:\d{2})?\s*(am|pm)\b",
+        r"\b\d{1,2}:\d{2}\b",
+        r"\bstart\b",
+        r"\bend\b",
+        r"现在|今天|明天|小时|分钟|开始|结束|点",
+    )
+    return any(re.search(p, text) for p in patterns)
+
+
+async def _get_pending_task_create_action(user_id: str, session_id: Optional[str]) -> Optional[dict]:
+    db = get_database()
+    if db is None:
+        return None
+    now = datetime.utcnow()
+    query = {
+        "user_id": user_id,
+        "action_type": "task_create_clarification",
+        "status": "awaiting_input",
+        "expires_at": {"$gt": now},
+    }
+    if session_id:
+        query["session_id"] = session_id
+    return await db.advisor_pending_actions.find_one(query, sort=[("updated_at", -1)])
+
+
+async def _upsert_pending_task_create_action(
+    user_id: str,
+    session_id: Optional[str],
+    original_request: str,
+    clarification_prompt: str,
+) -> None:
+    db = get_database()
+    if db is None:
+        return
+    now = datetime.utcnow()
+    # 2-hour pending window
+    expires_at = now + timedelta(hours=2)
+    query = {
+        "user_id": user_id,
+        "session_id": session_id or "default",
+        "action_type": "task_create_clarification",
+        "status": "awaiting_input",
+    }
+    await db.advisor_pending_actions.update_one(
+        query,
+        {
+            "$set": {
+                "user_id": user_id,
+                "session_id": session_id or "default",
+                "action_type": "task_create_clarification",
+                "skill_id": "tasks_create",
+                "status": "awaiting_input",
+                "original_request": original_request,
+                "clarification_prompt": clarification_prompt,
+                "updated_at": now,
+                "expires_at": expires_at,
+            },
+            "$setOnInsert": {"created_at": now},
+        },
+        upsert=True,
+    )
+
+
+async def _mark_pending_task_create_resolved(user_id: str, session_id: Optional[str]) -> None:
+    db = get_database()
+    if db is None:
+        return
+    await db.advisor_pending_actions.update_many(
+        {
+            "user_id": user_id,
+            "session_id": session_id or "default",
+            "action_type": "task_create_clarification",
+            "status": "awaiting_input",
+        },
+        {"$set": {"status": "resolved", "updated_at": datetime.utcnow()}},
+    )
 
 async def _extract_target_person_with_llm(message: str) -> Optional[str]:
     """Use LLM to detect if the user is asking about someone else's health/status.
@@ -80,7 +198,8 @@ async def handle_chat(
 ) -> dict:
     """Process a v2 advisor chat message.
 
-    Returns dict with keys: type, reply, job_id, skill_id, status, nav_hint
+    Returns dict with keys: type, reply, reply_class, is_write_operation_task,
+    job_id, skill_id, status, nav_hint
     """
     # ── Step 0.5: Auto-detect target user from health-related queries ────
     # Use LLM to detect if asking about someone else's health/status
@@ -103,6 +222,38 @@ async def handle_chat(
         # Auto-provision ping credentials for Lumie internal skills
         await _ensure_lumie_credentials(user_id)
 
+    # ── Step 1.5: Resume pending task-create clarification if user provided schedule ──
+    pending_task_create = await _get_pending_task_create_action(user_id, session_id)
+    if pending_task_create and _looks_like_schedule_detail(message):
+        original_request = pending_task_create.get("original_request") or "create a task"
+        combined_prompt = (
+            f"{original_request}\n\n"
+            f"User follow-up details: {message}\n"
+            "Use the follow-up details to fill missing schedule fields."
+        )
+        resumed = await _handle_skill_execution(
+            user_id=user_id,
+            session_id=session_id,
+            tool_input={
+                "skill_id": "tasks_create",
+                "reason": "resume_from_clarification",
+                "target_email": "",
+                "target_user_hint": "",
+            },
+            preflight_text="Thanks, I have enough detail now. I’m creating it.",
+            enabled_caps=enabled_caps,
+            ctx=ctx,
+            target_user_id=target_user_id,
+            team_id=team_id,
+            history=history,
+            message=combined_prompt,
+            reply_class="planned",
+            is_write_operation_task=True,
+        )
+        if resumed.get("type") == "execution":
+            await _mark_pending_task_create_resolved(user_id, session_id)
+        return resumed
+
     # ── Step 2: Retrieve top-k candidate skills ──────────────────────────
     candidates = skill_registry.retrieve_top_k(
         query=message,
@@ -110,7 +261,7 @@ async def handle_chat(
         top_k=8,
     )
 
-    # ── Step 3: Build system prompt and ask LLM to route ─────────────────
+    # ── Step 3: Build system prompt and ask LLM to route (structured) ───
     system_prompt = _build_system_prompt(ctx, candidates)
     tools = _build_tools(candidates)
 
@@ -127,7 +278,13 @@ async def handle_chat(
 
     # ── Step 4: Process response ─────────────────────────────────────────
     if not response.tool_calls:
-        return {"type": "direct", "reply": response.text or "I'm here to help!"}
+        fallback_reply = _sanitize_non_executed_claims(response.text or "I need one more detail before I act.")
+        return {
+            "type": "guidance",
+            "reply": fallback_reply,
+            "reply_class": "clarification_needed",
+            "is_write_operation_task": False,
+        }
 
     tool_call = response.tool_calls[0]
     tool_name = tool_call.name
@@ -135,23 +292,92 @@ async def handle_chat(
     preflight_text = response.text
 
     if not tool_input or not tool_name:
-        return {"type": "direct", "reply": preflight_text or "I'm not sure how to help with that."}
+        return {
+            "type": "guidance",
+            "reply": _sanitize_non_executed_claims(preflight_text or "I'm not sure how to help with that."),
+            "reply_class": "clarification_needed",
+            "is_write_operation_task": False,
+        }
+
+    if tool_name == "route_response":
+        reply_class = _normalize_reply_class(tool_input.get("reply_class"))
+        is_write_operation_task = bool(tool_input.get("is_write_operation_task", False))
+        should_execute_skill = bool(tool_input.get("should_execute_skill", False))
+        selected_skill_id = (tool_input.get("skill_id") or "").strip()
+        response_text = (
+            tool_input.get("response_text")
+            or preflight_text
+            or "I can help with that."
+        )
+        if reply_class != "executed":
+            response_text = _sanitize_non_executed_claims(response_text)
+
+        if should_execute_skill:
+            skill_id = selected_skill_id
+            if not skill_id:
+                return {
+                    "type": "guidance",
+                    "reply": "I need one more detail before I proceed.",
+                    "reply_class": "clarification_needed",
+                    "is_write_operation_task": is_write_operation_task,
+                }
+            return await _handle_skill_execution(
+                user_id=user_id,
+                session_id=session_id,
+                tool_input=tool_input,
+                preflight_text=response_text,
+                enabled_caps=enabled_caps,
+                ctx=ctx,
+                target_user_id=target_user_id,
+                team_id=team_id,
+                history=history,
+                message=message,
+                reply_class=reply_class,
+                is_write_operation_task=is_write_operation_task,
+            )
+
+        response_type = "guidance" if reply_class in {"clarification_needed", "failed"} else "direct"
+        if (
+            reply_class == "clarification_needed"
+            and is_write_operation_task
+            and (selected_skill_id in {"tasks_create", "none", ""} or "task" in message.lower())
+        ):
+            await _upsert_pending_task_create_action(
+                user_id=user_id,
+                session_id=session_id,
+                original_request=message,
+                clarification_prompt=response_text,
+            )
+        return {
+            "type": response_type,
+            "reply": response_text,
+            "reply_class": reply_class,
+            "is_write_operation_task": is_write_operation_task,
+        }
 
     if tool_name == "execute_skill":
+        # Backward compatibility fallback if model returns legacy tool.
         return await _handle_skill_execution(
             user_id=user_id,
             session_id=session_id,
             tool_input=tool_input,
-            preflight_text=preflight_text,
+            preflight_text=_sanitize_non_executed_claims(preflight_text or "I can start this now."),
             enabled_caps=enabled_caps,
             ctx=ctx,
             target_user_id=target_user_id,
             team_id=team_id,
             history=history,
             message=message,
+            reply_class="planned",
+            is_write_operation_task=False,
         )
 
-    return {"type": "direct", "reply": preflight_text or "I'm here to help!"}
+    return {
+        "type": "direct",
+        "reply": _sanitize_non_executed_claims(preflight_text or "I'm here to help!"),
+        "reply_class": "planned",
+        "is_write_operation_task": False,
+    }
 
 
 # ── Skill execution handler ─────────────────────────────────────────────────
@@ -167,6 +393,8 @@ async def _handle_skill_execution(
     team_id: Optional[str],
     history: list[dict],
     message: str,
+    reply_class: str,
+    is_write_operation_task: bool,
 ) -> dict:
     """Handle the execute_skill tool call."""
     skill_id = tool_input.get("skill_id", "")
@@ -183,6 +411,8 @@ async def _handle_skill_execution(
             return {
                 "type": "direct",
                 "reply": f"I couldn't find a user with the email **{target_email}** in the system.",
+                "reply_class": "failed",
+                "is_write_operation_task": is_write_operation_task,
             }
     elif target_user_hint:
         resolved_id = await _resolve_target_user_hint(
@@ -200,6 +430,8 @@ async def _handle_skill_execution(
                     "I wasn't able to tell exactly which person you meant. "
                     "Please tell me their full name or email address, and I can look it up."
                 ).strip(),
+                "reply_class": "clarification_needed",
+                "is_write_operation_task": is_write_operation_task,
             }
 
     # ── Step 5: Validate skill exists and is indexed ─────────────────
@@ -208,6 +440,8 @@ async def _handle_skill_execution(
         return {
             "type": "guidance",
             "reply": f"{preflight_text}\n\nI couldn't find that skill. Please check your Advisor settings.",
+            "reply_class": "failed",
+            "is_write_operation_task": is_write_operation_task,
         }
 
     # ── Step 6: Check capability ─────────────────────────────────────
@@ -219,6 +453,8 @@ async def _handle_skill_execution(
                 f"To do this, you need to enable the **{skill.capability_id}** capability "
                 f"in Advisor Settings."
             ),
+            "reply_class": "clarification_needed",
+            "is_write_operation_task": is_write_operation_task,
         }
 
     # ── Step 7: Load full skill text ─────────────────────────────────
@@ -227,6 +463,8 @@ async def _handle_skill_execution(
         return {
             "type": "guidance",
             "reply": f"{preflight_text}\n\nThe skill definition could not be loaded. Please try again later.",
+            "reply_class": "failed",
+            "is_write_operation_task": is_write_operation_task,
         }
 
     # ── Step 8: Load credentials ─────────────────────────────────────
@@ -249,12 +487,16 @@ async def _handle_skill_execution(
                     f"This skill requires credentials that haven't been configured yet. "
                     f"Please set up your credentials for **{skill.title}** in Advisor Settings."
                 ),
+                "reply_class": "clarification_needed",
+                "is_write_operation_task": is_write_operation_task,
             }
 
         if skill.requires_ping and (not credential or not credential.get("ping")):
             return {
                 "type": "guidance",
                 "reply": f"{preflight_text}\n\nInternal access token is missing. Please re-enable the capability in settings.",
+                "reply_class": "failed",
+                "is_write_operation_task": is_write_operation_task,
             }
 
     # ── Step 9: Create execution job ─────────────────────────────────
@@ -266,6 +508,7 @@ async def _handle_skill_execution(
         prompt=message,
         target_user_id=effective_target,
         team_id=team_id,
+        is_write_operation_task=is_write_operation_task,
     )
 
     # ── Step 10: Start execution asynchronously ──────────────────────
@@ -289,58 +532,64 @@ async def _handle_skill_execution(
         "job_id": job_id,
         "skill_id": skill_id,
         "status": "pending",
+        "reply_class": "planned" if reply_class == "executed" else reply_class,
+        "is_write_operation_task": is_write_operation_task,
     }
 
 
 # ── Tool definitions ─────────────────────────────────────────────────────────
 
 def _build_tools(candidates: list[SkillIndexItem]) -> list[dict]:
-    """Build the tool definitions for the LLM, including execute_skill."""
-    # Build skill enum from candidates
-    skill_options = []
-    for c in candidates:
-        skill_options.append(c.skill_id)
+    """Build a single structured routing tool for first-hop protocol output."""
+    skill_options = [c.skill_id for c in candidates] + ["none"]
 
-    tools = [
-        {
-            "name": "execute_skill",
-            "description": (
-                "Call this tool when the user's question requires executing a skill to answer. "
-                "Select the most appropriate skill from the available candidates. "
-                "Do NOT use for general knowledge questions — only when user data or external system access is needed.\n\n"
-                "Available skills:\n" +
-                "\n".join(
-                    f"- {c.skill_id}: {c.summary}"
-                    for c in candidates
-                )
-            ),
-            "input_schema": {
-                "type": "object",
-                "properties": {
-                    "skill_id": {
-                        "type": "string",
-                        "enum": skill_options if skill_options else ["none"],
-                        "description": "The ID of the skill to execute",
-                    },
-                    "reason": {
-                        "type": "string",
-                        "description": "Brief reason for choosing this skill",
-                    },
-                    "target_email": {
-                        "type": "string",
-                        "description": "If the user is asking about ANOTHER person (e.g. a team member), provide that person's email address here. Leave empty if the user is asking about themselves.",
-                    },
-                    "target_user_hint": {
-                        "type": "string",
-                        "description": "If the user is asking about another person but no email is provided, put the exact reference here, such as 'my daughter', 'my son', 'my child', or the team member's name. Leave empty for self-queries.",
-                    },
+    return [{
+        "name": "route_response",
+        "description": (
+            "MANDATORY first-hop router. Always call this tool exactly once. "
+            "Return protocol class + write intent + whether to execute a skill."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "reply_class": {
+                    "type": "string",
+                    "enum": ["clarification_needed", "planned", "executed", "failed"],
+                    "description": "Protocol class for this response.",
                 },
-                "required": ["skill_id"],
+                "is_write_operation_task": {
+                    "type": "boolean",
+                    "description": "True if the user's request is a write-action intent (create/update/send/delete).",
+                },
+                "should_execute_skill": {
+                    "type": "boolean",
+                    "description": "Whether backend should start skill execution now.",
+                },
+                "response_text": {
+                    "type": "string",
+                    "description": "Assistant reply text. Only use completion wording when reply_class=executed.",
+                },
+                "skill_id": {
+                    "type": "string",
+                    "enum": skill_options,
+                    "description": "Chosen skill_id when should_execute_skill=true; otherwise use 'none'.",
+                },
+                "reason": {
+                    "type": "string",
+                    "description": "Brief routing reason.",
+                },
+                "target_email": {
+                    "type": "string",
+                    "description": "If user asks about another person by email, put the email; else empty string.",
+                },
+                "target_user_hint": {
+                    "type": "string",
+                    "description": "If user asks about another person without email, put exact reference phrase; else empty string.",
+                },
             },
+            "required": ["reply_class", "is_write_operation_task", "should_execute_skill", "response_text", "skill_id"],
         },
-    ]
-
-    return tools
+    }]
 
 
 # ── System prompt ────────────────────────────────────────────────────────────
@@ -404,9 +653,16 @@ This app helps teens and young adults with chronic health conditions stay active
 
 ## Decision Rules
 
-You have one tool: `execute_skill`. This includes the `tasks_create` skill for creating new tasks.
+You have one mandatory routing tool: `route_response`.
+Always call it exactly once for every user message.
 
-**Use execute_skill when:**
+Protocol contract:
+- `reply_class` must be one of: `clarification_needed`, `planned`, `executed`, `failed`.
+- You must set `is_write_operation_task` as a boolean judgment in this first call.
+- Only `reply_class=executed` may contain completion claims such as "I created", "I updated", "I sent".
+- If execution has not happened yet, use `planned` or `clarification_needed`.
+
+**Set `should_execute_skill=true` when:**
 - The user asks a question that requires querying their personal data
 - The user asks about their activity, sleep, tasks, medication schedule, health trends
 - The user wants to ADD, CREATE, or SET a new task or reminder
@@ -415,13 +671,13 @@ You have one tool: `execute_skill`. This includes the `tasks_create` skill for c
 - If the user mentions another person by email (e.g., "check tasks of alice@example.com"), set `target_email` to that email so we query that person's data instead of the requester's
 - If the user refers to another person without an email (e.g., "my daughter", "my son", "my child", or a team member's name), set `target_user_hint` to that exact phrase or name
 
-**Answer directly when:**
+**Set `should_execute_skill=false` when:**
 - General health advice or tips
 - Greetings, small talk, emotional support
 - Medical knowledge questions
 - Questions you can answer without data access
 
-**Key distinction:** "What medicine should I take now?" = needs data (use execute_skill) ≠ "What medications treat diabetes?" = general knowledge (answer directly)
+**Key distinction:** "What medicine should I take now?" = needs data (execute skill) ≠ "What medications treat diabetes?" = general knowledge (direct response)
 {skill_summary}
 
 ## Response guidelines

@@ -52,6 +52,12 @@ Heart-rate measurements may need up to about 75 seconds end-to-end because the r
 - "What is my body temperature right now?"
 - "Can you measure my HR for 10 seconds?"
 
+# Clarification Rules (required)
+- If user intent is "measure now" but the measurement type is unclear, ask first:
+  - "Do you want heart rate or temperature?"
+- Do not silently default to heart rate for ambiguous requests.
+- Only execute after the user answers clearly.
+
 # Do NOT Use When
 - User asks about *historical* HR, temperature, HRV, SpO2 data → use `health_data_query`
 - User asks about sleep, activity, steps → use `health_data_query`
@@ -153,7 +159,13 @@ if skill_input.get("proactive_mode", False):
 ## Step 1 — Create a ring command request
 
 ```python
-command_type = skill_input.get("command_type", "hr_measure")
+command_type = skill_input.get("command_type")
+if command_type not in ("hr_measure", "temperature"):
+    _result = {
+        "summary": "Do you want me to measure heart rate or temperature?",
+        "data": {"status": "clarification_needed"}
+    }
+    return
 duration_seconds = int(skill_input.get("duration_seconds", 10))
 request_id = str(uuid.uuid4())
 now_iso = datetime.now(timezone.utc).isoformat()

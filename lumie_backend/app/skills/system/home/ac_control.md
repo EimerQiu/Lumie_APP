@@ -53,6 +53,13 @@ Field rules:
 - `mode` — only relevant when `action` is `"on"`; default `"cool"` unless user says heat/warm
 - `temp_c` — setpoint in Celsius; default `22.0` for cool, `20.0` for heat; infer from user if specified (e.g. "21 degrees" → `21.0`)
 
+## Clarification Rules (required)
+- If user intent is ambiguous (for example: "adjust AC", "fix the AC"), ask what they want (`on` or `off`) before acting.
+- If user says `off` without room and does NOT clearly mean all rooms, ask which room.
+- If user says `on` without room, room may default to `all` only when user intent clearly implies whole-home control; otherwise ask.
+- If user asks to set temperature but gives no value, ask for target temperature.
+- Never execute a write action when `action` is unclear.
+
 Room name mapping:
 - "bedroom" / "bed room" / "master bedroom" → `"bedroom"`
 - "living room" / "lounge" / "downstairs" → `"living_room"`

@@ -69,6 +69,8 @@ async def advisor_chat_v2(
         )
 
         response_type = result.get("type", "direct")
+        reply_class = result.get("reply_class")
+        is_write_operation_task = result.get("is_write_operation_task")
 
         # Save to chat history
         if response_type == "direct" or response_type == "guidance":
@@ -79,6 +81,8 @@ async def advisor_chat_v2(
                 assistant_reply=result.get("reply", ""),
                 metadata={
                     "type": response_type,
+                    "reply_class": reply_class,
+                    "is_write_operation_task": is_write_operation_task,
                     "nav_hint": result.get("nav_hint"),
                 },
             )
@@ -100,6 +104,8 @@ async def advisor_chat_v2(
                 content=request.message,
                 metadata={
                     "type": "execution",
+                    "reply_class": reply_class,
+                    "is_write_operation_task": is_write_operation_task,
                     "job_id": result.get("job_id"),
                     "skill_id": result.get("skill_id"),
                 },
@@ -108,6 +114,8 @@ async def advisor_chat_v2(
         return AdvisorChatV2Response(
             type=response_type,
             reply=result.get("reply", ""),
+            reply_class=reply_class,
+            is_write_operation_task=is_write_operation_task,
             job_id=result.get("job_id"),
             skill_id=result.get("skill_id"),
             status=result.get("status"),

@@ -49,6 +49,7 @@ def build_lumie_db_execution_prompt(
     user_context: dict,
     history_summary: str = "",
     previous_results: Optional[dict] = None,
+    is_write_operation_task: bool = False,
 ) -> str:
     """Build the prompt for generating a lumie_db Python query script.
 
@@ -81,6 +82,19 @@ These are the raw results from skills executed in prior tiers. Use them as conte
 - For template-mode task creation, enforce `frequency_minutes >= 1440` (daily minimum).
 - Also validate `frequency_minutes > template_span_minutes` where template span is the full open→close window range.
 - If a provided frequency violates these rules, do not write any task docs; return `_result` with `created_count: 0` and a clear summary message.
+- Clarification-first: if critical creation fields are missing/ambiguous (especially open/close time, target member/team, or template identity), do NOT write. Return `_result` with `created_count: 0` and a single concise clarification question.
+- Never auto-fill missing schedule with `start now` or `24-hour window`.
+"""
+
+    write_receipt_requirements = ""
+    if is_write_operation_task:
+        write_receipt_requirements = """
+## Write Receipt Requirements (Required)
+- Include `execution_report` in `_result` as:
+  - `write_attempted`: boolean
+  - `write_confirmed`: boolean (true only after acknowledged DB write with count > 0)
+  - `write_targets`: list of touched collections
+- If no write was confirmed, set `write_confirmed: false` and avoid success wording in `summary`.
 """
 
     return f"""You are generating a Python async script to query Lumie's MongoDB database.
@@ -108,6 +122,7 @@ These are the raw results from skills executed in prior tiers. Use them as conte
 
 {f"## Conversation Context (summary)" + chr(10) + history_summary if history_summary else ""}
 {task_generation_guardrail}
+{write_receipt_requirements}
 
 ## Script Requirements
 

@@ -119,6 +119,36 @@ Create one or more tasks for the user. Supports:
   - Advisor safety rule: always enforce `frequency_minutes >= 1440` for template mode
   - If user says "next week" / "this week" / "for 7 days", use `frequency_minutes = 1440` (daily)
 
+# Clarification-First Policy (required)
+Before ANY write, check whether critical scheduling/target info is missing or ambiguous.
+If missing/ambiguous, ask a concise clarification question and DO NOT create tasks yet.
+
+Critical fields by mode:
+- `deadline`: `task_name`, `task_type`, `open_datetime`, `close_datetime`
+- `recurring`: `task_name`, `task_type`, `dates`, `times[].open_time`, `times[].close_time`
+- `template`: `template_id`, `start_date`, `end_date` (and a resolvable team/member target if team assignment is requested)
+
+Ambiguity examples that MUST trigger clarification:
+- User asks to "create a task" but gives no time window
+- User gives only one endpoint ("tomorrow at 8") without clear open+close range
+- User says "for Eimer" but target member/team cannot be resolved uniquely
+- User asks "next week" but no template can be uniquely identified
+
+Hard prohibitions:
+- Never auto-fill `open_datetime = now`
+- Never auto-fill `close_datetime = now + 24h`
+- Never auto-create a generic 24-hour task because details are missing
+- Never guess team member identity when multiple candidates exist
+
+Clarification response format (no write):
+```python
+_result = {
+  "summary": "Need one detail before I create it: what start and end time should I use?",
+  "created_count": 0,
+  "nav_hint": "task_list"
+}
+```
+
 # Runtime Rules
 - All time helpers are pre-loaded: `datetime`, `timedelta`, `timezone`, `ZoneInfo`, `uuid`, `asyncio`
 - No imports allowed
@@ -159,10 +189,12 @@ If `mode == "deadline"`:
   - Require `open_datetime`, `close_datetime`
   - Parse both as local times in `user_timezone`
   - Validate close > open
+  - If either time is missing/unclear: return clarification and stop (no writes)
 
 If `mode == "recurring"`:
   - Require `dates` (non-empty) and `times` (non-empty)
   - Validate each time window (close > open)
+  - If dates/times are missing or ambiguous: return clarification and stop (no writes)
 
 If `mode == "template"`:
   - Require `template_id`, `start_date`, `end_date`
@@ -176,6 +208,7 @@ If `mode == "template"`:
     - `expected_count = anchors_in_range × template_window_count`
     - For 7 days, 1 window, daily cadence => expected_count must be 7
     - If expected_count is unexpectedly high (for example > 3 × days × windows), stop and return an error summary
+  - If template/team/assignee cannot be resolved confidently: return clarification and stop (no writes)
 
 ## Template Mode Policy (strict)
 - Template mode is for daily-or-longer scheduling only.

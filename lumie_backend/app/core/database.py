@@ -103,6 +103,10 @@ async def create_indexes():
     # Advisor v2: audit logs
     await db.db.execution_audit_logs.create_index("log_id", unique=True)
     await db.db.execution_audit_logs.create_index([("user_id", 1), ("created_at", -1)])
+    await db.db.advisor_pending_actions.create_index(
+        [("user_id", 1), ("session_id", 1), ("action_type", 1), ("status", 1)]
+    )
+    await db.db.advisor_pending_actions.create_index("expires_at")
 
     # Proactive advisor: audit collections
     await db.db.proactive_runs.create_index("run_id", unique=True)
