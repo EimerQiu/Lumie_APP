@@ -56,20 +56,24 @@ class PersistedMessage {
 class SessionSummary {
   final String sessionId;
   final String startedAt;
+  final String lastMessageAt;
   final String preview;
   final int messageCount;
 
   const SessionSummary({
     required this.sessionId,
     required this.startedAt,
+    required this.lastMessageAt,
     required this.preview,
     required this.messageCount,
   });
 
   factory SessionSummary.fromJson(Map<String, dynamic> json) {
+    final startedAt = json['started_at'] as String? ?? '';
     return SessionSummary(
       sessionId: json['session_id'] as String? ?? '',
-      startedAt: json['started_at'] as String? ?? '',
+      startedAt: startedAt,
+      lastMessageAt: json['last_message_at'] as String? ?? startedAt,
       preview: json['preview'] as String? ?? '',
       messageCount: json['message_count'] as int? ?? 0,
     );

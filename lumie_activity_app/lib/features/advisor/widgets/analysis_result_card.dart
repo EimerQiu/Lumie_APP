@@ -3,7 +3,7 @@ import 'package:flutter/material.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../shared/models/analysis_models.dart';
 import '../../tasks/screens/tasks_list_screen.dart';
-import '../../tasks/screens/admin_dashboard_screen.dart';
+import '../../tasks/screens/all_tasks_screen.dart';
 
 /// Displays an analysis result inside a chat bubble.
 ///

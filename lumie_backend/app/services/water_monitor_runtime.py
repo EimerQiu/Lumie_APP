@@ -8,7 +8,6 @@ import re
 import logging
 from typing import Optional
 from datetime import datetime, timezone
-import httpx
 
 from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError
 
@@ -26,7 +25,13 @@ PPP_RATE = 0.047056  # Public Purpose Programs: 4.7056%
 AS_RATE = 1.0098     # Additional Surcharges: $1.0098/CCF
 UF_RATE = 0.007      # CPUC Fee: 0.70%
 GAL_PER_CCF = 748
-WATER_METER_DATA_URL = "https://home.yumo.org/files/water_meter_data.json"
+
+# ── Cal Water browser automation constants ───────────────────────────────────
+USAGE_HISTORY_PATH = "/app/water-usage/history"
+SELECTOR_HISTORY_GRID = "div[role='grid'].usage-history__table"
+SELECTOR_HISTORY_END_READ = "#history-0-2"       # first row, End Read column
+SELECTOR_HISTORY_BILLING_PERIOD = "#history-0-0" # first row, Billing Period column
+ORDINAL_RE = re.compile(r"(\d+)(st|nd|rd|th)", re.IGNORECASE)
 
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -88,46 +93,92 @@ def get_tier_name(ccf: float) -> str:
         return "Tier 4"
 
 
-async def load_previous_reading() -> Optional[dict]:
-    """Load previous meter reading from water_meter_data.json."""
-    try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            response = await client.get(WATER_METER_DATA_URL)
-            if response.status_code == 200:
-                return response.json()
-    except Exception as e:
-        logger.warning(f"Could not load previous reading: {e}")
+def _parse_history_date(day_text: str, billing_period_text: str) -> Optional[str]:
+    """Combine day text like "Apr 1st" with a year pulled from billing period text
+    (e.g. "April, 2026\nFeb 27th - Apr 1st\n33 Days") → "2026-04-01".
+    """
+    day_clean = ORDINAL_RE.sub(r"\1", day_text).strip()
+    year_match = re.search(r"(20\d{2})", billing_period_text)
+    if not year_match:
+        return None
+    year = year_match.group(1)
+    for fmt in ("%b %d %Y", "%B %d %Y"):
+        try:
+            return datetime.strptime(f"{day_clean} {year}", fmt).strftime("%Y-%m-%d")
+        except ValueError:
+            continue
     return None
 
 
-def get_billing_cycle_dates(prev_date_str: str) -> dict:
-    """Calculate billing cycle dates based on previous meter read date.
+async def scrape_previous_reading(page) -> dict:
+    """Scrape the most recent End Read (CCF) and its date from the Cal Water
+    history page. Must be called on an already-logged-in Playwright page.
 
-    Cal Water cycles are from last day of month to last day of next month.
-    prev_date_str: ISO format date (e.g., "2026-03-31" = last day of March)
-    Cycle runs through last day of April
+    Returns a dict with:
+      - previous_reading_ccf (float | None)
+      - previous_reading_date (str | None, ISO "YYYY-MM-DD")
+      - previous_raw_text (str | None) — raw End Read cell text (or error note)
     """
-    from datetime import datetime, timedelta
+    try:
+        history_url = page.url.split("/app")[0] + USAGE_HISTORY_PATH
+        await page.goto(history_url, wait_until="domcontentloaded")
+        await page.wait_for_selector(SELECTOR_HISTORY_GRID, timeout=30_000)
+        await page.wait_for_selector(SELECTOR_HISTORY_END_READ, timeout=15_000)
+        await page.wait_for_load_state("networkidle")
 
-    prev_date = datetime.fromisoformat(prev_date_str).date()
+        end_read_text = (
+            await page.locator(SELECTOR_HISTORY_END_READ).first.inner_text()
+        ).strip()
+        billing_text = (
+            await page.locator(SELECTOR_HISTORY_BILLING_PERIOD).first.inner_text()
+        ).strip()
+    except Exception as e:
+        logger.warning(f"History page scrape failed: {e}")
+        return {
+            "previous_reading_ccf": None,
+            "previous_reading_date": None,
+            "previous_raw_text": f"history scrape failed: {e}",
+        }
+
+    # End Read cell looks like:
+    #   761.003
+    #   Apr 1st
+    lines = [ln.strip() for ln in end_read_text.splitlines() if ln.strip()]
+    reading_ccf: Optional[float] = None
+    date_iso: Optional[str] = None
+    if lines:
+        num_match = re.search(r"([\d,]+\.?\d*)", lines[0])
+        if num_match:
+            try:
+                reading_ccf = float(num_match.group(1).replace(",", ""))
+            except ValueError:
+                reading_ccf = None
+        if len(lines) >= 2:
+            date_iso = _parse_history_date(lines[1], billing_text)
+
+    return {
+        "previous_reading_ccf": reading_ccf,
+        "previous_reading_date": date_iso,
+        "previous_raw_text": end_read_text,
+    }
+
+
+def get_billing_cycle_dates() -> dict:
+    """Billing cycle = first day of current month → last day of current month."""
+    from datetime import datetime
+    from calendar import monthrange
+
     today = datetime.now().date()
-
-    # If prev_date is 2026-03-31, cycle_end should be 2026-04-30
-    # prev_date.month = 3, so we need to get last day of month (3+1)=4, which is May 1 - 1 day = April 30
-    if prev_date.month == 12:
-        cycle_end = datetime(prev_date.year + 1, 2, 1).date() + timedelta(days=-1)
-    else:
-        cycle_end = datetime(prev_date.year, prev_date.month + 2, 1).date() + timedelta(days=-1)
-
-    # Cycle start is the prev_date itself
-    cycle_start = prev_date
+    last_day = monthrange(today.year, today.month)[1]
+    cycle_start = today.replace(day=1)
+    cycle_end = today.replace(day=last_day)
 
     return {
         "cycle_start": cycle_start,
         "cycle_end": cycle_end,
         "today": today,
         "days_elapsed": (today - cycle_start).days,
-        "days_total": (cycle_end - cycle_start).days + 1,  # +1 to include both start and end
+        "days_total": last_day,
         "days_remaining": (cycle_end - today).days,
     }
 
@@ -321,26 +372,18 @@ async def extract_water_usage(
                 current_meter_reading_ccf = water_usage_cf / 100.0
                 logger.info(f"✓ Current meter reading: {current_meter_reading_ccf:.3f} CCF")
 
-                # Load previous meter reading
-                prev_data = await load_previous_reading()
+                # Scrape previous meter reading from Cal Water history page
+                prev_data = await scrape_previous_reading(page)
                 logger.info(f"Previous meter data: {prev_data}")
 
-                if not prev_data or "prevReading" not in prev_data:
+                prev_meter_reading_ccf = prev_data.get("previous_reading_ccf")
+                if prev_meter_reading_ccf is None:
                     return {
                         "success": False,
-                        "error": "Cannot calculate usage: Previous meter reading not found in water_meter_data.json",
-                    }
-
-                # Parse previous reading (may be in CF or CCF)
-                prev_reading_str = str(prev_data.get("prevReading", "0"))
-                prev_unit = prev_data.get("prevUnit", "CCF")
-                try:
-                    prev_reading_value = float(prev_reading_str)
-                    prev_meter_reading_ccf = prev_reading_value / 100.0 if prev_unit == "CF" else prev_reading_value
-                except (ValueError, TypeError):
-                    return {
-                        "success": False,
-                        "error": f"Invalid previous reading format: {prev_reading_str}",
+                        "error": (
+                            "Cannot calculate usage: Previous meter reading not found "
+                            f"on history page. Raw: {prev_data.get('previous_raw_text')}"
+                        ),
                     }
 
                 # Calculate actual usage as difference between current and previous
@@ -355,8 +398,16 @@ async def extract_water_usage(
                 retrieval_time = datetime.now(timezone.utc).isoformat()
 
                 # Get billing cycle information
-                prev_date_str = prev_data.get("prevDate", "2026-03-31")
-                cycle_info = get_billing_cycle_dates(prev_date_str)
+                prev_date_str = prev_data.get("previous_reading_date")
+                if not prev_date_str:
+                    return {
+                        "success": False,
+                        "error": (
+                            "Cannot calculate usage: Previous reading date not found "
+                            f"on history page. Raw: {prev_data.get('previous_raw_text')}"
+                        ),
+                    }
+                cycle_info = get_billing_cycle_dates()
                 logger.info(f"Billing cycle: {cycle_info['cycle_start']} to {cycle_info['cycle_end']}")
 
                 # Calculate daily average and projected usage
@@ -386,6 +437,8 @@ async def extract_water_usage(
                     f"Today: {cycle_info['today']} ({days_elapsed} days elapsed, {days_remaining} days remaining)",
                     "",
                     "Current Usage (To Date)",
+                    f"Previous Reading: {prev_meter_reading_ccf:.3f} CCF on {prev_date_str}",
+                    f"Current Reading: {current_meter_reading_ccf:.3f} CCF",
                     f"Usage: {actual_usage_ccf:.2f} CCF ({actual_usage_ccf * 100:,.0f} CF)",
                     f"Bill So Far: ${bill_data['total']:.2f}",
                     "",

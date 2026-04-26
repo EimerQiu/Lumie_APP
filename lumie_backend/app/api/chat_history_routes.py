@@ -30,6 +30,7 @@ class ChatHistoryResponse(BaseModel):
 class SessionSummaryResponse(BaseModel):
     session_id: str
     started_at: str
+    last_message_at: str
     preview: str
     message_count: int
 
@@ -54,6 +55,7 @@ async def list_sessions(
             SessionSummaryResponse(
                 session_id=s["session_id"],
                 started_at=s["started_at"],
+                last_message_at=s.get("last_message_at", s["started_at"]),
                 preview=s["preview"],
                 message_count=s["message_count"],
             )

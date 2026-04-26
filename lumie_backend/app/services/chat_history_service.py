@@ -143,10 +143,10 @@ async def get_session_messages(
 
 
 async def get_sessions(user_id: str, limit: int = 50) -> list[dict]:
-    """Fetch distinct sessions for a user, newest first.
+    """Fetch distinct sessions for a user, ordered by most recent activity.
 
     Returns one entry per session:
-        session_id, started_at, preview (first message), message_count
+        session_id, started_at, last_message_at, preview (latest message), message_count
     """
     db = get_database()
     pipeline = [
@@ -156,17 +156,19 @@ async def get_sessions(user_id: str, limit: int = 50) -> list[dict]:
             "$group": {
                 "_id": "$session_id",
                 "started_at": {"$first": "$created_at"},
-                "preview": {"$first": "$content"},
+                "last_message_at": {"$last": "$created_at"},
+                "preview": {"$last": "$content"},
                 "message_count": {"$sum": 1},
             }
         },
-        {"$sort": {"started_at": -1}},
+        {"$sort": {"last_message_at": -1}},
         {"$limit": limit},
         {
             "$project": {
                 "_id": 0,
                 "session_id": "$_id",
                 "started_at": 1,
+                "last_message_at": 1,
                 "preview": 1,
                 "message_count": 1,
             }

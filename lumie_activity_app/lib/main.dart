@@ -42,7 +42,7 @@ import 'features/tasks/screens/create_task_screen.dart';
 import 'features/tasks/screens/templates_list_screen.dart';
 import 'features/tasks/screens/create_template_screen.dart';
 import 'features/tasks/screens/batch_generate_screen.dart';
-import 'features/tasks/screens/admin_dashboard_screen.dart';
+import 'features/tasks/screens/all_tasks_screen.dart';
 import 'features/tasks/screens/reward_calc_screen.dart';
 import 'features/tasks/screens/task_detail_screen.dart';
 import 'features/tasks/screens/edit_task_screen.dart';

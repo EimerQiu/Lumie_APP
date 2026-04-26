@@ -264,13 +264,16 @@ class _ChatTabState extends State<_ChatTab> {
                   _Message(
                     text: m.content,
                     isUser: m.isUser,
+                    isProactive: sessionId == 'proactive',
                     createdAt: m.createdAt,
                   ),
                 ),
               );
             }
           });
-          _saveActiveSession();
+          if (sessionId != 'proactive') {
+            _saveActiveSession();
+          }
           _scrollToBottom();
         },
       ),
@@ -779,6 +782,7 @@ class _HistoryPanelState extends State<_HistoryPanel> {
       ),
       itemBuilder: (context, i) {
         final s = _sessions[i];
+        final isProactive = s.sessionId == 'proactive';
         final preview = s.preview.length > 70
             ? '${s.preview.substring(0, 70)}…'
             : s.preview;
@@ -787,14 +791,34 @@ class _HistoryPanelState extends State<_HistoryPanel> {
             horizontal: 20,
             vertical: 4,
           ),
-          title: Text(
-            preview,
-            style: const TextStyle(fontSize: 14, color: AppColors.textPrimary),
+          title: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              if (isProactive)
+                const Padding(
+                  padding: EdgeInsets.only(bottom: 2),
+                  child: Text(
+                    'Proactive check-ins',
+                    style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
+                      color: AppColors.textLight,
+                    ),
+                  ),
+                ),
+              Text(
+                preview,
+                style: const TextStyle(
+                  fontSize: 14,
+                  color: AppColors.textPrimary,
+                ),
+              ),
+            ],
           ),
           subtitle: Padding(
             padding: const EdgeInsets.only(top: 4),
             child: Text(
-              '${_formatDate(s.startedAt)} · ${s.messageCount} messages',
+              '${_formatDate(s.lastMessageAt)} · ${s.messageCount} messages',
               style: TextStyle(fontSize: 12, color: AppColors.textLight),
             ),
           ),
