@@ -255,11 +255,29 @@ async def handle_chat(
         return resumed
 
     # ── Step 2: Retrieve top-k candidate skills ──────────────────────────
+    # Score against recent user turns + the current message so a follow-up
+    # reply (e.g., user supplying just a team name "Yumo Family team")
+    # doesn't lose the original-intent skill from the candidate set.
+    recent_user_turns = [
+        h.get("content", "")
+        for h in (history or [])
+        if h.get("role") == "user" and h.get("content")
+    ][-3:]
+    retrieval_query = " ".join([*recent_user_turns, message])
+
     candidates = skill_registry.retrieve_top_k(
-        query=message,
+        query=retrieval_query,
         enabled_capabilities=enabled_caps,
         top_k=8,
     )
+
+    # Mid-flow guard: while a task-create clarification is awaiting input,
+    # keep tasks_create available even if the user's reply is detail-only
+    # (a team name, a person, etc.) and would not match its keywords.
+    if pending_task_create and not any(c.skill_id == "tasks_create" for c in candidates):
+        tasks_create_skill = skill_registry.get_skill("tasks_create")
+        if tasks_create_skill and tasks_create_skill.status == "indexed":
+            candidates = [tasks_create_skill, *candidates[:7]]
 
     # ── Step 3: Build system prompt and ask LLM to route (structured) ───
     system_prompt = _build_system_prompt(ctx, candidates)

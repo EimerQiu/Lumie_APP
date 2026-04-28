@@ -149,20 +149,29 @@ async def log_advisor_chat(
             f"2. Does this exchange continue the SAME topic as the last entry from the CURRENT session shown above? "
             f"If this is the first message in a new session, replace_last MUST be false. "
             f"If YES (same topic, same session) → replace_last = true. If NO (new topic, new session, or no previous entries) → replace_last = false.\n"
-            f"3. Is there something IMPORTANT in this exchange that warrants proactive follow-up? "
+            f"3. Is this exchange about FAMILY? Decide using meaning, not keyword matching. "
+            f"Set is_family_topic = true if the user is talking about a family member or family relationship — "
+            f"for example a parent, sibling, child, spouse/partner, grandparent, in-law, or any relative; "
+            f"family dynamics, conflict, caregiving, or a family member's health, mood, or behavior. "
+            f"Casual mentions that are not the subject of the message do not count. "
+            f"A passing word like 'family' in an idiom or unrelated context does not count. "
+            f"If it is about family, also set category = \"family\" in task 4 unless a more specific medical category clearly fits better.\n"
+            f"4. Is there something IMPORTANT in this exchange that warrants proactive follow-up? "
             f"IMPORTANT topics include:\n"
             f"  - Physical health: new/worsening symptom, pain or discomfort, feeling unwell, sickness, fever\n"
             f"  - Medication concerns: missed dose, side effect, medication not helping\n"
             f"  - Emotional/mental health: feeling very bad, anxious, overwhelmed, depressed, crying, distressed\n"
-            f"  - Family/social: family conflict, family health concerns, family stress\n"
+            f"  - Family/social: family conflict, family health concerns, family stress, worry about a relative\n"
             f"  - Urgent signals: anything the user seems concerned about\n"
+            f"Any exchange where is_family_topic = true and the user expresses concern, worry, conflict, or a problem "
+            f"involving the family member should be treated as important. "
             f"NOT important = greetings, general health questions, routine progress check-ins, encouragement, casual chat. "
             f"If important → set important = true, write a brief important_summary (1 sentence, 3rd person, use the user's name), "
             f"and set category to one of: symptom, medication, emotional, health_concern, family, urgent, other. "
             f"Also set important_replace_last = true ONLY if this important insight continues the SAME topic as the 'Last flagged important insight from this session' shown above, "
             f"or false if it is a new/different concern, a new session, or there was no previous insight.\n\n"
             f"Respond ONLY with valid JSON, no other text:\n"
-            f"{{\"summary\": \"...\", \"replace_last\": true, \"important\": false, \"important_summary\": \"\", \"category\": \"\", \"important_replace_last\": false}}"
+            f"{{\"summary\": \"...\", \"replace_last\": true, \"is_family_topic\": false, \"important\": false, \"important_summary\": \"\", \"category\": \"\", \"important_replace_last\": false}}"
         )
 
         import json as _json
@@ -181,31 +190,28 @@ async def log_advisor_chat(
         parsed = _json.loads(raw)
         summary = parsed.get("summary", f"{name} chatted with the advisor.")
         replace_last = bool(parsed.get("replace_last", False))
+        is_family_topic = bool(parsed.get("is_family_topic", False))
         is_important = bool(parsed.get("important", False))
         important_summary = parsed.get("important_summary", "")
         category = parsed.get("category", "other")
         important_replace_last = bool(parsed.get("important_replace_last", False))
 
-        # ── Keyword-based fallback: catch common patterns the LLM might miss ──
-        # This ensures family, emotional, and health concerns are always flagged
+        # Family detection comes from the LLM (see is_family_topic in the prompt above);
+        # ensure category is consistent when family is the subject of the exchange.
+        if is_family_topic and category in ("", "other"):
+            category = "family"
+
+        # ── Keyword-based fallback: catch emotional/sickness patterns the LLM might miss ──
         combined_text = f"{user_message} {reply}".lower()
 
-        # Keywords for different concern types
-        family_keywords = {"family", "mom", "dad", "mother", "father", "sister", "brother", "parent", "grandparent", "relative", "daughter", "son", "husband", "wife", "partner", "child", "kid", "baby"}
         emotional_keywords = {"sad", "depressed", "anxious", "stressed", "overwhelmed", "crying", "scared", "worried", "upset", "frustrated", "angry"}
         sickness_keywords = {"sick", "unwell", "fever", "flu", "cold", "vomit", "nausea", "headache", "ache", "pain", "sore"}
 
-        has_family_topic = any(kw in combined_text for kw in family_keywords)
         has_emotional_topic = any(kw in combined_text for kw in emotional_keywords)
         has_sickness_topic = any(kw in combined_text for kw in sickness_keywords)
 
-        # If LLM missed but keywords detected, mark as important
         if not is_important:
-            if has_family_topic:
-                is_important = True
-                category = "family"
-                important_summary = f"{name} mentioned a family-related concern."
-            elif has_emotional_topic:
+            if has_emotional_topic:
                 is_important = True
                 category = "emotional"
                 important_summary = f"{name} expressed emotional distress or worry."
@@ -214,9 +220,8 @@ async def log_advisor_chat(
                 category = "symptom"
                 important_summary = f"{name} mentioned feeling unwell or being sick."
 
-        # If LLM did mark as important but we have a better category, update it
         elif is_important and category == "other":
-            if has_family_topic:
+            if is_family_topic:
                 category = "family"
             elif has_emotional_topic:
                 category = "emotional"

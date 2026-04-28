@@ -64,7 +64,10 @@ input_schema:
       description: "Optional notes or details for the task"
     team_name:
       type: string
-      description: "Optional: Name of the team the tasks belong to (e.g. 'Yumo family'). User must be an admin of the team. If not provided, tasks are personal."
+      description: "Optional: Name of the team the tasks belong to (e.g. 'Yumo family'). User must be an admin of the team. If not provided and team_task is not true, tasks are personal."
+    team_task:
+      type: boolean
+      description: "Optional: Set to true when the user clearly indicates the task is for their team/family but did NOT name a specific team (e.g. 'create a team task', 'add a family task', 'remind everyone in our team'). When true and team_name is empty, the skill auto-resolves to the user's only admin team if they belong to exactly one. Ignored when team_name is provided."
     user_id:
       type: string
       description: "Optional: Assign tasks to another team member by user_id (team admins only). If not provided, assigned to the requesting user."
@@ -104,6 +107,12 @@ Create one or more tasks for the user. Supports:
 - "Set up medicine reminders for Emma in the Ymo family team from tomorrow through next Friday"
 - "Create a study task on May 5 from 7-9 PM in the family team for my son"
 
+**Team task without a named team (single-team shortcut):**
+- "Create a team task tomorrow 8-9 AM to take vitamins"
+- "Add a family task for next week to walk the dog"
+- "Remind everyone in our team to log activity tonight 8-9 PM"
+- For these, the user clearly wants a team task but did NOT name a specific team. The advisor MUST set `team_task = true` and leave `team_name` empty. Do NOT ask "which team?" — the skill auto-resolves to the user's only admin team if they belong to exactly one. If the user belongs to multiple admin teams, the skill itself returns a clarification.
+
 **Worked example (must follow):**
 - User: "Create exercise tasks for next week in the Yumo family"
 - Template windows: 1 (Morning)
@@ -133,6 +142,9 @@ Ambiguity examples that MUST trigger clarification:
 - User gives only one endpoint ("tomorrow at 8") without clear open+close range
 - User says "for Eimer" but target member/team cannot be resolved uniquely
 - User asks "next week" but no template can be uniquely identified
+
+Cases that MUST NOT trigger clarification (the skill resolves them):
+- User clearly wants a team/family task but doesn't name the team. Pass `team_task = true` (with `team_name` empty) and let the skill auto-resolve to the user's only admin team. Only fall back to clarification if the skill itself returns one (multi-team case).
 
 Hard prohibitions:
 - Never auto-fill `open_datetime = now`
@@ -215,19 +227,21 @@ If `mode == "template"`:
 - Never generate template tasks with sub-day cadence (`frequency_minutes < 1440`).
 - If user intent is hourly/minutely repetition, do not force template mode. Use recurring mode with explicit `dates` + `times`, or return a clarification summary with `created_count = 0`.
 
-## Step 1.5: Resolve team name to team_id (if team_name provided)
+## Step 1.5: Resolve team name to team_id
+Two paths:
+- **`team_name` provided** → look it up and verify the requester is an admin.
+- **`team_name` empty AND `team_task` is true** → auto-resolve to the user's only admin team. If they have exactly one active admin membership in a non-deleted team, use it. If zero or more than one, return a clarification (no writes).
+
 ```python
 team_id = None
 
 if team_name:
-    team_name_lower = team_name.strip().lower()
-    
-    # Find team by name (case-insensitive) where requester is admin
+    # Find team by name (case-insensitive)
     team = await db.teams.find_one({
         "name": {"$regex": f"^{team_name}$", "$options": "i"},
         "is_deleted": False
     })
-    
+
     if not team:
         _result = {
             "summary": f"I couldn't find a team named '{team_name}'.",
@@ -237,7 +251,7 @@ if team_name:
         # Early return - skip task creation
     else:
         team_id = team["team_id"]
-        
+
         # Verify target_user_id is an admin of this team
         admin_check = await db.team_members.find_one({
             "team_id": team_id,
@@ -245,7 +259,7 @@ if team_name:
             "role": "admin",
             "status": "member"
         })
-        
+
         if not admin_check:
             _result = {
                 "summary": f"You must be an admin of '{team_name}' to create tasks there.",
@@ -253,6 +267,42 @@ if team_name:
                 "nav_hint": "task_list",
             }
             # Early return - skip task creation
+
+elif team_task:
+    # Auto-resolve: user said "team/family task" but didn't name the team.
+    admin_memberships = await db.team_members.find({
+        "user_id": target_user_id,
+        "role": "admin",
+        "status": "member",
+    }).to_list(50)
+
+    # Filter to teams that still exist (not soft-deleted)
+    candidate_teams = []
+    for m in admin_memberships:
+        t = await db.teams.find_one(
+            {"team_id": m["team_id"], "is_deleted": False},
+            {"team_id": 1, "name": 1},
+        )
+        if t:
+            candidate_teams.append(t)
+
+    if len(candidate_teams) == 0:
+        _result = {
+            "summary": "You're not an admin of any team, so I can't create a team task. Want me to create it as a personal task instead?",
+            "created_count": 0,
+            "nav_hint": "task_list",
+        }
+        # Early return - skip task creation
+    elif len(candidate_teams) == 1:
+        team_id = candidate_teams[0]["team_id"]
+    else:
+        names = ", ".join(t.get("name", "?") for t in candidate_teams)
+        _result = {
+            "summary": f"You belong to multiple teams ({names}). Which team should I add this task to?",
+            "created_count": 0,
+            "nav_hint": "task_list",
+        }
+        # Early return - skip task creation
 ```
 
 ## Step 2: Convert local times to UTC
