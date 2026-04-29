@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:math';
 import 'package:flutter/foundation.dart';
 
+import '../../../core/services/debug_log_service.dart';
 import '../../../core/services/hr_session_service.dart';
 import '../../../shared/models/heart_rate_models.dart';
 import '../../ring/providers/ring_provider.dart';
@@ -51,12 +52,44 @@ class HeartRateProvider extends ChangeNotifier {
   DateTime? _measurementStartedAt;
   bool _lastRingConnected = false;
 
+  // Diagnostic counters: emit a periodic summary line so we can detect a
+  // ramping rebuild rate, leaked stream subscriptions, or stuck backfill.
+  int _readingsSinceLastSummary = 0;
+  int _notifyListenersSinceLastSummary = 0;
+  Timer? _diagSummaryTimer;
+
   // Adaptive EMA smoothing parameters
   static const double _minAlpha = 0.15; // smooth during stable periods
   static const double _maxAlpha = 0.6; // responsive during rapid changes
   double _emaValue = 0.0;
   int _previousRaw = 0;
   int _stabilityCounter = 0;
+
+  // ─── Diagnostics ──────────────────────────────────────────────────────────
+
+  void _startDiagSummaryTimer() {
+    _diagSummaryTimer?.cancel();
+    _diagSummaryTimer = Timer.periodic(const Duration(seconds: 10), (_) {
+      dlog(
+        'HR_PROV',
+        'diag readings=$_readingsSinceLastSummary '
+            'notify=$_notifyListenersSinceLastSummary '
+            'session=${_sessionReadings.length} '
+            'pendingGaps=${_pendingBackfillRanges.length} '
+            'attemptedGaps=${_attemptedBackfillRanges.length} '
+            'backfillInProgress=$_backfillInProgress '
+            'state=$_measureState '
+            'connected=$_lastRingConnected',
+      );
+      _readingsSinceLastSummary = 0;
+      _notifyListenersSinceLastSummary = 0;
+    });
+  }
+
+  void _stopDiagSummaryTimer() {
+    _diagSummaryTimer?.cancel();
+    _diagSummaryTimer = null;
+  }
 
   // ─── ProxyProvider bridge ─────────────────────────────────────────────────
 
@@ -76,8 +109,26 @@ class HeartRateProvider extends ChangeNotifier {
     final ring = _ringProvider;
     if (ring == null) return;
     final connected = ring.isConnected;
-    final justReconnected = !_lastRingConnected && connected;
+    final wasConnected = _lastRingConnected;
+    final justReconnected = !wasConnected && connected;
+    final justDisconnected = wasConnected && !connected;
     _lastRingConnected = connected;
+
+    if (justDisconnected) {
+      dlog(
+        'HR_PROV',
+        'ring DISCONNECTED while state=$_measureState '
+            'session=${_sessionReadings.length} '
+            'lastReading=${_lastRealtimePointTime?.toIso8601String() ?? "null"}',
+      );
+    }
+    if (justReconnected) {
+      dlog(
+        'HR_PROV',
+        'ring RECONNECTED while state=$_measureState '
+            'session=${_sessionReadings.length}',
+      );
+    }
 
     if (!justReconnected) return;
 
@@ -87,11 +138,18 @@ class HeartRateProvider extends ChangeNotifier {
     if (_measureState == HrMeasureState.measuring) {
       // Re-subscribe to the new characteristic so the stream stays live.
       // Also resends 0x28/0x09/0x19 start commands in case the ring lost state.
+      dlog(
+        'HR_PROV',
+        'reconnect resub: cancelling old _hrSub (was=${_hrSub == null ? "null" : "alive"})',
+      );
       _hrSub?.cancel();
       final stream = ring.startHrStreaming();
       _hrSub = stream.listen(
         _onRawReading,
-        onError: (e) => debugPrint('[HR] stream error after reconnect: $e'),
+        onError: (e) {
+          debugPrint('[HR] stream error after reconnect: $e');
+          dlog('HR_PROV', 'stream error after reconnect: $e');
+        },
       );
       _enqueueGapsFromSession();
       _kickBackfillIfNeeded();
@@ -275,16 +333,21 @@ class HeartRateProvider extends ChangeNotifier {
     _measureState = HrMeasureState.measuring;
     notifyListeners();
 
+    dlog('HR_PROV', 'startMeasurement (max=${_maxDuration.inMinutes} min)');
+    _startDiagSummaryTimer();
+
     final stream = _ringProvider!.startHrStreaming();
     _hrSub = stream.listen(
       _onRawReading,
       onError: (e) {
         debugPrint('[HR] stream error: $e');
+        dlog('HR_PROV', 'stream error: $e');
       },
     );
 
     _elapsedTimer = Timer.periodic(const Duration(seconds: 1), (_) {
       _elapsed += const Duration(seconds: 1);
+      _notifyListenersSinceLastSummary++;
       notifyListeners();
     });
 
@@ -294,15 +357,23 @@ class HeartRateProvider extends ChangeNotifier {
   }
 
   void _onRawReading(int raw) {
-    if (raw < 30 || raw > 220) return; // reject implausible values
+    if (raw < 30 || raw > 220) {
+      dlog('HR_PROV', 'reading $raw rejected (out of range 30-220)');
+      return;
+    }
     final now = DateTime.now();
     final smoothed = _adaptiveEMA(raw);
     _currentBpm = smoothed.round();
+    _readingsSinceLastSummary++;
     // Only record to session once the warmup phase is complete
     if (!isWarmingUp) {
       if (_lastRealtimePointTime != null) {
         final gap = now.difference(_lastRealtimePointTime!);
         if (gap > _gapDetectThreshold) {
+          dlog(
+            'HR_PROV',
+            'gap detected ${gap.inSeconds}s — enqueueing backfill range',
+          );
           _enqueueGap(
             _HrRange(
               start: _lastRealtimePointTime!.add(_gapEdgeTrim),
@@ -322,6 +393,7 @@ class HeartRateProvider extends ChangeNotifier {
       );
       _lastRealtimePointTime = now;
     }
+    _notifyListenersSinceLastSummary++;
     notifyListeners();
   }
 
@@ -396,6 +468,10 @@ class HeartRateProvider extends ChangeNotifier {
   Future<void> _runBackfill() async {
     if (_backfillInProgress) return;
     _backfillInProgress = true;
+    dlog(
+      'HR_PROV',
+      'backfill begin (pending=${_pendingBackfillRanges.length})',
+    );
     try {
       while (_measureState == HrMeasureState.measuring &&
           _pendingBackfillRanges.isNotEmpty &&
@@ -412,10 +488,17 @@ class HeartRateProvider extends ChangeNotifier {
         final ring = _ringProvider;
         if (ring == null || !ring.isConnected) break;
 
+        final t0 = DateTime.now();
         final results = await Future.wait([
           ring.fetchHrDetailsRange(start: queryStart, end: gap.end),
           ring.fetchHrHistoryRange(start: queryStart, end: gap.end),
         ]);
+        final fetchMs = DateTime.now().difference(t0).inMilliseconds;
+        dlog(
+          'HR_PROV',
+          'backfill fetch ok in ${fetchMs}ms — '
+              'detail=${results[0].length} history=${results[1].length}',
+        );
 
         if (_measureState != HrMeasureState.measuring) break;
         _mergeBackfilledPoints(
@@ -426,9 +509,12 @@ class HeartRateProvider extends ChangeNotifier {
       }
     } catch (e) {
       debugPrint('[HR] backfill error: $e');
+      dlog('HR_PROV', 'backfill error: $e');
     } finally {
       _backfillInProgress = false;
+      _notifyListenersSinceLastSummary++;
       notifyListeners();
+      dlog('HR_PROV', 'backfill end');
     }
   }
 
@@ -480,15 +566,25 @@ class HeartRateProvider extends ChangeNotifier {
     addPoints(detailPoints, HrSessionPointSource.backfillDetail);
     addPoints(historyPoints, HrSessionPointSource.backfillHistory);
 
+    final mergeT0 = DateTime.now();
+    final beforeCount = _sessionReadings.length;
     final merged = bySecond.values.toList()
       ..sort((a, b) => a.time.compareTo(b.time));
     _sessionReadings
       ..clear()
       ..addAll(merged);
+    final mergeMs = DateTime.now().difference(mergeT0).inMilliseconds;
+    dlog(
+      'HR_PROV',
+      'merge backfill: $beforeCount → ${_sessionReadings.length} '
+          '(detail=${detailPoints.length} history=${historyPoints.length}) '
+          'in ${mergeMs}ms',
+    );
   }
 
   Future<void> pauseMeasurement() async {
     if (_measureState != HrMeasureState.measuring) return;
+    dlog('HR_PROV', 'pauseMeasurement (session=${_sessionReadings.length})');
 
     _elapsedTimer?.cancel();
     _elapsedTimer = null;
@@ -511,6 +607,7 @@ class HeartRateProvider extends ChangeNotifier {
   Future<void> resumeMeasurement() async {
     if (_measureState != HrMeasureState.paused) return;
     if (_ringProvider == null || !_ringProvider!.isConnected) return;
+    dlog('HR_PROV', 'resumeMeasurement (session=${_sessionReadings.length})');
 
     _pauseCleanupTimer?.cancel();
     _pauseCleanupTimer = null;
@@ -527,6 +624,7 @@ class HeartRateProvider extends ChangeNotifier {
 
     _elapsedTimer = Timer.periodic(const Duration(seconds: 1), (_) {
       _elapsed += const Duration(seconds: 1);
+      _notifyListenersSinceLastSummary++;
       notifyListeners();
     });
 
@@ -545,6 +643,14 @@ class HeartRateProvider extends ChangeNotifier {
   Future<void> stopMeasurement() async {
     if (_measureState != HrMeasureState.measuring &&
         _measureState != HrMeasureState.paused) return;
+    dlog(
+      'HR_PROV',
+      'stopMeasurement (state=$_measureState, '
+          'session=${_sessionReadings.length}, '
+          'pendingGaps=${_pendingBackfillRanges.length}, '
+          'attemptedGaps=${_attemptedBackfillRanges.length})',
+    );
+    _stopDiagSummaryTimer();
 
     _pauseCleanupTimer?.cancel();
     _pauseCleanupTimer = null;
@@ -616,6 +722,7 @@ class HeartRateProvider extends ChangeNotifier {
     _elapsedTimer?.cancel();
     _autoStopTimer?.cancel();
     _pauseCleanupTimer?.cancel();
+    _diagSummaryTimer?.cancel();
     _hrSub?.cancel();
     _ringProvider?.removeListener(_onRingStateChanged);
     super.dispose();

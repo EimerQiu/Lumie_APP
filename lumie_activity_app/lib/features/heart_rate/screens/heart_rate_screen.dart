@@ -896,6 +896,7 @@ class _HeartRateScreenState extends State<HeartRateScreen>
     final s = d.inSeconds.remainder(60).toString().padLeft(2, '0');
     return h > 0 ? '${h}h ${m}m ${s}s' : '${m}m ${s}s';
   }
+
 }
 
 // ─── Activity prompt bottom sheet ────────────────────────────────────────────

@@ -29,6 +29,7 @@ import 'features/teams/screens/team_detail_screen.dart';
 import 'features/teams/screens/invite_member_screen.dart';
 import 'features/teams/screens/member_data_screen.dart';
 import 'features/teams/screens/accept_invitation_screen.dart';
+import 'features/settings/screens/diagnostics_screen.dart';
 import 'features/settings/screens/rest_days_settings_screen.dart';
 import 'features/settings/screens/edit_profile_screen.dart';
 import 'features/advisor/screens/advisor_screen.dart';
@@ -49,6 +50,7 @@ import 'features/tasks/screens/edit_task_screen.dart';
 import 'shared/models/task_models.dart';
 import 'shared/models/activity_models.dart';
 import 'shared/models/user_models.dart';
+import 'core/services/debug_log_service.dart';
 import 'core/services/push_notification_service.dart';
 import 'core/services/checkin_service.dart';
 import 'features/wellness/providers/wellness_provider.dart';
@@ -69,6 +71,11 @@ void main() {
 
   // Initialize timezone data before using timezone package
   tz.initializeTimeZones();
+
+  // Load the persisted Diagnostics toggle so any BLE activity that fires
+  // during app startup is captured. Fire-and-forget — file IO can resolve
+  // after runApp without blocking startup.
+  DebugLogService().init();
 
   SystemChrome.setSystemUIOverlayStyle(
     const SystemUiOverlayStyle(
@@ -124,6 +131,7 @@ class LumieActivityApp extends StatelessWidget {
           '/teams': (context) => const TeamsHubScreen(),
           '/teams/create': (context) => const CreateTeamScreen(),
           '/settings/rest-days': (context) => const RestDaysSettingsScreen(),
+          '/settings/diagnostics': (context) => const DiagnosticsScreen(),
           '/profile/edit': (context) => const EditProfileScreen(),
           '/tasks': (context) => const TasksListScreen(),
           '/tasks/create': (context) => const CreateTaskScreen(),
@@ -1232,6 +1240,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       icon: Icons.help_outline,
                       title: 'Help & Support',
                       onTap: () {},
+                    ),
+                    _SettingsItem(
+                      icon: Icons.bug_report_outlined,
+                      title: 'Diagnostics',
+                      onTap: () => Navigator.pushNamed(
+                        context,
+                        '/settings/diagnostics',
+                      ),
                     ),
                     const Divider(height: 32),
                     _SettingsItem(

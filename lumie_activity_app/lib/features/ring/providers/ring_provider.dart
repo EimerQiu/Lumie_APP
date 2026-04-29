@@ -5,6 +5,7 @@ import 'dart:async';
 import 'dart:io';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
+import '../../../core/services/debug_log_service.dart';
 import '../../../core/services/profile_service.dart';
 import '../../../core/services/ring_ble_service.dart';
 import '../../../core/services/ring_service.dart';
@@ -103,6 +104,7 @@ class RingProvider extends ChangeNotifier with WidgetsBindingObserver {
   void _handleDisconnected() {
     if (_ringInfo?.isPaired == true) {
       debugPrint('[Ring] Disconnected — scheduling auto-reconnect');
+      dlog('RING', 'handleDisconnected → scheduling auto-reconnect');
       _ringInfo = _ringInfo?.copyWith(
         connectionStatus: RingConnectionStatus.disconnected,
       );
@@ -139,6 +141,7 @@ class RingProvider extends ChangeNotifier with WidgetsBindingObserver {
 
     _state = RingProviderState.reconnecting;
     notifyListeners();
+    dlog('RING', 'reconnect attempt name=$bleDeviceName id=$bleDeviceId');
 
     try {
       try {
@@ -153,6 +156,7 @@ class RingProvider extends ChangeNotifier with WidgetsBindingObserver {
         debugPrint(
           '[Ring] Preferred reconnect failed ($directError) — trying scan fallback',
         );
+        dlog('RING', 'preferred reconnect failed: $directError → scan fallback');
         if (bleDeviceId != null) {
           await _bleService.scanAndReconnect(bleDeviceId);
         } else if (bleDeviceName != null && bleDeviceName.isNotEmpty) {
@@ -189,12 +193,14 @@ class RingProvider extends ChangeNotifier with WidgetsBindingObserver {
       }
       _state = RingProviderState.paired;
       debugPrint('[Ring] Reconnect succeeded');
+      dlog('RING', 'reconnect succeeded — battery=$battery');
       notifyListeners();
       if (runBackgroundSyncAfterConnect) {
         _syncSleepInBackground();
       }
     } catch (e) {
       debugPrint('[Ring] Reconnect failed: $e');
+      dlog('RING', 'reconnect failed: $e');
       _ringInfo = _ringInfo?.copyWith(
         connectionStatus: RingConnectionStatus.disconnected,
       );

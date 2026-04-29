@@ -10,6 +10,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import '../../shared/models/ring_models.dart';
 import '../../shared/models/heart_rate_models.dart';
+import 'debug_log_service.dart';
 import 'ring_service.dart';
 
 class RingBleService {
@@ -246,6 +247,7 @@ class RingBleService {
     _connectionStateSub?.cancel();
     _connectionStateSub = device.connectionState.listen((state) {
       debugPrint('[Ring BLE] Connection state changed: $state');
+      dlog('RING', 'connectionState → $state');
       if (state == BluetoothConnectionState.disconnected) {
         _stopKeepAlive();
         // Cancel subscription BEFORE nulling it, so it's properly disposed
@@ -255,6 +257,7 @@ class RingBleService {
         _notifyChar = null;
         _connectedDevice = null;
         debugPrint('[Ring BLE] Unexpected disconnect — notifying provider');
+        dlog('RING', 'unexpected disconnect — onDisconnected callback');
         onDisconnected?.call();
       }
     });
@@ -1032,9 +1035,16 @@ class RingBleService {
   Stream<int> startHrStreaming() {
     if (_notifyChar == null) {
       debugPrint('[Ring BLE] startHrStreaming: not connected');
+      dlog('HR_BLE', 'startHrStreaming SKIPPED — notifyChar=null');
       return const Stream.empty();
     }
     debugPrint('[Ring BLE] startHrStreaming: starting 0x28 + 0x09 + 0x19');
+    dlog(
+      'HR_BLE',
+      'startHrStreaming begin '
+          '(prev_controller=${_hrStreamController == null ? "null" : "alive"}, '
+          'prev_sub=${_hrStreamSub == null ? "null" : "alive"})',
+    );
 
     _hrStreamController?.close();
     _hrStreamController = StreamController<int>.broadcast();
@@ -1043,22 +1053,46 @@ class RingBleService {
     _hrStreamSub?.cancel();
     _hrStreamSub = notifyChar.onValueReceived.listen(
       (data) {
+        // Generic packet trace — only first/last byte to keep logs small.
+        // Crucial for diagnosing duplicate listeners or the sensor going silent.
+        if (data.isNotEmpty) {
+          dlog(
+            'HR_BLE',
+            'notify cmd=0x${data[0].toRadixString(16).padLeft(2, '0')} '
+                'len=${data.length}',
+          );
+        }
         if (data.isEmpty || data[0] != 0x18) return;
         // 0x18 exercise push packet: live optical HR at byte[1].
         // byte[1] == 0xFF means ring ended exercise; byte[1] == 0x00 means sensor
         // is still warming up (no valid reading yet) — both are ignored.
-        if (data.length < 2 || data[1] == 0xFF || data[1] == 0x00) return;
+        if (data.length < 2 || data[1] == 0xFF || data[1] == 0x00) {
+          dlog(
+            'HR_BLE',
+            '0x18 dropped — byte[1]=0x${data.length < 2 ? "??" : data[1].toRadixString(16).padLeft(2, "0")}',
+          );
+          return;
+        }
         final hr = data[1];
         // duration counter (seconds, LE) for log context
         final secs = data.length >= 14
             ? data[10] | (data[11] << 8) | (data[12] << 16) | (data[13] << 24)
             : 0;
         debugPrint('[Ring HR] 0x18 → $hr BPM (t=${secs}s)');
+        dlog('HR_BLE', '0x18 → $hr BPM (t=${secs}s)');
         if (hr > 0 && hr < 250 && _hrStreamController?.isClosed == false) {
           _hrStreamController!.add(hr);
+        } else if (_hrStreamController?.isClosed != false) {
+          dlog(
+            'HR_BLE',
+            '0x18 → $hr BPM DROPPED (controller closed/null) — leaked listener?',
+          );
         }
       },
-      onError: (e) => debugPrint('[Ring HR] notify stream error: $e'),
+      onError: (e) {
+        debugPrint('[Ring HR] notify stream error: $e');
+        dlog('HR_BLE', 'notify stream error: $e');
+      },
       cancelOnError: false,
     );
 
@@ -1069,8 +1103,11 @@ class RingBleService {
     measurePayload[2] = 0x01; // start
     measurePayload[5] = 0x18; // 5400 & 0xFF
     measurePayload[6] = 0x15; // 5400 >> 8
-    _writeCommand(measurePayload).catchError((e) {
+    _writeCommand(measurePayload).then((_) {
+      dlog('HR_BLE', '→ 0x28 start (HR mode, 5400s) ok');
+    }).catchError((e) {
       debugPrint('[Ring BLE] startHrStreaming 0x28 error: $e');
+      dlog('HR_BLE', '→ 0x28 start error: $e');
     });
 
     // 0x09: realtime streaming (fallback HR source)
@@ -1078,8 +1115,11 @@ class RingBleService {
     streamPayload[0] = 0x09;
     streamPayload[1] = 0x01;
     streamPayload[2] = 0x01; // enable temperature
-    _writeCommand(streamPayload).catchError((e) {
+    _writeCommand(streamPayload).then((_) {
+      dlog('HR_BLE', '→ 0x09 start (realtime) ok');
+    }).catchError((e) {
       debugPrint('[Ring BLE] startHrStreaming 0x09 error: $e');
+      dlog('HR_BLE', '→ 0x09 start error: $e');
     });
 
     // 0x19: exercise mode — triggers live 0x18 push packets
@@ -1087,16 +1127,21 @@ class RingBleService {
     exercisePayload[0] = 0x19;
     exercisePayload[1] = 0x01; // start
     exercisePayload[2] = 0x09; // mode
-    _writeCommand(exercisePayload).catchError((e) {
+    _writeCommand(exercisePayload).then((_) {
+      dlog('HR_BLE', '→ 0x19 start (exercise) ok');
+    }).catchError((e) {
       debugPrint('[Ring BLE] startHrStreaming 0x19 error: $e');
+      dlog('HR_BLE', '→ 0x19 start error: $e');
     });
 
+    dlog('HR_BLE', 'startHrStreaming wiring complete');
     return _hrStreamController!.stream;
   }
 
   /// Stop the continuous HR streaming started by [startHrStreaming].
   Future<void> stopHrStreaming() async {
     debugPrint('[Ring BLE] stopHrStreaming');
+    dlog('HR_BLE', 'stopHrStreaming begin');
 
     // Stop exercise mode first
     try {
@@ -1105,8 +1150,10 @@ class RingBleService {
       stopExercise[1] = 0x04; // end
       stopExercise[2] = 0x09;
       await _writeCommand(stopExercise);
+      dlog('HR_BLE', '← 0x19 stop ok');
     } catch (e) {
       debugPrint('[Ring BLE] stopHrStreaming 0x19 stop error: $e');
+      dlog('HR_BLE', '← 0x19 stop error: $e');
     }
 
     try {
@@ -1115,8 +1162,10 @@ class RingBleService {
       measurePayload[1] = 0x02;
       measurePayload[2] = 0x00; // stop
       await _writeCommand(measurePayload);
+      dlog('HR_BLE', '← 0x28 stop ok');
     } catch (e) {
       debugPrint('[Ring BLE] stopHrStreaming 0x28 stop error: $e');
+      dlog('HR_BLE', '← 0x28 stop error: $e');
     }
 
     try {
@@ -1124,8 +1173,10 @@ class RingBleService {
       streamPayload[0] = 0x09;
       streamPayload[1] = 0x00; // stop
       await _writeCommand(streamPayload);
+      dlog('HR_BLE', '← 0x09 stop ok');
     } catch (e) {
       debugPrint('[Ring BLE] stopHrStreaming 0x09 stop error: $e');
+      dlog('HR_BLE', '← 0x09 stop error: $e');
     }
 
     await _hrStreamSub?.cancel();
@@ -1133,6 +1184,7 @@ class RingBleService {
     await _hrStreamController?.close();
     _hrStreamController = null;
     debugPrint('[Ring BLE] HR streaming stopped');
+    dlog('HR_BLE', 'stopHrStreaming end (controller+sub torn down)');
   }
 
   // ─── Sleep ────────────────────────────────────────────────────────────────
