@@ -30,6 +30,7 @@ import '../widgets/quick_actions_section.dart';
 import '../widgets/adaptive_goal_card.dart';
 import '../widgets/rest_day_suggestion_sheet.dart';
 import '../widgets/active_tasks_card.dart';
+import '../widgets/sky_background.dart';
 
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key});
@@ -143,18 +144,37 @@ class _DashboardScreenState extends State<DashboardScreen>
     }
   }
 
+  /// Mood for the dynamic sky background — derived from today's wellness
+  /// signals (sleep, activity, stress) and the wall-clock hour. The widget
+  /// crossfades between moods, so this can be recomputed cheaply on every build.
+  SkyMood _resolveSkyMood(
+    SleepProvider sleep,
+    StressProvider stress,
+    ActivityGoalProvider goalProv,
+    TodayStepsProvider stepsProv,
+  ) {
+    final activity = _activityScore(goalProv, stepsProv);
+    return SkyMood.fromScores(
+      now: DateTime.now(),
+      sleepScore: sleep.latestSleep != null ? sleep.sleepScore : null,
+      activityScore: activity,
+      stressScore: stress.hasData ? stress.score : null,
+      isRestDay: _isRestDay,
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Stack(
       children: [
-        // Blurred lemon bokeh background
+        // Dynamic sky/cosmos background — visible through every glassmorphic card.
         Positioned.fill(
-          child: ImageFiltered(
-            imageFilter: ImageFilter.blur(sigmaX: 4, sigmaY: 4),
-            child: Image.asset(
-              'assets/lemon_bokeh_background.png',
-              fit: BoxFit.cover,
-            ),
+          child: Consumer4<SleepProvider, StressProvider, ActivityGoalProvider,
+              TodayStepsProvider>(
+            builder: (context, sleep, stress, goalProv, stepsProv, _) {
+              final mood = _resolveSkyMood(sleep, stress, goalProv, stepsProv);
+              return SkyBackground(mood: mood);
+            },
           ),
         ),
         Scaffold(
@@ -240,6 +260,7 @@ class _DashboardScreenState extends State<DashboardScreen>
         final stress = wellness.stress;
         final hasSleepData = sleep.latestSleep != null;
         final sleepScore = hasSleepData ? sleep.sleepScore : 0;
+        final hasStressData = context.watch<StressProvider>().hasData;
 
         final scores = [
           _ScoreData(
@@ -247,8 +268,6 @@ class _DashboardScreenState extends State<DashboardScreen>
             score: 0,
             centerLabel: fatigue.centerLabel,
             icon: Icons.battery_charging_full,
-            color: fatigue.color,
-            progress: fatigue.progress,
             onTap: () => Navigator.push(
               context,
               MaterialPageRoute(
@@ -261,8 +280,6 @@ class _DashboardScreenState extends State<DashboardScreen>
             score: sleepScore,
             centerLabel: hasSleepData ? null : '—',
             icon: Icons.bedtime_outlined,
-            color: hasSleepData ? const Color(0xFF64B5F6) : AppColors.textLight,
-            progress: hasSleepData ? null : 0.0,
             onTap: () => Navigator.push(
               context,
               MaterialPageRoute(builder: (_) => const SleepScreen()),
@@ -272,7 +289,6 @@ class _DashboardScreenState extends State<DashboardScreen>
             label: 'Activity',
             score: _activityScore(goalProv, context.watch<TodayStepsProvider>()),
             icon: Icons.directions_run,
-            color: const Color(0xFFFFB74D),
             onTap: () => Navigator.push(
               context,
               MaterialPageRoute(builder: (_) => const ActivityHistoryScreen()),
@@ -280,20 +296,9 @@ class _DashboardScreenState extends State<DashboardScreen>
           ),
           _ScoreData(
             label: 'Stress',
-            score: context.watch<StressProvider>().hasData
-                ? context.watch<StressProvider>().score
-                : 0,
-            centerLabel: context.watch<StressProvider>().hasData
-                ? null
-                : (stress.centerLabel),
+            score: hasStressData ? context.watch<StressProvider>().score : 0,
+            centerLabel: hasStressData ? null : stress.centerLabel,
             icon: Icons.self_improvement,
-            color: context.watch<StressProvider>().hasData
-                ? (context.watch<StressProvider>().today?.averageZone.displayColor ??
-                    stress.color)
-                : stress.color,
-            progress: context.watch<StressProvider>().hasData
-                ? null
-                : stress.progress,
             onTap: () => Navigator.push(
               context,
               MaterialPageRoute(
@@ -303,92 +308,100 @@ class _DashboardScreenState extends State<DashboardScreen>
           ),
         ];
 
+        // No card / container / header — the four scores float directly on
+        // the dynamic sky, Oura-style. Padding only widens the touch row to
+        // match the rest of the column's horizontal margin.
         return Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 16),
-          child: GradientCard(
-            gradient: AppColors.cardGradient,
-            opacity: 0.70,
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text(
-                  'Today\'s Scores',
-                  style: TextStyle(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w600,
-                    color: AppColors.textSecondary,
-                    letterSpacing: 0.5,
-                  ),
-                ),
-                const SizedBox(height: 12),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceAround,
-                  children: scores.map((s) => _buildScoreCard(s)).toList(),
-                ),
-              ],
-            ),
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceAround,
+            children: scores.map((s) => _buildScoreChip(s)).toList(),
           ),
         );
       },
     );
   }
 
-  Widget _buildScoreCard(_ScoreData data) {
-    final bool usesLabel = data.centerLabel != null;
-
-    final Color scoreColor;
-    if (usesLabel) {
-      scoreColor = data.color;
-    } else if (data.score >= 80) {
-      scoreColor = const Color(0xFF81C784);
-    } else if (data.score >= 60) {
-      scoreColor = const Color(0xFFFFB74D);
-    } else {
-      scoreColor = const Color(0xFFE57373);
-    }
-
-    final double ringProgress = data.progress ?? (data.score / 100);
+  /// Single floating score "halo" — a soft frosted disk with the score
+  /// number + icon inside, label below. No hard border, no shadow; the disk
+  /// is just a slightly darker patch of glass over the sky.
+  Widget _buildScoreChip(_ScoreData data) {
+    final usesLabel = data.centerLabel != null;
+    final centerText = usesLabel ? data.centerLabel! : '${data.score}';
 
     return GestureDetector(
       onTap: data.onTap,
+      behavior: HitTestBehavior.opaque,
       child: Column(
+        mainAxisSize: MainAxisSize.min,
         children: [
-          Stack(
-            alignment: Alignment.center,
-            children: [
-              SizedBox(
-                width: 72,
-                height: 72,
-                child: CustomPaint(
-                  painter: _StarPainter(color: scoreColor, strokeWidth: 1.5, progress: ringProgress),
+          ClipPath(
+            clipper: const _StarClipper(),
+            child: BackdropFilter(
+              filter: ImageFilter.blur(sigmaX: 14, sigmaY: 14),
+              child: Container(
+                width: 88,
+                height: 88,
+                // Subtle radial halo — center marginally darker than the
+                // edge so the star reads as a soft glassy lens rather than
+                // a hard-edged token. No border, no shadow.
+                decoration: BoxDecoration(
+                  gradient: RadialGradient(
+                    colors: [
+                      Colors.white.withValues(alpha: 0.22),
+                      Colors.white.withValues(alpha: 0.12),
+                    ],
+                  ),
+                ),
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(
+                      data.icon,
+                      size: 16,
+                      color: Colors.white.withValues(alpha: 0.95),
+                    ),
+                    const SizedBox(height: 3),
+                    Text(
+                      centerText,
+                      style: TextStyle(
+                        fontSize: usesLabel ? 13 : 19,
+                        fontWeight: FontWeight.w700,
+                        color: Colors.white,
+                        height: 1.0,
+                        // Faint shadow — keeps the value readable over a
+                        // bright sky photo without needing a border on the
+                        // disk itself.
+                        shadows: const [
+                          Shadow(
+                            color: Color(0x66000000),
+                            blurRadius: 4,
+                            offset: Offset(0, 1),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
                 ),
               ),
-              Text(
-                usesLabel ? data.centerLabel! : '${data.score}',
-                style: TextStyle(
-                  fontSize: usesLabel ? 11 : 15,
-                  fontWeight: FontWeight.bold,
-                  color: usesLabel ? scoreColor : AppColors.textPrimary,
-                ),
-              ),
-            ],
+            ),
           ),
-          const SizedBox(height: 6),
-          Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(data.icon, size: 11, color: data.color),
-              const SizedBox(width: 3),
-              Text(
-                data.label,
-                style: const TextStyle(
-                  fontSize: 11,
-                  color: AppColors.textSecondary,
-                  fontWeight: FontWeight.w500,
+          const SizedBox(height: 8),
+          Text(
+            data.label,
+            style: const TextStyle(
+              fontSize: 11,
+              color: Colors.white,
+              fontWeight: FontWeight.w600,
+              letterSpacing: 0.2,
+              shadows: [
+                Shadow(
+                  color: Color(0x66000000),
+                  blurRadius: 4,
+                  offset: Offset(0, 1),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
         ],
       ),
@@ -403,61 +416,52 @@ class _DashboardScreenState extends State<DashboardScreen>
         final bpmText = connected
             ? (hr.latestHr != null ? '${hr.latestHr} BPM' : 'Tap to measure')
             : 'Ring disconnected';
-        return Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 16),
-          child: GestureDetector(
-            onTap: () => Navigator.pushNamed(context, '/heart-rate'),
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-              decoration: BoxDecoration(
-                color: AppColors.backgroundWhite.withValues(alpha: 0.70),
-                borderRadius: BorderRadius.circular(16),
-                boxShadow: AppColors.cardShadow,
+        return GradientCard(
+          glass: true,
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+          onTap: () => Navigator.pushNamed(context, '/heart-rate'),
+          child: Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: (connected ? Colors.redAccent : AppColors.textLight)
+                      .withValues(alpha: 0.18),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Icon(
+                  connected ? Icons.favorite : Icons.bluetooth_disabled,
+                  color: connected ? Colors.redAccent : AppColors.textLight,
+                  size: 20,
+                ),
               ),
-              child: Row(
+              const SizedBox(width: 12),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Container(
-                    padding: const EdgeInsets.all(8),
-                    decoration: BoxDecoration(
-                      color: (connected ? Colors.redAccent : AppColors.textLight)
-                          .withValues(alpha: 0.12),
-                      borderRadius: BorderRadius.circular(10),
-                    ),
-                    child: Icon(
-                      connected ? Icons.favorite : Icons.bluetooth_disabled,
-                      color: connected ? Colors.redAccent : AppColors.textLight,
-                      size: 20,
+                  const Text(
+                    'Heart Rate',
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                      color: AppColors.textSecondary,
                     ),
                   ),
-                  const SizedBox(width: 12),
-                  Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Text(
-                        'Heart Rate',
-                        style: TextStyle(
-                          fontSize: 13,
-                          fontWeight: FontWeight.w600,
-                          color: AppColors.textSecondary,
-                        ),
-                      ),
-                      Text(
-                        bpmText,
-                        style: TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.bold,
-                          color: connected
-                              ? AppColors.textPrimary
-                              : AppColors.textSecondary,
-                        ),
-                      ),
-                    ],
+                  Text(
+                    bpmText,
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold,
+                      color: connected
+                          ? AppColors.textPrimary
+                          : AppColors.textSecondary,
+                    ),
                   ),
-                  const Spacer(),
-                  const Icon(Icons.chevron_right, color: AppColors.textSecondary),
                 ],
               ),
-            ),
+              const Spacer(),
+              const Icon(Icons.chevron_right, color: AppColors.textSecondary),
+            ],
           ),
         );
       },
@@ -478,23 +482,16 @@ class _DashboardScreenState extends State<DashboardScreen>
             AppColors.textLight;
         final timeline = today?.timeline ?? [];
 
-        return Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 16),
-          child: GestureDetector(
-            onTap: () => Navigator.push(
-              context,
-              MaterialPageRoute(builder: (_) => const StressDetailScreen()),
-            ),
-            child: Container(
-              padding: const EdgeInsets.all(14),
-              decoration: BoxDecoration(
-                color: AppColors.backgroundWhite.withValues(alpha: 0.70),
-                borderRadius: BorderRadius.circular(16),
-                boxShadow: AppColors.cardShadow,
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
+        return GradientCard(
+          glass: true,
+          padding: const EdgeInsets.all(14),
+          onTap: () => Navigator.push(
+            context,
+            MaterialPageRoute(builder: (_) => const StressDetailScreen()),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
                   Row(
                     children: [
                       Container(
@@ -587,8 +584,6 @@ class _DashboardScreenState extends State<DashboardScreen>
                   ],
                 ],
               ),
-            ),
-          ),
         );
       },
     );
@@ -750,8 +745,7 @@ class _DashboardScreenState extends State<DashboardScreen>
             : goalProv.effectiveGoalMinutes;
         final unitLabel = goalProv.goalType.unitLabel;
         return GradientCard(
-          gradient: AppColors.cardGradient,
-          opacity: 0.70,
+          glass: true,
           padding: const EdgeInsets.all(24),
           child: Column(
             children: [
@@ -837,7 +831,7 @@ class _DashboardScreenState extends State<DashboardScreen>
     ];
 
     return GradientCard(
-      gradient: AppColors.cardGradient,
+      glass: true,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -872,10 +866,10 @@ class _DashboardScreenState extends State<DashboardScreen>
       margin: const EdgeInsets.only(bottom: 12),
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: AppColors.backgroundWhite,
+        color: Colors.white.withValues(alpha: 0.35),
         borderRadius: BorderRadius.circular(12),
         border: Border.all(
-          color: AppColors.surfaceLight,
+          color: Colors.white.withValues(alpha: 0.4),
           width: 1,
         ),
       ),
@@ -977,28 +971,49 @@ class _DrawerItem extends StatelessWidget {
   }
 }
 
-class _StarPainter extends CustomPainter {
-  final Color color;
-  final double strokeWidth;
-  final double progress; // 0.0 – 1.0
+class _ScoreData {
+  final String label;
+  final int score;
+  /// When set, replaces the numeric score in the chip centre (used for
+  /// no-data / calibrating states like "—" or "···").
+  final String? centerLabel;
+  final IconData icon;
+  final VoidCallback onTap;
 
-  const _StarPainter({
-    required this.color,
-    required this.strokeWidth,
-    required this.progress,
+  const _ScoreData({
+    required this.label,
+    required this.score,
+    this.centerLabel,
+    required this.icon,
+    required this.onTap,
   });
+}
 
-  Path _buildStarPath(Size size) {
+/// 5-pointed star clipper used to shape the score chip's frosted halo.
+/// Outer points sit on the bounding circle; inner notch radius is 42% of
+/// the outer (matches the previous `_StarPainter` proportions so the
+/// silhouette feels familiar).
+class _StarClipper extends CustomClipper<Path> {
+  const _StarClipper();
+
+  @override
+  Path getClip(Size size) {
     final cx = size.width / 2;
     final cy = size.height / 2;
-    final outer = size.width / 2;
+    final outer = size.shortestSide / 2;
     final inner = outer * 0.42;
     final path = Path();
     for (int i = 0; i < 5; i++) {
       final outerAngle = (i * 72 - 90) * math.pi / 180;
       final innerAngle = ((i * 72 + 36) - 90) * math.pi / 180;
-      final op = Offset(cx + outer * math.cos(outerAngle), cy + outer * math.sin(outerAngle));
-      final ip = Offset(cx + inner * math.cos(innerAngle), cy + inner * math.sin(innerAngle));
+      final op = Offset(
+        cx + outer * math.cos(outerAngle),
+        cy + outer * math.sin(outerAngle),
+      );
+      final ip = Offset(
+        cx + inner * math.cos(innerAngle),
+        cy + inner * math.sin(innerAngle),
+      );
       i == 0 ? path.moveTo(op.dx, op.dy) : path.lineTo(op.dx, op.dy);
       path.lineTo(ip.dx, ip.dy);
     }
@@ -1007,56 +1022,5 @@ class _StarPainter extends CustomPainter {
   }
 
   @override
-  void paint(Canvas canvas, Size size) {
-    final starPath = _buildStarPath(size);
-
-    // Background track
-    canvas.drawPath(
-      starPath,
-      Paint()
-        ..color = color.withValues(alpha: 0.15)
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = strokeWidth
-        ..strokeJoin = StrokeJoin.round,
-    );
-
-    // Progress arc trimmed to `progress` of total path length
-    final metric = starPath.computeMetrics().first;
-    final filled = metric.extractPath(0, metric.length * progress.clamp(0.0, 1.0));
-    canvas.drawPath(
-      filled,
-      Paint()
-        ..color = color
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = strokeWidth
-        ..strokeCap = StrokeCap.round
-        ..strokeJoin = StrokeJoin.round,
-    );
-  }
-
-  @override
-  bool shouldRepaint(_StarPainter old) =>
-      old.color != color || old.strokeWidth != strokeWidth || old.progress != progress;
-}
-
-class _ScoreData {
-  final String label;
-  final int score;
-  /// When set, replaces the numeric score in the star ring centre.
-  final String? centerLabel;
-  /// When set, overrides the automatic score-based progress and color.
-  final double? progress;
-  final IconData icon;
-  final Color color;
-  final VoidCallback onTap;
-
-  const _ScoreData({
-    required this.label,
-    required this.score,
-    this.centerLabel,
-    this.progress,
-    required this.icon,
-    required this.color,
-    required this.onTap,
-  });
+  bool shouldReclip(covariant CustomClipper<Path> oldClipper) => false;
 }

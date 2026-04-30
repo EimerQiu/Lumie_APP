@@ -20,8 +20,7 @@ class ActivitySummaryCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return GradientCard(
-      gradient: AppColors.cardGradient,
-      opacity: 0.70,
+      glass: true,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [

@@ -35,12 +35,7 @@ class AdaptiveGoalCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return GradientCard(
-      gradient: isReduced
-          ? const LinearGradient(
-              colors: [Color(0xFFF3E5F5), Color(0xFFE1BEE7)],
-            )
-          : AppColors.cardGradient,
-      opacity: 0.70,
+      glass: true,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [

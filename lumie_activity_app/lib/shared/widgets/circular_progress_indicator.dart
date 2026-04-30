@@ -132,23 +132,17 @@ class ActivityRing extends StatelessWidget {
   Widget build(BuildContext context) {
     final effectiveProgress = progress.clamp(0.0, 1.0);
 
-    return Container(
+    // Transparent interior — the dynamic sky background should show through
+    // the centre of the ring, matching Oura's see-through ring style.
+    return SizedBox(
       width: size,
       height: size,
-      decoration: BoxDecoration(
-        shape: BoxShape.circle,
-        gradient: RadialGradient(
-          colors: [
-            AppColors.primaryLemonLight.withValues(alpha: 0.3),
-            Colors.transparent,
-          ],
-        ),
-      ),
       child: GradientCircularProgress(
         progress: effectiveProgress,
         size: size,
         strokeWidth: size / 10,
         gradient: AppColors.activityRingGradient,
+        backgroundColor: Colors.white.withValues(alpha: 0.30),
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [

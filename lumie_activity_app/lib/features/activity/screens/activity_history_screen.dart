@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/services/rest_days_service.dart';
 import '../../../core/services/steps_service.dart';
+import '../../../shared/models/rest_days_models.dart';
 import '../../../shared/models/user_models.dart';
 import '../../settings/providers/activity_goal_provider.dart';
 import '../providers/today_steps_provider.dart';
@@ -12,6 +13,12 @@ import '../../ring/providers/ring_provider.dart';
 import '../widgets/activity_picker_sheet.dart';
 import 'workout_recording_screen.dart';
 import 'workout_session_screen.dart';
+
+// Contributor-card thresholds. Tuned for our teen population — kept here so the
+// classifiers below can stay literal.
+const int _kSessionMinutesThreshold = 30; // ≥30 active min → counts as a "session"
+const int _kWeeklyFrequencyTarget = 3;    // soft target: 3 sessions / week
+const int _kWeeklyVolumeTarget = 150;     // soft target: 150 active min / week
 
 // ─── Internal view model ──────────────────────────────────────────────────────
 
@@ -61,6 +68,10 @@ class _ActivityHistoryScreenState extends State<ActivityHistoryScreen> {
   bool _isLoading = true;
   List<_DayData> _weekData = [];
 
+  /// Resolved rest-day schedule. Drives the Recovery Time card's 7-day icon row
+  /// — without this, recurring weekly rest days would always render as "active".
+  RestDaySettings? _restDays;
+
   RingProvider? _ringProvider;
   bool _lastConnected = false;
 
@@ -71,6 +82,11 @@ class _ActivityHistoryScreenState extends State<ActivityHistoryScreen> {
     super.initState();
     RestDaysService().checkTodayIsRestDay().then((value) {
       if (mounted) setState(() => _isTodayRestDay = value);
+    });
+    RestDaysService().getRestDays().then((settings) {
+      if (mounted) setState(() => _restDays = settings);
+    }).catchError((_) {
+      // Non-critical — Recovery card falls back to the activity-only heuristic.
     });
   }
 
@@ -339,9 +355,21 @@ class _ActivityHistoryScreenState extends State<ActivityHistoryScreen> {
                       children: [
                         const SizedBox(height: 16),
                         _buildSelectedDaySummary(goalType),
-                        const SizedBox(height: 16),
-                        _buildWeeklyOverview(goalType),
-                        const SizedBox(height: 16),
+                        const SizedBox(height: 8),
+                        _MeetDailyGoalsCard(
+                          day: _weekData[_selectedDayIndex],
+                          goalType: goalType,
+                        ),
+                        const SizedBox(height: 8),
+                        _TrainingFrequencyCard(week: _weekData),
+                        const SizedBox(height: 8),
+                        _TrainingVolumeCard(week: _weekData),
+                        const SizedBox(height: 8),
+                        _RecoveryTimeCard(
+                          week: _weekData,
+                          restDays: _restDays,
+                        ),
+                        const SizedBox(height: 8),
                         _buildActivityList(),
                       ],
                     ),
@@ -460,21 +488,23 @@ class _ActivityHistoryScreenState extends State<ActivityHistoryScreen> {
   Widget _buildSelectedDaySummary(ActivityGoalType goalType) {
     final selected = _weekData[_selectedDayIndex];
     final isViewingTodayOnRestDay = _selectedDayIndex == 0 && _isTodayRestDay;
+    final goalMet = selected.goalMet(goalType);
 
     return GradientCard(
-      gradient: AppColors.cardGradient,
+      gradient: AppColors.warmGradient,
       child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Rest-day banner
+          // Rest-day banner — gold-tinted to match the card theme.
           if (isViewingTodayOnRestDay) ...[
             Container(
               width: double.infinity,
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
               decoration: BoxDecoration(
-                color: AppColors.accentMint.withValues(alpha: 0.15),
+                color: Colors.white.withValues(alpha: 0.45),
                 borderRadius: BorderRadius.circular(10),
                 border: Border.all(
-                  color: AppColors.accentMint.withValues(alpha: 0.4),
+                  color: Colors.white.withValues(alpha: 0.7),
                 ),
               ),
               child: const Row(
@@ -482,15 +512,16 @@ class _ActivityHistoryScreenState extends State<ActivityHistoryScreen> {
                   Icon(
                     Icons.self_improvement,
                     size: 16,
-                    color: AppColors.accentMint,
+                    color: AppColors.textOnYellow,
                   ),
                   SizedBox(width: 8),
                   Expanded(
                     child: Text(
-                      'Rest Day — light movement only. Your full data is shown below.',
+                      'Recovery day — your full data is shown below.',
                       style: TextStyle(
                         fontSize: 12,
-                        color: AppColors.textSecondary,
+                        color: AppColors.textOnYellow,
+                        fontWeight: FontWeight.w500,
                       ),
                     ),
                   ),
@@ -500,221 +531,80 @@ class _ActivityHistoryScreenState extends State<ActivityHistoryScreen> {
             const SizedBox(height: 14),
           ],
 
-          // Date + goal label
+          // Date + Goal Met badge
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               Text(
                 _formatDate(selected.date),
                 style: const TextStyle(
-                  fontSize: 18,
+                  fontSize: 20,
                   fontWeight: FontWeight.bold,
-                  color: AppColors.textPrimary,
+                  color: AppColors.textOnYellow,
                 ),
               ),
-              if (selected.goalMet(goalType))
+              if (goalMet)
                 Container(
                   padding: const EdgeInsets.symmetric(
-                    horizontal: 8,
-                    vertical: 2,
+                    horizontal: 10,
+                    vertical: 4,
                   ),
                   decoration: BoxDecoration(
-                    color: AppColors.success.withValues(alpha: 0.2),
-                    borderRadius: BorderRadius.circular(10),
+                    color: Colors.white.withValues(alpha: 0.6),
+                    borderRadius: BorderRadius.circular(12),
                   ),
                   child: const Text(
                     'Goal Met!',
                     style: TextStyle(
-                      fontSize: 10,
-                      color: AppColors.success,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                ),
-            ],
-          ),
-          const SizedBox(height: 16),
-
-          // Primary metric (hero) + secondary side by side — swaps with goal type
-          Row(
-            children: [
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      crossAxisAlignment: CrossAxisAlignment.end,
-                      children: [
-                        Text(
-                          goalType == ActivityGoalType.steps
-                              ? _fmtSteps(selected.steps)
-                              : '${selected.activeMinutes}',
-                          style: const TextStyle(
-                            fontSize: 36,
-                            fontWeight: FontWeight.bold,
-                            color: AppColors.textPrimary,
-                            height: 1.0,
-                          ),
-                        ),
-                        const SizedBox(width: 4),
-                        Padding(
-                          padding: const EdgeInsets.only(bottom: 4),
-                          child: Text(
-                            goalType == ActivityGoalType.steps ? 'steps' : 'min',
-                            style: const TextStyle(
-                              fontSize: 13,
-                              color: AppColors.textSecondary,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 4),
-                    Row(
-                      children: [
-                        Icon(
-                          goalType == ActivityGoalType.steps
-                              ? Icons.directions_walk
-                              : Icons.timer_outlined,
-                          size: 14,
-                          color: AppColors.textLight,
-                        ),
-                        const SizedBox(width: 4),
-                        Text(
-                          goalType == ActivityGoalType.steps
-                              ? 'Ring tracked'
-                              : 'Active time',
-                          style: const TextStyle(
-                            fontSize: 11,
-                            color: AppColors.textLight,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ],
-                ),
-              ),
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.end,
-                children: [
-                  Text(
-                    goalType == ActivityGoalType.steps
-                        ? '${selected.activeMinutes}'
-                        : _fmtSteps(selected.steps),
-                    style: const TextStyle(
-                      fontSize: 28,
-                      fontWeight: FontWeight.bold,
-                      color: AppColors.textPrimary,
-                      height: 1.0,
-                    ),
-                  ),
-                  Text(
-                    goalType == ActivityGoalType.steps ? 'min active' : 'steps',
-                    style: const TextStyle(
-                      fontSize: 12,
-                      color: AppColors.textSecondary,
-                    ),
-                  ),
-                  const SizedBox(height: 2),
-                  Text(
-                    goalType == ActivityGoalType.steps
-                        ? 'Goal: ${_fmtSteps(selected.goalSteps)} steps'
-                        : 'Goal: ${selected.goalMinutes} min',
-                    style: const TextStyle(
                       fontSize: 11,
-                      color: AppColors.textLight,
+                      color: AppColors.textOnYellow,
+                      fontWeight: FontWeight.w700,
                     ),
                   ),
-                ],
-              ),
+                ),
             ],
           ),
           const SizedBox(height: 16),
 
-          // Progress bar
+          // Active time + goal — always one line ("81 min / 45 min goal").
+          _MetricLine(
+            icon: Icons.timer_outlined,
+            value: '${selected.activeMinutes} min',
+            suffix: '/ ${selected.goalMinutes} min goal',
+          ),
+          const SizedBox(height: 8),
+          // Step count — always exact, comma-separated ("9,043 steps").
+          _MetricLine(
+            icon: Icons.directions_walk,
+            value: '${_fmtSteps(selected.steps)} steps',
+          ),
+          const SizedBox(height: 16),
+
+          // Progress bar — fills against whichever goal type the user has set.
           ClipRRect(
             borderRadius: BorderRadius.circular(8),
             child: LinearProgressIndicator(
               value: selected.goalProgress(goalType),
-              minHeight: 12,
-              backgroundColor: AppColors.surfaceLight,
+              minHeight: 10,
+              backgroundColor: Colors.white.withValues(alpha: 0.45),
               valueColor: AlwaysStoppedAnimation<Color>(
-                selected.goalMet(goalType)
-                    ? AppColors.success
-                    : AppColors.primaryLemonDark,
+                goalMet ? AppColors.textOnYellow : AppColors.primaryLemonDark,
               ),
             ),
           ),
 
-          // Goal reason
+          // Italic adjustment note (e.g. "Reduced — recovering from poor sleep").
           if (selected.goalReason.isNotEmpty) ...[
-            const SizedBox(height: 8),
-            Align(
-              alignment: Alignment.centerLeft,
-              child: Text(
-                selected.goalReason,
-                style: TextStyle(
-                  fontSize: 11,
-                  color: selected.goalIsReduced
-                      ? AppColors.warning
-                      : AppColors.textLight,
-                  fontStyle: FontStyle.italic,
-                ),
+            const SizedBox(height: 10),
+            Text(
+              selected.goalReason,
+              style: const TextStyle(
+                fontSize: 11,
+                color: AppColors.textOnYellow,
+                fontStyle: FontStyle.italic,
               ),
             ),
           ],
-        ],
-      ),
-    );
-  }
-
-  Widget _buildWeeklyOverview(ActivityGoalType goalType) {
-    final totalSteps = _weekData.fold<int>(0, (sum, d) => sum + d.steps);
-    final totalActive = _weekData.fold<int>(
-      0,
-      (sum, d) => sum + d.activeMinutes,
-    );
-    final goalsMet = _weekData.where((d) => d.goalMet(goalType)).length;
-
-    return GradientCard(
-      gradient: AppColors.mintGradient,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Text(
-            'This Week',
-            style: TextStyle(
-              fontSize: 16,
-              fontWeight: FontWeight.w600,
-              color: AppColors.textOnYellow,
-            ),
-          ),
-          const SizedBox(height: 16),
-          Row(
-            children: [
-              Expanded(
-                child: _WeekStatItem(
-                  label: 'Total Steps',
-                  value: _fmtSteps(totalSteps),
-                  icon: Icons.directions_walk,
-                ),
-              ),
-              Expanded(
-                child: _WeekStatItem(
-                  label: 'Active Time',
-                  value: '$totalActive min',
-                  icon: Icons.timer,
-                ),
-              ),
-              Expanded(
-                child: _WeekStatItem(
-                  label: 'Goals Met',
-                  value: '$goalsMet/7',
-                  icon: Icons.flag,
-                ),
-              ),
-            ],
-          ),
         ],
       ),
     );
@@ -798,49 +688,406 @@ class _ActivityHistoryScreenState extends State<ActivityHistoryScreen> {
     return '${months[date.month - 1]} ${date.day}';
   }
 
+  /// Format a step count with thousands separators — e.g. `9043` → `9,043`.
+  /// Never abbreviated; this screen always shows the exact number.
   static String _fmtSteps(int steps) {
-    if (steps >= 1000) {
-      final k = steps / 1000.0;
-      return '${k.toStringAsFixed(k >= 10 ? 0 : 1)}k';
+    final s = steps.abs().toString();
+    final buf = StringBuffer(steps < 0 ? '-' : '');
+    final n = s.length;
+    for (int i = 0; i < n; i++) {
+      if (i > 0 && (n - i) % 3 == 0) buf.write(',');
+      buf.write(s[i]);
     }
-    return '$steps';
+    return buf.toString();
   }
 }
-// ─── Week stat item ───────────────────────────────────────────────────────────
+// ─── Today card metric line ───────────────────────────────────────────────────
 
-class _WeekStatItem extends StatelessWidget {
-  final String label;
-  final String value;
+/// Single line on the Today card — icon + bold value + optional pale suffix
+/// (used to render the "/ 45 min goal" trailing text without competing with
+/// the primary value).
+class _MetricLine extends StatelessWidget {
   final IconData icon;
+  final String value;
+  final String? suffix;
 
-  const _WeekStatItem({
-    required this.label,
-    required this.value,
+  const _MetricLine({
     required this.icon,
+    required this.value,
+    this.suffix,
   });
 
   @override
   Widget build(BuildContext context) {
-    return Column(
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.center,
       children: [
-        Icon(icon, color: AppColors.textOnYellow, size: 20),
-        const SizedBox(height: 4),
+        Icon(icon, size: 18, color: AppColors.textOnYellow),
+        const SizedBox(width: 8),
         Text(
           value,
           style: const TextStyle(
-            fontSize: 16,
+            fontSize: 22,
             fontWeight: FontWeight.bold,
             color: AppColors.textOnYellow,
+            height: 1.1,
           ),
         ),
-        Text(
-          label,
-          style: TextStyle(
-            fontSize: 11,
-            color: AppColors.textOnYellow.withValues(alpha: 0.8),
+        if (suffix != null) ...[
+          const SizedBox(width: 6),
+          Text(
+            suffix!,
+            style: TextStyle(
+              fontSize: 14,
+              color: AppColors.textOnYellow.withValues(alpha: 0.75),
+              fontWeight: FontWeight.w500,
+            ),
           ),
-        ),
+        ],
       ],
+    );
+  }
+}
+
+// ─── Contributor cards ────────────────────────────────────────────────────────
+
+/// Oura-style contributor card. Title + lighter description, big metric value,
+/// progress bar, italic encouraging tail message. Always gold-themed and
+/// always written in progress-positive language — never raises a warning.
+class _ContributorCard extends StatelessWidget {
+  final IconData icon;
+  final String title;
+  final String description;
+  final String metricValue;
+  final String metricSuffix;
+  final double progress; // 0–1, clamped before drawing
+  final String message;
+  final Widget? extraBelowMetric;
+
+  const _ContributorCard({
+    required this.icon,
+    required this.title,
+    required this.description,
+    required this.metricValue,
+    required this.metricSuffix,
+    required this.progress,
+    required this.message,
+    this.extraBelowMetric,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final clamped = progress.clamp(0.0, 1.0);
+    return GradientCard(
+      gradient: AppColors.cardGradient,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  gradient: AppColors.warmGradient,
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Icon(icon, size: 18, color: AppColors.textOnYellow),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      title,
+                      style: const TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w600,
+                        color: AppColors.textPrimary,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      description,
+                      style: const TextStyle(
+                        fontSize: 12,
+                        color: AppColors.textSecondary,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 14),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              Text(
+                metricValue,
+                style: const TextStyle(
+                  fontSize: 32,
+                  fontWeight: FontWeight.bold,
+                  color: AppColors.textPrimary,
+                  height: 1.0,
+                ),
+              ),
+              const SizedBox(width: 6),
+              Padding(
+                padding: const EdgeInsets.only(bottom: 4),
+                child: Text(
+                  metricSuffix,
+                  style: const TextStyle(
+                    fontSize: 13,
+                    color: AppColors.textSecondary,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          if (extraBelowMetric != null) ...[
+            const SizedBox(height: 10),
+            extraBelowMetric!,
+          ],
+          const SizedBox(height: 12),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(6),
+            child: LinearProgressIndicator(
+              value: clamped,
+              minHeight: 8,
+              backgroundColor: AppColors.surfaceLight,
+              valueColor: const AlwaysStoppedAnimation<Color>(
+                AppColors.primaryLemonDark,
+              ),
+            ),
+          ),
+          const SizedBox(height: 10),
+          Text(
+            message,
+            style: const TextStyle(
+              fontSize: 12,
+              color: AppColors.textSecondary,
+              fontStyle: FontStyle.italic,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _MeetDailyGoalsCard extends StatelessWidget {
+  final _DayData day;
+  final ActivityGoalType goalType;
+
+  const _MeetDailyGoalsCard({required this.day, required this.goalType});
+
+  @override
+  Widget build(BuildContext context) {
+    final met = day.goalMet(goalType);
+    final progress = day.goalProgress(goalType);
+
+    final metricValue = goalType == ActivityGoalType.steps
+        ? _ActivityHistoryScreenState._fmtSteps(day.steps)
+        : '${day.activeMinutes}';
+    final metricSuffix = goalType == ActivityGoalType.steps
+        ? '/ ${_ActivityHistoryScreenState._fmtSteps(day.goalSteps)} steps'
+        : '/ ${day.goalMinutes} min';
+
+    final secondaryLine = goalType == ActivityGoalType.steps
+        ? '${day.activeMinutes} min active today'
+        : '${_ActivityHistoryScreenState._fmtSteps(day.steps)} steps today';
+
+    final message = met
+        ? 'Goal hit — beautiful work today.'
+        : 'You\'re on the way — every step counts.';
+
+    return _ContributorCard(
+      icon: Icons.flag_outlined,
+      title: 'Meet Daily Goals',
+      description: 'Today\'s active time and step count vs. your daily target.',
+      metricValue: metricValue,
+      metricSuffix: metricSuffix,
+      progress: progress,
+      message: message,
+      extraBelowMetric: Text(
+        secondaryLine,
+        style: const TextStyle(
+          fontSize: 13,
+          color: AppColors.textSecondary,
+          fontWeight: FontWeight.w500,
+        ),
+      ),
+    );
+  }
+}
+
+class _TrainingFrequencyCard extends StatelessWidget {
+  final List<_DayData> week;
+
+  const _TrainingFrequencyCard({required this.week});
+
+  @override
+  Widget build(BuildContext context) {
+    // Approximation: a "session" is any day with ≥30 active minutes. We don't
+    // yet have per-session HR/intensity scoring on this screen, so the day-level
+    // active-minute total is the most honest signal we can show.
+    final sessions = week
+        .where((d) => d.activeMinutes >= _kSessionMinutesThreshold)
+        .length;
+    final progress = sessions / _kWeeklyFrequencyTarget;
+
+    final message = sessions >= _kWeeklyFrequencyTarget
+        ? 'Strong rhythm this week — keep it going.'
+        : sessions == 0
+            ? 'A short walk or stretch today is a great place to begin.'
+            : 'Nicely on track — one more session to round out the week.';
+
+    return _ContributorCard(
+      icon: Icons.fitness_center,
+      title: 'Training Frequency',
+      description:
+          'Medium-to-high effort sessions you\'ve completed in the past 7 days.',
+      metricValue: '$sessions',
+      metricSuffix: '/ $_kWeeklyFrequencyTarget sessions',
+      progress: progress,
+      message: message,
+    );
+  }
+}
+
+class _TrainingVolumeCard extends StatelessWidget {
+  final List<_DayData> week;
+
+  const _TrainingVolumeCard({required this.week});
+
+  @override
+  Widget build(BuildContext context) {
+    final volume = week.fold<int>(0, (sum, d) => sum + d.activeMinutes);
+    final progress = volume / _kWeeklyVolumeTarget;
+
+    // Past ~150% of the target is a gentle nudge to make space for recovery —
+    // never framed as a warning per the tone rules.
+    final message = volume >= (_kWeeklyVolumeTarget * 1.5)
+        ? 'Lots of movement this week — be sure to make time for recovery too.'
+        : volume >= _kWeeklyVolumeTarget
+            ? 'Great weekly volume — your habit is taking shape.'
+            : volume == 0
+                ? 'Building a steady weekly rhythm starts with one easy day.'
+                : 'You\'re building a sustainable habit — keep stacking minutes.';
+
+    return _ContributorCard(
+      icon: Icons.timer_outlined,
+      title: 'Training Volume',
+      description: 'Total active minutes you\'ve built up over the past 7 days.',
+      metricValue: '$volume',
+      metricSuffix: '/ $_kWeeklyVolumeTarget min',
+      progress: progress,
+      message: message,
+    );
+  }
+}
+
+class _RecoveryTimeCard extends StatelessWidget {
+  final List<_DayData> week;
+  final RestDaySettings? restDays;
+
+  const _RecoveryTimeCard({required this.week, required this.restDays});
+
+  bool _isRecoveryDay(_DayData day) {
+    if (restDays?.isRestDay(day.date) ?? false) return true;
+    // Light-movement days also count toward recovery — never as a "missed" day.
+    return day.activeMinutes < _kSessionMinutesThreshold;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    // Build oldest-to-newest so the icon row reads like a calendar (Mon → Sun
+    // for that user's week). _weekData is stored newest-first.
+    final ordered = week.reversed.toList();
+    final recoveryDays = ordered.where(_isRecoveryDay).length;
+
+    // Soft target — at least one recovery day per week is healthy. We always
+    // show the bar at full when there's any recovery, since the spec forbids
+    // negative framing for multiple rest days.
+    final progress = recoveryDays > 0 ? 1.0 : 0.0;
+
+    final message = recoveryDays >= 2
+        ? 'Plenty of recovery — your body will thank you.'
+        : recoveryDays == 1
+            ? 'A solid balance of training and recovery this week.'
+            : 'Recovery is part of progress — schedule a gentle day soon.';
+
+    return _ContributorCard(
+      icon: Icons.self_improvement,
+      title: 'Recovery Time',
+      description: 'Recovery and low-intensity days — always essential.',
+      metricValue: '$recoveryDays',
+      metricSuffix: 'recovery day${recoveryDays == 1 ? '' : 's'} this week',
+      progress: progress,
+      message: message,
+      extraBelowMetric: _DayDotsRow(
+        days: ordered.map((d) => _DayDot(
+              date: d.date,
+              isRecovery: _isRecoveryDay(d),
+            )).toList(),
+      ),
+    );
+  }
+}
+
+class _DayDot {
+  final DateTime date;
+  final bool isRecovery;
+  const _DayDot({required this.date, required this.isRecovery});
+}
+
+/// 7-day icon row — one icon per day. Recovery days render the gentle leaf
+/// glyph, active days render a small flame. Both look intentional and equally
+/// valued (no red, no warnings).
+class _DayDotsRow extends StatelessWidget {
+  final List<_DayDot> days;
+
+  const _DayDotsRow({required this.days});
+
+  static const _weekdayLabels = ['M', 'T', 'W', 'T', 'F', 'S', 'S'];
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      children: days.map((d) {
+        final label = _weekdayLabels[(d.date.weekday - 1).clamp(0, 6)];
+        return Column(
+          children: [
+            Container(
+              width: 30,
+              height: 30,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                gradient: d.isRecovery
+                    ? AppColors.mintGradient
+                    : AppColors.warmGradient,
+              ),
+              alignment: Alignment.center,
+              child: Icon(
+                d.isRecovery ? Icons.spa_outlined : Icons.local_fire_department,
+                size: 16,
+                color: AppColors.textOnYellow,
+              ),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              label,
+              style: const TextStyle(
+                fontSize: 10,
+                color: AppColors.textLight,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ],
+        );
+      }).toList(),
     );
   }
 }

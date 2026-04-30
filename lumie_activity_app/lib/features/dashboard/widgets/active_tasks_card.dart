@@ -24,8 +24,7 @@ class ActiveTasksCard extends StatelessWidget {
         final extraCount = tasks.length - displayTasks.length;
 
         return GradientCard(
-          gradient: AppColors.cardGradient,
-          opacity: 0.70,
+          glass: true,
           padding: const EdgeInsets.all(16),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
