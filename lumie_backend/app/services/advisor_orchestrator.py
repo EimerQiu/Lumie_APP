@@ -289,6 +289,18 @@ def _cross_confirm_session_id(thread_id: str) -> str:
     return f"cross-confirm:{thread_id}"
 
 
+def _extract_labeled_value(text: str, label: str) -> str:
+    """Extract `label: value` from multi-line free-form message text."""
+    if not text:
+        return ""
+    prefix = f"{label.strip().lower()}:"
+    for raw in text.splitlines():
+        line = raw.strip()
+        if line.lower().startswith(prefix):
+            return line[len(prefix):].strip()
+    return ""
+
+
 async def _post_collab_audit(
     *,
     user_id: str,
@@ -297,6 +309,7 @@ async def _post_collab_audit(
     content: str,
     collab_status: str,
     role: str = "assistant",
+    sender_label: Optional[str] = None,
 ) -> None:
     """Append a sanitized message to the user's read-only collab thread.
 
@@ -317,6 +330,7 @@ async def _post_collab_audit(
             "thread_id": thread_id,
             "collab_status": collab_status,
             "peer_user_id": peer_user_id,
+            "sender_label": sender_label,
         },
     )
 
@@ -861,12 +875,13 @@ async def _initiate_cross_advisor_request(
     # collapses to one thread.
     idempotency_key = f"tasks_complete:{requester_user_id}:{target_user_id}:{task_id}"
     task_detail = await _load_cross_task_details(task_id, requester_user_id)
+    reason_fallback = _extract_labeled_value(message, "reason")
     enriched_action_params = {
         "task_id": task_id,
         "task_name": task_detail.get("task_name") or cross_action_params.get("task_name"),
         "open_datetime": task_detail.get("open_datetime") or cross_action_params.get("open_datetime"),
         "close_datetime": task_detail.get("close_datetime") or cross_action_params.get("close_datetime"),
-        "reason": cross_action_params.get("reason") or task_detail.get("task_info") or "",
+        "reason": cross_action_params.get("reason") or reason_fallback or task_detail.get("task_info") or "",
     }
 
     cross_msg = await advisor_cross_message_service.create_request(
@@ -951,6 +966,7 @@ async def _process_incoming_cross_request(message_doc: dict) -> None:
 
     # Build a user-facing question.  Templated for MVP (tasks_complete only).
     requester_name = await _lookup_display_name(requester_user_id)
+    approver_name = await _lookup_display_name(approver_user_id)
     if action_type == CrossActionType.TASKS_COMPLETE.value:
         task_id = action_params.get("task_id", "")
         task_name = action_params.get("task_name") or "Unknown"
@@ -968,7 +984,7 @@ async def _process_incoming_cross_request(message_doc: dict) -> None:
             f"{requester_name}'s advisor is requesting an action on your account. "
             "Reply **yes** to approve or **no** to decline."
         )
-    question = advisor_cross_message_service.sanitize_summary(question, max_len=200)
+    question = advisor_cross_message_service.sanitize_summary(question, max_len=500)
 
     confirm_session_id = _cross_confirm_session_id(thread_id)
 
@@ -992,6 +1008,8 @@ async def _process_incoming_cross_request(message_doc: dict) -> None:
         peer_user_id=requester_user_id,
         content=question,
         collab_status="waiting_user_confirm",
+        role="user",
+        sender_label=f"{requester_name}'s advisor",
     )
 
     # Persist the pending action so handle_chat can resume on the next reply.
@@ -1040,6 +1058,7 @@ async def _resume_cross_advisor_after_user_reply(
     resume_payload = pending.get("resume_payload") or {}
     action_type = resume_payload.get("action_type")
     action_params = resume_payload.get("action_params") or {}
+    approver_name = await _lookup_display_name(approver_user_id)
 
     if decision == "reject":
         await _set_cross_advisor_pending_status(
@@ -1056,8 +1075,10 @@ async def _resume_cross_advisor_after_user_reply(
             user_id=approver_user_id,
             thread_id=thread_id,
             peer_user_id=requester_user_id,
-            content="You declined the request.",
+            content="No",
             collab_status="done",
+            role="user",
+            sender_label=approver_name,
         )
         await _post_collab_audit(
             user_id=requester_user_id,
@@ -1086,6 +1107,15 @@ async def _resume_cross_advisor_after_user_reply(
         to_user_id=requester_user_id,
         decision="approve",
         summary="User approved.",
+    )
+    await _post_collab_audit(
+        user_id=approver_user_id,
+        thread_id=thread_id,
+        peer_user_id=requester_user_id,
+        content=f"{approver_name} approved.",
+        collab_status="in_progress",
+        role="user",
+        sender_label=approver_name,
     )
 
     if action_type != CrossActionType.TASKS_COMPLETE.value:
@@ -1173,14 +1203,6 @@ async def _resume_cross_advisor_after_user_reply(
     await _set_cross_advisor_pending_status(
         thread_id, user_id, CrossAdvisorPendingActionStatus.CONSUMED.value
     )
-    await _post_collab_audit(
-        user_id=approver_user_id,
-        thread_id=thread_id,
-        peer_user_id=requester_user_id,
-        content=f"You approved. Marking task {task_id} complete now.",
-        collab_status="in_progress",
-    )
-
     return {
         "type": "execution",
         "reply": "Approved — running the task completion now. I'll share the result.",
@@ -1270,11 +1292,16 @@ def _build_tools(candidates: list[SkillIndexItem]) -> list[dict]:
                     "type": "object",
                     "description": (
                         "Parameters for the cross-advisor action. For tasks_complete, MUST "
-                        "include task_id (string) extracted from the user message. Empty object "
+                        "include task_id (string). Also include task_name/open_datetime/"
+                        "close_datetime/reason when present in the user message. Empty object "
                         "when cross_advisor_action_type='none'."
                     ),
                     "properties": {
                         "task_id": {"type": "string", "description": "Target task id."},
+                        "task_name": {"type": "string", "description": "Task display name, if provided."},
+                        "open_datetime": {"type": "string", "description": "Task open time, if provided."},
+                        "close_datetime": {"type": "string", "description": "Task close time, if provided."},
+                        "reason": {"type": "string", "description": "Why requester asks for completion."},
                     },
                 },
             },
@@ -1376,6 +1403,7 @@ Protocol contract:
 - When set to `"tasks_complete"`, you MUST also populate `cross_action_params.task_id` with
   the task id from the user message, AND set `target_user_hint` (or `target_email`) to the
   peer user.
+- Also populate `cross_action_params.reason` when the user provides one.
 - Do NOT use `tasks_complete` for the user's own tasks — use the regular skill flow instead.
 
 **Key distinction:** "What medicine should I take now?" = needs data (execute skill) ≠ "What medications treat diabetes?" = general knowledge (direct response)

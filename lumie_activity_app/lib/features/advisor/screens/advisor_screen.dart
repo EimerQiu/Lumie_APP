@@ -193,6 +193,7 @@ class _ChatTabState extends State<_ChatTab> {
                 text: m.content,
                 isUser: m.isUser,
                 isProactive: _sessionId == 'proactive',
+                senderLabel: m.metadata['sender_label'] as String?,
                 createdAt: m.createdAt,
               ),
             ),
@@ -268,6 +269,7 @@ class _ChatTabState extends State<_ChatTab> {
                     text: m.content,
                     isUser: m.isUser,
                     isProactive: sessionId == 'proactive',
+                    senderLabel: m.metadata['sender_label'] as String?,
                     createdAt: m.createdAt,
                   ),
                 ),
@@ -927,6 +929,8 @@ class _Message {
   final AnalysisResult? analysisResult;
   final String? navHint; // "task_list" | "task_dashboard" | null
   final String? createdAt; // ISO UTC
+  final String?
+  senderLabel; // collab threads: "cc's advisor" / "ciline" / "Your advisor"
 
   const _Message({
     required this.text,
@@ -939,6 +943,7 @@ class _Message {
     this.analysisResult,
     this.navHint,
     this.createdAt,
+    this.senderLabel,
   });
 }
 
@@ -993,6 +998,23 @@ class _ChatBubble extends StatelessWidget {
               ),
             ),
           ],
+          if ((message.senderLabel ?? '').trim().isNotEmpty)
+            Padding(
+              padding: EdgeInsets.only(
+                bottom: 6,
+                left: message.isUser ? 0 : 36,
+                right: message.isUser ? 2 : 0,
+              ),
+              child: Text(
+                message.senderLabel!.trim(),
+                textAlign: message.isUser ? TextAlign.right : TextAlign.left,
+                style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600,
+                  color: AppColors.textSecondary.withValues(alpha: 0.9),
+                ),
+              ),
+            ),
           Row(
             mainAxisAlignment: message.isUser
                 ? MainAxisAlignment.end

@@ -14,6 +14,7 @@ import 'package:provider/provider.dart';
 import 'package:video_compress/video_compress.dart';
 import 'package:video_player/video_player.dart';
 import '../../../core/constants/api_constants.dart';
+import '../../../core/services/advisor_v2_service.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../shared/models/task_models.dart';
 import '../../../features/auth/providers/auth_provider.dart';
@@ -35,6 +36,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
   final _scrollController = ScrollController();
   final ImagePicker _imagePicker = ImagePicker();
   final Dio _dio = Dio();
+  final AdvisorV2Service _advisorV2 = AdvisorV2Service();
   double _overscrollAccumulation = 0;
 
   @override
@@ -383,6 +385,8 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                 },
                 onComplete: () => _completeTask(provider, task),
                 onDelete: () => _deleteTask(provider, task),
+                canSwipeComplete: true,
+                canSwipeDelete: canManage,
                 resolveAttachmentUrls: _thumbnailUrlCandidates,
                 onAttachmentTap: (attachment) =>
                     _openAttachmentPreview(attachment),
@@ -422,6 +426,8 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                 },
                 onComplete: () => _completeTask(provider, task),
                 onDelete: () => _deleteTask(provider, task),
+                canSwipeComplete: true,
+                canSwipeDelete: canManage,
                 resolveAttachmentUrls: _thumbnailUrlCandidates,
                 onAttachmentTap: (attachment) =>
                     _openAttachmentPreview(attachment),
@@ -449,6 +455,12 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
     AdminTasksProvider provider,
     AdminTaskData task,
   ) async {
+    final canManage = _canManageTask(context, task);
+    if (!canManage) {
+      await _requestAdminCompletion(provider, task);
+      return;
+    }
+
     try {
       await provider.completeTask(task.taskId);
       if (mounted) {
@@ -466,6 +478,160 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
           ),
         );
       }
+    }
+  }
+
+  Future<void> _requestAdminCompletion(
+    AdminTasksProvider provider,
+    AdminTaskData task,
+  ) async {
+    final adminContact = await _resolveTeamAdminContact(task);
+    if (!mounted) return;
+    final adminDisplay = adminContact?.name ?? 'team admin';
+    final reasonController = TextEditingController();
+    String? validationError;
+    bool submitting = false;
+
+    final approved = await showDialog<bool>(
+      context: context,
+      barrierDismissible: !submitting,
+      builder: (dialogContext) {
+        return StatefulBuilder(
+          builder: (context, setStateDialog) {
+            return AlertDialog(
+              title: const Text('Request Admin Completion'),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('Send a completion request to $adminDisplay?'),
+                  const SizedBox(height: 8),
+                  Text(
+                    'Task: ${task.rpttaskName}',
+                    style: const TextStyle(color: AppColors.textSecondary),
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: reasonController,
+                    maxLines: 3,
+                    enabled: !submitting,
+                    decoration: InputDecoration(
+                      labelText: 'Reason',
+                      hintText: 'Why should this task be marked completed?',
+                      errorText: validationError,
+                      border: const OutlineInputBorder(),
+                    ),
+                  ),
+                ],
+              ),
+              actions: [
+                TextButton(
+                  onPressed: submitting
+                      ? null
+                      : () => Navigator.of(dialogContext).pop(false),
+                  child: const Text('Cancel'),
+                ),
+                FilledButton(
+                  onPressed: submitting
+                      ? null
+                      : () async {
+                          final reason = reasonController.text.trim();
+                          if (reason.isEmpty) {
+                            setStateDialog(() {
+                              validationError = 'Reason is required';
+                            });
+                            return;
+                          }
+                          setStateDialog(() {
+                            validationError = null;
+                            submitting = true;
+                          });
+                          Navigator.of(dialogContext).pop(true);
+                        },
+                  child: const Text('Send Request'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+
+    if (approved != true) {
+      reasonController.dispose();
+      return;
+    }
+
+    final reason = reasonController.text.trim();
+    reasonController.dispose();
+
+    try {
+      final targetEmail = adminContact?.email;
+      if (targetEmail == null || targetEmail.isEmpty) {
+        throw Exception('Could not resolve admin email for this team');
+      }
+
+      final prompt =
+          '''
+Send a cross-advisor completion request.
+target_email: $targetEmail
+cross_advisor_action_type: tasks_complete
+task_id: ${task.taskId}
+task_name: ${task.rpttaskName}
+open_datetime: ${task.openDatetime}
+close_datetime: ${task.closeDatetime}
+reason: $reason
+''';
+
+      final response = await _advisorV2.sendMessage(
+        prompt,
+        history: const [],
+        sessionId: 'tasks-request-${DateTime.now().millisecondsSinceEpoch}',
+        teamId: task.familyId,
+      );
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            response.reply.isNotEmpty
+                ? response.reply
+                : 'Request sent to $adminDisplay',
+          ),
+        ),
+      );
+      await provider.loadTasks(email: provider.filterEmail);
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Failed to send request: ${e.toString().replaceFirst('Exception: ', '')}',
+          ),
+        ),
+      );
+    }
+  }
+
+  Future<_AdminContact?> _resolveTeamAdminContact(AdminTaskData task) async {
+    final teamId = task.familyId;
+    if (teamId == null || teamId.isEmpty) return null;
+    try {
+      final teamsProvider = context.read<TeamsProvider>();
+      final authProvider = context.read<AuthProvider>();
+      final me = authProvider.user?.userId;
+      final membersResp = await teamsProvider.getTeamMembers(teamId);
+      final admins = membersResp.members
+          .where((m) => m.role.name == 'admin')
+          .toList();
+      if (admins.isEmpty) return null;
+      final preferred = admins.firstWhere(
+        (m) => m.userId != me,
+        orElse: () => admins.first,
+      );
+      return _AdminContact(name: preferred.name, email: preferred.email);
+    } catch (_) {
+      return null;
     }
   }
 
@@ -711,12 +877,12 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
               children: [
                 ValueListenableBuilder<String>(
                   valueListenable: stage,
-                  builder: (_, value, __) => Text(value),
+                  builder: (context, value, child) => Text(value),
                 ),
                 const SizedBox(height: 10),
                 ValueListenableBuilder<double>(
                   valueListenable: progress,
-                  builder: (_, value, __) =>
+                  builder: (context, value, child) =>
                       LinearProgressIndicator(value: value > 0 ? value : null),
                 ),
               ],
@@ -815,7 +981,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
   }
 
   /// Check if current user can view a task (access control filter)
-  /// Can view if: team admin OR personal task (no team) and task owner
+  /// Can view if: team admin, task assigned to user, or personal task owner
   bool _canViewTask(BuildContext context, AdminTaskData task) {
     final authProvider = context.read<AuthProvider>();
     final currentUserId = authProvider.user?.userId;
@@ -825,14 +991,15 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
       return currentUserId == task.userId;
     }
 
-    // Team task - visible if user is admin of the team
+    // Team task - visible if admin of the team OR task is assigned to user
     final teamsProvider = context.read<TeamsProvider>();
 
     try {
       final team = teamsProvider.teams.firstWhere(
         (t) => t.teamId == task.familyId,
       );
-      return team.role.name == 'admin';
+      if (team.role.name == 'admin') return true;
+      return currentUserId == task.userId;
     } catch (e) {
       // If team not found, don't show the task
       return false;
@@ -918,6 +1085,8 @@ class _SectionHeader extends StatelessWidget {
 class _AdminTaskCard extends StatelessWidget {
   final AdminTaskData task;
   final bool isAdmin;
+  final bool canSwipeComplete;
+  final bool canSwipeDelete;
   final VoidCallback onComplete;
   final VoidCallback onDelete;
   final VoidCallback onTap;
@@ -928,6 +1097,8 @@ class _AdminTaskCard extends StatelessWidget {
   const _AdminTaskCard({
     required this.task,
     required this.isAdmin,
+    required this.canSwipeComplete,
+    required this.canSwipeDelete,
     required this.onComplete,
     required this.onDelete,
     required this.onTap,
@@ -990,8 +1161,7 @@ class _AdminTaskCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // If user is not admin, disable swipe actions
-    if (!isAdmin) {
+    if (!canSwipeComplete && !canSwipeDelete) {
       return Card(
         margin: const EdgeInsets.only(bottom: 8),
         elevation: 0,
@@ -1001,14 +1171,10 @@ class _AdminTaskCard extends StatelessWidget {
           side: BorderSide(color: AppColors.surfaceLight),
         ),
         clipBehavior: Clip.hardEdge,
-        child: InkWell(
-          onTap: onTap,
-          child: _buildTaskContent(context),
-        ),
+        child: InkWell(onTap: onTap, child: _buildTaskContent(context)),
       );
     }
 
-    // If user is admin, enable swipe actions
     return Dismissible(
       key: Key(task.taskId),
       background: Container(
@@ -1025,9 +1191,11 @@ class _AdminTaskCard extends StatelessWidget {
       ),
       confirmDismiss: (direction) async {
         if (direction == DismissDirection.startToEnd) {
+          if (!canSwipeComplete) return false;
           onComplete();
           return false;
         } else {
+          if (!canSwipeDelete) return false;
           onDelete();
           return false;
         }
@@ -1041,10 +1209,7 @@ class _AdminTaskCard extends StatelessWidget {
           side: BorderSide(color: AppColors.surfaceLight),
         ),
         clipBehavior: Clip.hardEdge,
-        child: InkWell(
-          onTap: onTap,
-          child: _buildTaskContent(context),
-        ),
+        child: InkWell(onTap: onTap, child: _buildTaskContent(context)),
       ),
     );
   }
@@ -1307,6 +1472,13 @@ class _AdminTaskCard extends StatelessWidget {
       ),
     );
   }
+}
+
+class _AdminContact {
+  final String name;
+  final String email;
+
+  const _AdminContact({required this.name, required this.email});
 }
 
 class _AttachmentThumb extends StatefulWidget {

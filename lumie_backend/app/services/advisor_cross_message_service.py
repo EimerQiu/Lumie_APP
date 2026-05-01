@@ -83,6 +83,41 @@ async def create_request(
             {"idempotency_key": idempotency_key}, {"_id": 0}
         )
         if existing:
+            # Idempotent retry: allow non-empty newer params (e.g. reason) to
+            # backfill the existing request instead of keeping stale blanks.
+            existing_payload = existing.get("payload") or {}
+            existing_params = dict(existing_payload.get("action_params") or {})
+            incoming_params = dict(action_params or {})
+            merged = dict(existing_params)
+            changed = False
+            for key, value in incoming_params.items():
+                if value is None:
+                    continue
+                if isinstance(value, str):
+                    if not value.strip():
+                        continue
+                    new_val = value.strip()
+                else:
+                    new_val = value
+                old_val = merged.get(key)
+                if old_val != new_val:
+                    merged[key] = new_val
+                    changed = True
+
+            if changed:
+                now = _now()
+                await db.advisor_cross_messages.update_one(
+                    {"message_id": existing["message_id"]},
+                    {
+                        "$set": {
+                            "payload.action_params": merged,
+                            "updated_at": format_utc_datetime(now),
+                        }
+                    },
+                )
+                existing = await db.advisor_cross_messages.find_one(
+                    {"message_id": existing["message_id"]}, {"_id": 0}
+                )
             return existing
 
     now = _now()

@@ -650,6 +650,17 @@ async def _maybe_send_cross_advisor_callback(
     from . import advisor_cross_message_service
     from . import chat_history_service
 
+    db = get_database()
+
+    async def _lookup_display_name(user_id: str) -> str:
+        profile = await db.profiles.find_one({"user_id": user_id}, {"_id": 0, "name": 1})
+        if profile and profile.get("name"):
+            return profile["name"]
+        user = await db.users.find_one({"user_id": user_id}, {"_id": 0, "email": 1})
+        if user and user.get("email"):
+            return user["email"]
+        return "Another user"
+
     sanitized = advisor_cross_message_service.sanitize_summary(
         summary_text or ("Action completed." if success else "Action failed.")
     )
@@ -667,6 +678,7 @@ async def _maybe_send_cross_advisor_callback(
         logger.warning(f"cross_msg.execution_result write failed: {e}")
 
     collab_status = "done" if success else "failed"
+    approver_name = await _lookup_display_name(approver_user_id)
     metadata = {
         "channel": "advisor_collab",
         "readonly": True,
@@ -677,22 +689,30 @@ async def _maybe_send_cross_advisor_callback(
         f"Result: {sanitized}" if success else f"Action failed: {sanitized}"
     )
     approver_msg = (
-        f"Result reported back: {sanitized}" if success else f"Reported failure: {sanitized}"
+        sanitized if success else f"I couldn't complete the action: {sanitized}"
     )
     try:
         await chat_history_service.save_message(
             user_id=requester_user_id,
             session_id=f"collab:{thread_id}",
-            role="assistant",
+            role="user",
             content=requester_msg,
-            metadata={**metadata, "peer_user_id": approver_user_id},
+            metadata={
+                **metadata,
+                "peer_user_id": approver_user_id,
+                "sender_label": f"{approver_name}'s advisor",
+            },
         )
         await chat_history_service.save_message(
             user_id=approver_user_id,
             session_id=f"collab:{thread_id}",
             role="assistant",
             content=approver_msg,
-            metadata={**metadata, "peer_user_id": requester_user_id},
+            metadata={
+                **metadata,
+                "peer_user_id": requester_user_id,
+                "sender_label": "Your advisor",
+            },
         )
     except Exception as e:
         logger.warning(f"Failed to write cross-advisor collab audit: {e}")
