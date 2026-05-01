@@ -120,6 +120,7 @@ class _ChatTabState extends State<_ChatTab> {
   bool _isTyping = false;
   bool _isLoading = true;
   bool _isCancellingJob = false;
+  bool _isReadonlySession = false;
 
   /// Tracks the currently polling job so the user can cancel it.
   String? _pendingJobId;
@@ -242,6 +243,7 @@ class _ChatTabState extends State<_ChatTab> {
     setState(() {
       _sessionId = const Uuid().v4();
       _items.clear();
+      _isReadonlySession = false;
     });
     _saveActiveSession();
   }
@@ -253,11 +255,12 @@ class _ChatTabState extends State<_ChatTab> {
       backgroundColor: Colors.transparent,
       builder: (ctx) => _HistoryPanel(
         historyService: _historyService,
-        onSessionSelected: (sessionId, messages) {
+        onSessionSelected: (sessionId, messages, {bool readonly = false}) {
           Navigator.pop(ctx);
           setState(() {
             _sessionId = sessionId;
             _items.clear();
+            _isReadonlySession = readonly;
             for (final m in messages) {
               _items.add(
                 _ChatItem.message(
@@ -271,7 +274,7 @@ class _ChatTabState extends State<_ChatTab> {
               );
             }
           });
-          if (sessionId != 'proactive') {
+          if (sessionId != 'proactive' && !readonly) {
             _saveActiveSession();
           }
           _scrollToBottom();
@@ -289,6 +292,7 @@ class _ChatTabState extends State<_ChatTab> {
       .toList();
 
   Future<void> _send() async {
+    if (_isReadonlySession) return;
     final text = _input.text.trim();
     if (text.isEmpty) return;
     _input.clear();
@@ -595,6 +599,24 @@ class _ChatTabState extends State<_ChatTab> {
   }
 
   Widget _buildInput() {
+    if (_isReadonlySession) {
+      return Container(
+        padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+        decoration: BoxDecoration(
+          color: AppColors.backgroundPaper,
+          border: Border(top: BorderSide(color: AppColors.surfaceLight)),
+        ),
+        child: Text(
+          'This is an Advisor collaboration record and is view-only.',
+          style: TextStyle(
+            fontSize: 13,
+            color: AppColors.textLight,
+            fontStyle: FontStyle.italic,
+          ),
+          textAlign: TextAlign.center,
+        ),
+      );
+    }
     return Container(
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
       decoration: BoxDecoration(
@@ -676,7 +698,11 @@ class _ChatTabState extends State<_ChatTab> {
 
 class _HistoryPanel extends StatefulWidget {
   final ChatHistoryService historyService;
-  final void Function(String sessionId, List<PersistedMessage> messages)
+  final void Function(
+    String sessionId,
+    List<PersistedMessage> messages, {
+    bool readonly,
+  })
   onSessionSelected;
 
   const _HistoryPanel({
@@ -783,9 +809,13 @@ class _HistoryPanelState extends State<_HistoryPanel> {
       itemBuilder: (context, i) {
         final s = _sessions[i];
         final isProactive = s.sessionId == 'proactive';
+        final isCollab = s.isCollabThread;
         final preview = s.preview.length > 70
             ? '${s.preview.substring(0, 70)}…'
             : s.preview;
+        final String subtitle = isCollab
+            ? '${_formatDate(s.lastMessageAt)} · ${s.collabStatus ?? "in_progress"}'
+            : '${_formatDate(s.lastMessageAt)} · ${s.messageCount} messages';
         return ListTile(
           contentPadding: const EdgeInsets.symmetric(
             horizontal: 20,
@@ -794,7 +824,19 @@ class _HistoryPanelState extends State<_HistoryPanel> {
           title: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              if (isProactive)
+              if (isCollab)
+                const Padding(
+                  padding: EdgeInsets.only(bottom: 2),
+                  child: Text(
+                    'Advisor Collaboration Record',
+                    style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
+                      color: AppColors.textLight,
+                    ),
+                  ),
+                )
+              else if (isProactive)
                 const Padding(
                   padding: EdgeInsets.only(bottom: 2),
                   child: Text(
@@ -818,7 +860,7 @@ class _HistoryPanelState extends State<_HistoryPanel> {
           subtitle: Padding(
             padding: const EdgeInsets.only(top: 4),
             child: Text(
-              '${_formatDate(s.lastMessageAt)} · ${s.messageCount} messages',
+              subtitle,
               style: TextStyle(fontSize: 12, color: AppColors.textLight),
             ),
           ),
@@ -831,7 +873,11 @@ class _HistoryPanelState extends State<_HistoryPanel> {
             final messages = await widget.historyService.fetchSessionMessages(
               s.sessionId,
             );
-            widget.onSessionSelected(s.sessionId, messages);
+            widget.onSessionSelected(
+              s.sessionId,
+              messages,
+              readonly: s.readonly,
+            );
           },
         );
       },

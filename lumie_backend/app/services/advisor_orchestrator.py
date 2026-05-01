@@ -17,9 +17,17 @@ from zoneinfo import ZoneInfo
 from ..core.config import settings
 from ..core.database import get_database
 from ..core.credential_utils import resolve_credential_key
+from ..core.datetime_utils import format_utc_datetime
+from ..models.advisor_cross_message import (
+    CrossActionType,
+    CrossAdvisorPendingActionStatus,
+    CrossMessageStatus,
+)
 from . import capability_service
 from . import skill_credential_service
 from . import execution_service
+from . import advisor_cross_message_service
+from . import chat_history_service
 from .llm_client import chat_completion
 from .skill_registry_service import skill_registry, SkillIndexItem
 
@@ -145,6 +153,193 @@ async def _mark_pending_task_create_resolved(user_id: str, session_id: Optional[
         {"$set": {"status": "resolved", "updated_at": datetime.utcnow()}},
     )
 
+
+# ── Cross-advisor pending action helpers ─────────────────────────────────────
+
+CROSS_ADVISOR_ACTION_TYPE = "cross_advisor_action_confirmation"
+DEFAULT_MAX_CROSS_TURNS = 5
+CROSS_PENDING_TTL_HOURS = 24
+
+_CONFIRM_TOKENS = {
+    "yes", "y", "yep", "yeah", "ok", "okay", "sure", "confirm", "confirmed",
+    "approve", "approved", "agree", "agreed", "do it", "go ahead", "proceed",
+    "是", "好", "好的", "可以", "同意", "确认", "行",
+}
+_REJECT_TOKENS = {
+    "no", "n", "nope", "cancel", "stop", "reject", "rejected", "deny", "denied",
+    "don't", "dont", "do not",
+    "不", "不要", "取消", "拒绝",
+}
+
+
+def _classify_user_confirmation(text: str) -> str:
+    """Classify a user reply as approve | reject | ask_more.
+
+    Pure keyword matching for MVP — short replies like "yes" or "no" are the
+    common case.  Anything that doesn't clearly map to approve/reject is
+    treated as ``ask_more`` so the pending action stays open.
+    """
+    if not text:
+        return "ask_more"
+    normalized = text.strip().lower().rstrip(".!?。！？")
+    if normalized in _CONFIRM_TOKENS:
+        return "approve"
+    if normalized in _REJECT_TOKENS:
+        return "reject"
+    # Multi-word: check the first 3 tokens for an unambiguous signal.
+    head = " ".join(normalized.split()[:3])
+    if head in _CONFIRM_TOKENS:
+        return "approve"
+    if head in _REJECT_TOKENS:
+        return "reject"
+    for tok in normalized.split():
+        if tok in _CONFIRM_TOKENS:
+            return "approve"
+        if tok in _REJECT_TOKENS:
+            return "reject"
+    return "ask_more"
+
+
+async def _get_pending_cross_advisor_action(user_id: str, session_id: Optional[str]) -> Optional[dict]:
+    """Fetch the latest awaiting_user_confirm pending action for ``user_id``."""
+    db = get_database()
+    if db is None:
+        return None
+    now = datetime.utcnow()
+    query = {
+        "user_id": user_id,
+        "action_type": CROSS_ADVISOR_ACTION_TYPE,
+        "status": CrossAdvisorPendingActionStatus.AWAITING_USER_CONFIRM.value,
+        "expires_at": {"$gt": now},
+    }
+    if session_id:
+        query["session_id"] = session_id
+    return await db.advisor_pending_actions.find_one(query, sort=[("updated_at", -1)])
+
+
+async def _create_cross_advisor_pending_action(
+    *,
+    user_id: str,
+    session_id: Optional[str],
+    thread_id: str,
+    source_message_id: str,
+    requester_user_id: str,
+    approver_user_id: str,
+    resume_payload: dict,
+    status: str,
+    turn_count: int,
+    max_turns: int = DEFAULT_MAX_CROSS_TURNS,
+) -> None:
+    """Insert (or upsert by thread_id) a cross-advisor pending action."""
+    db = get_database()
+    if db is None:
+        return
+    now = datetime.utcnow()
+    expires_at = now + timedelta(hours=CROSS_PENDING_TTL_HOURS)
+    query = {
+        "user_id": user_id,
+        "thread_id": thread_id,
+        "action_type": CROSS_ADVISOR_ACTION_TYPE,
+    }
+    await db.advisor_pending_actions.update_one(
+        query,
+        {
+            "$set": {
+                "user_id": user_id,
+                "session_id": session_id or "default",
+                "action_type": CROSS_ADVISOR_ACTION_TYPE,
+                "thread_id": thread_id,
+                "source_message_id": source_message_id,
+                "requester_user_id": requester_user_id,
+                "approver_user_id": approver_user_id,
+                "resume_payload": resume_payload,
+                "status": status,
+                "turn_count": turn_count,
+                "max_turns": max_turns,
+                "updated_at": now,
+                "expires_at": expires_at,
+            },
+            "$setOnInsert": {"created_at": now},
+        },
+        upsert=True,
+    )
+
+
+async def _set_cross_advisor_pending_status(thread_id: str, user_id: str, new_status: str) -> None:
+    db = get_database()
+    if db is None:
+        return
+    await db.advisor_pending_actions.update_one(
+        {
+            "user_id": user_id,
+            "thread_id": thread_id,
+            "action_type": CROSS_ADVISOR_ACTION_TYPE,
+        },
+        {"$set": {"status": new_status, "updated_at": datetime.utcnow()}},
+    )
+
+
+def _collab_session_id(thread_id: str) -> str:
+    """Per-user session id used for the read-only collab audit thread."""
+    return f"collab:{thread_id}"
+
+
+def _cross_confirm_session_id(thread_id: str) -> str:
+    """Dedicated writable chat session for cross-advisor confirmation."""
+    return f"cross-confirm:{thread_id}"
+
+
+async def _post_collab_audit(
+    *,
+    user_id: str,
+    thread_id: str,
+    peer_user_id: str,
+    content: str,
+    collab_status: str,
+    role: str = "assistant",
+) -> None:
+    """Append a sanitized message to the user's read-only collab thread.
+
+    Writes into the existing ``chat_messages`` collection per §13.1 with
+    ``metadata.channel = "advisor_collab"``.  Callers must pass
+    user-readable summaries only — no chain-of-thought, prompts, or
+    credentials (§13.6).
+    """
+    sanitized = advisor_cross_message_service.sanitize_summary(content)
+    await chat_history_service.save_message(
+        user_id=user_id,
+        session_id=_collab_session_id(thread_id),
+        role=role,
+        content=sanitized,
+        metadata={
+            "channel": "advisor_collab",
+            "readonly": True,
+            "thread_id": thread_id,
+            "collab_status": collab_status,
+            "peer_user_id": peer_user_id,
+        },
+    )
+
+
+async def _load_cross_task_details(task_id: str, owner_user_id: str) -> dict:
+    """Best-effort fetch of task details to enrich cross-advisor prompts."""
+    db = get_database()
+    if db is None or not task_id or not owner_user_id:
+        return {}
+    doc = await db.tasks.find_one(
+        {"task_id": task_id, "user_id": owner_user_id},
+        {
+            "_id": 0,
+            "task_id": 1,
+            "task_name": 1,
+            "open_datetime": 1,
+            "close_datetime": 1,
+            "task_info": 1,
+        },
+    )
+    return doc or {}
+
+
 async def _extract_target_person_with_llm(message: str) -> Optional[str]:
     """Use LLM to detect if the user is asking about someone else's health/status.
 
@@ -254,6 +449,21 @@ async def handle_chat(
             await _mark_pending_task_create_resolved(user_id, session_id)
         return resumed
 
+    # ── Step 1.6: Resume cross-advisor confirmation ──────────────────────
+    pending_cross = await _get_pending_cross_advisor_action(user_id, session_id)
+    if pending_cross:
+        resumed = await _resume_cross_advisor_after_user_reply(
+            user_id=user_id,
+            session_id=session_id,
+            user_message=message,
+            pending=pending_cross,
+            ctx=ctx,
+            enabled_caps=enabled_caps,
+            history=history,
+        )
+        if resumed is not None:
+            return resumed
+
     # ── Step 2: Retrieve top-k candidate skills ──────────────────────────
     # Score against recent user turns + the current message so a follow-up
     # reply (e.g., user supplying just a team name "Yumo Family team")
@@ -329,6 +539,18 @@ async def handle_chat(
         )
         if reply_class != "executed":
             response_text = _sanitize_non_executed_claims(response_text)
+
+        # ── Cross-advisor write request branch ───────────────────────
+        cross_action_raw = (tool_input.get("cross_advisor_action_type") or "none").strip()
+        if cross_action_raw and cross_action_raw != "none":
+            return await _initiate_cross_advisor_request(
+                requester_user_id=user_id,
+                session_id=session_id,
+                tool_input=tool_input,
+                preflight_text=response_text,
+                team_id=team_id,
+                message=message,
+            )
 
         if should_execute_skill:
             skill_id = selected_skill_id
@@ -555,6 +777,436 @@ async def _handle_skill_execution(
     }
 
 
+# ── Cross-advisor flow ──────────────────────────────────────────────────────
+
+async def _initiate_cross_advisor_request(
+    *,
+    requester_user_id: str,
+    session_id: Optional[str],
+    tool_input: dict,
+    preflight_text: str,
+    team_id: Optional[str],
+    message: str,
+) -> dict:
+    """B-side: open a cross-advisor thread targeting another user's advisor.
+
+    Resolves the peer user, persists an ``action_request`` cross-message,
+    seeds the read-only collab thread for B, and triggers receiver-side
+    processing inline (which will post a confirmation question to A's chat
+    and create an ``awaiting_user_confirm`` pending action).
+    """
+    cross_action = (tool_input.get("cross_advisor_action_type") or "none").strip()
+    if cross_action == "none":
+        return {
+            "type": "direct",
+            "reply": preflight_text or "I'm here to help!",
+            "reply_class": "planned",
+            "is_write_operation_task": True,
+        }
+
+    target_email = (tool_input.get("target_email") or "").strip()
+    target_user_hint = (tool_input.get("target_user_hint") or "").strip()
+    cross_action_params = tool_input.get("cross_action_params") or {}
+
+    target_user_id: Optional[str] = None
+    if target_email:
+        target_user_id = await _resolve_email_to_user_id(target_email)
+    elif target_user_hint:
+        target_user_id = await _resolve_target_user_hint(
+            request_user_id=requester_user_id,
+            target_user_hint=target_user_hint,
+            team_id=team_id,
+        )
+
+    if not target_user_id:
+        return {
+            "type": "guidance",
+            "reply": (
+                "I couldn't tell which person you meant. "
+                "Please share their full name or email so I can route this to their advisor."
+            ),
+            "reply_class": "clarification_needed",
+            "is_write_operation_task": True,
+        }
+    if target_user_id == requester_user_id:
+        return {
+            "type": "guidance",
+            "reply": (
+                "That action targets your own account, so I don't need to ask another user's advisor — "
+                "let me know if you'd like me to do it directly."
+            ),
+            "reply_class": "clarification_needed",
+            "is_write_operation_task": True,
+        }
+
+    # MVP supports tasks_complete only.
+    if cross_action != CrossActionType.TASKS_COMPLETE.value:
+        return {
+            "type": "guidance",
+            "reply": "I can only route task-completion requests across advisors right now.",
+            "reply_class": "failed",
+            "is_write_operation_task": True,
+        }
+
+    task_id = (cross_action_params.get("task_id") or "").strip() if isinstance(cross_action_params, dict) else ""
+    if not task_id:
+        return {
+            "type": "guidance",
+            "reply": "Which task should be marked complete? Please share the task id.",
+            "reply_class": "clarification_needed",
+            "is_write_operation_task": True,
+        }
+
+    # Idempotency: same requester + target + task within the open window
+    # collapses to one thread.
+    idempotency_key = f"tasks_complete:{requester_user_id}:{target_user_id}:{task_id}"
+    task_detail = await _load_cross_task_details(task_id, requester_user_id)
+    enriched_action_params = {
+        "task_id": task_id,
+        "task_name": task_detail.get("task_name") or cross_action_params.get("task_name"),
+        "open_datetime": task_detail.get("open_datetime") or cross_action_params.get("open_datetime"),
+        "close_datetime": task_detail.get("close_datetime") or cross_action_params.get("close_datetime"),
+        "reason": cross_action_params.get("reason") or task_detail.get("task_info") or "",
+    }
+
+    cross_msg = await advisor_cross_message_service.create_request(
+        from_user_id=requester_user_id,
+        to_user_id=target_user_id,
+        action_type=CrossActionType.TASKS_COMPLETE,
+        action_params=enriched_action_params,
+        require_confirmation=True,
+        idempotency_key=idempotency_key,
+    )
+    thread_id = cross_msg["thread_id"]
+
+    # Seed the requester-side collab audit thread.
+    await _post_collab_audit(
+        user_id=requester_user_id,
+        thread_id=thread_id,
+        peer_user_id=target_user_id,
+        content=f"Requested mark-complete for task {task_id}. Awaiting confirmation from peer.",
+        collab_status="in_progress",
+    )
+
+    # Trigger receiver-side processing inline.  Failures here are logged
+    # but do not bubble up — B's user already received the synchronous
+    # acknowledgement and the cross-message stays queryable for retry.
+    try:
+        await _process_incoming_cross_request(cross_msg)
+    except Exception as exc:  # pragma: no cover — defensive
+        logger.exception("cross_msg.deliver_failed thread=%s: %s", thread_id, exc)
+        await advisor_cross_message_service.mark_failed(
+            cross_msg["message_id"], reason=str(exc)
+        )
+
+    reply = (
+        "I've passed your request to that user's advisor and asked them to confirm. "
+        "I'll let you know what they decide."
+    )
+    return {
+        "type": "direct",
+        "reply": reply,
+        "reply_class": "planned",
+        "is_write_operation_task": True,
+    }
+
+
+async def _process_incoming_cross_request(message_doc: dict) -> None:
+    """Receiver-side: ask the receiving user to confirm the request.
+
+    Per §2.1 every cross-user write request requires confirmation, so for
+    MVP we skip an LLM reasoning hop and post a templated question.  The
+    pending action carries the resume payload that ``_resume_cross_advisor_after_user_reply``
+    consumes when the user replies.
+    """
+    payload = message_doc.get("payload") or {}
+    action_type = payload.get("action_type")
+    action_params = payload.get("action_params") or {}
+    thread_id = message_doc["thread_id"]
+    requester_user_id = message_doc["from_user_id"]
+    approver_user_id = message_doc["to_user_id"]
+
+    # Hard termination check (§2.5).
+    turn_count = await advisor_cross_message_service.count_thread_turns(thread_id)
+    if turn_count > DEFAULT_MAX_CROSS_TURNS:
+        await advisor_cross_message_service.mark_failed(
+            message_doc["message_id"],
+            reason=f"max_turns ({DEFAULT_MAX_CROSS_TURNS}) reached",
+        )
+        await _post_collab_audit(
+            user_id=approver_user_id,
+            thread_id=thread_id,
+            peer_user_id=requester_user_id,
+            content="Conversation closed — too many back-and-forth turns.",
+            collab_status="expired",
+        )
+        await _post_collab_audit(
+            user_id=requester_user_id,
+            thread_id=thread_id,
+            peer_user_id=approver_user_id,
+            content="Conversation closed — too many back-and-forth turns.",
+            collab_status="expired",
+        )
+        return
+
+    # Build a user-facing question.  Templated for MVP (tasks_complete only).
+    requester_name = await _lookup_display_name(requester_user_id)
+    if action_type == CrossActionType.TASKS_COMPLETE.value:
+        task_id = action_params.get("task_id", "")
+        task_name = action_params.get("task_name") or "Unknown"
+        open_time = action_params.get("open_datetime") or "Unknown"
+        close_time = action_params.get("close_datetime") or "Unknown"
+        reason = action_params.get("reason") or "Not provided"
+        question = (
+            f"{requester_name} requested to mark one of her tasks completed: "
+            f"task_id={task_id}, task_name={task_name}, open_time={open_time}, "
+            f"close_time={close_time}, reason={reason}. "
+            "Reply **yes** to approve or **no** to decline."
+        )
+    else:
+        question = (
+            f"{requester_name}'s advisor is requesting an action on your account. "
+            "Reply **yes** to approve or **no** to decline."
+        )
+    question = advisor_cross_message_service.sanitize_summary(question, max_len=200)
+
+    confirm_session_id = _cross_confirm_session_id(thread_id)
+
+    # Post the question into a dedicated confirmation session so the user replies there.
+    await chat_history_service.save_message(
+        user_id=approver_user_id,
+        session_id=confirm_session_id,
+        role="assistant",
+        content=question,
+        metadata={
+            "type": "cross_advisor_confirmation",
+            "thread_id": thread_id,
+            "peer_user_id": requester_user_id,
+        },
+    )
+
+    # Mirror into the receiver-side collab audit thread.
+    await _post_collab_audit(
+        user_id=approver_user_id,
+        thread_id=thread_id,
+        peer_user_id=requester_user_id,
+        content=question,
+        collab_status="waiting_user_confirm",
+    )
+
+    # Persist the pending action so handle_chat can resume on the next reply.
+    await _create_cross_advisor_pending_action(
+        user_id=approver_user_id,
+        session_id=confirm_session_id,
+        thread_id=thread_id,
+        source_message_id=message_doc["message_id"],
+        requester_user_id=requester_user_id,
+        approver_user_id=approver_user_id,
+        resume_payload={
+            "action_type": action_type,
+            "action_params": action_params,
+            "question_to_user": question,
+        },
+        status=CrossAdvisorPendingActionStatus.AWAITING_USER_CONFIRM.value,
+        turn_count=turn_count,
+    )
+
+    await advisor_cross_message_service.mark_processed(message_doc["message_id"])
+
+
+async def _resume_cross_advisor_after_user_reply(
+    *,
+    user_id: str,
+    session_id: Optional[str],
+    user_message: str,
+    pending: dict,
+    ctx: dict,
+    enabled_caps: set[str],
+    history: list[dict],
+) -> Optional[dict]:
+    """Consume an awaiting_user_confirm pending action.
+
+    Returns a chat response dict if the reply mapped to approve/reject, or
+    ``None`` to fall through to the normal LLM routing (treated as
+    ``ask_more`` clarification).
+    """
+    decision = _classify_user_confirmation(user_message)
+    if decision == "ask_more":
+        return None
+
+    thread_id = pending["thread_id"]
+    requester_user_id = pending["requester_user_id"]
+    approver_user_id = pending["approver_user_id"]
+    resume_payload = pending.get("resume_payload") or {}
+    action_type = resume_payload.get("action_type")
+    action_params = resume_payload.get("action_params") or {}
+
+    if decision == "reject":
+        await _set_cross_advisor_pending_status(
+            thread_id, user_id, CrossAdvisorPendingActionStatus.REJECTED.value
+        )
+        await advisor_cross_message_service.create_decision_reply(
+            thread_id=thread_id,
+            from_user_id=approver_user_id,
+            to_user_id=requester_user_id,
+            decision="reject",
+            summary="User declined the request.",
+        )
+        await _post_collab_audit(
+            user_id=approver_user_id,
+            thread_id=thread_id,
+            peer_user_id=requester_user_id,
+            content="You declined the request.",
+            collab_status="done",
+        )
+        await _post_collab_audit(
+            user_id=requester_user_id,
+            thread_id=thread_id,
+            peer_user_id=approver_user_id,
+            content="The peer declined the request.",
+            collab_status="done",
+        )
+        await _set_cross_advisor_pending_status(
+            thread_id, user_id, CrossAdvisorPendingActionStatus.CONSUMED.value
+        )
+        return {
+            "type": "direct",
+            "reply": "Understood — I let them know you declined.",
+            "reply_class": "planned",
+            "is_write_operation_task": False,
+        }
+
+    # Decision == approve → mark approved, run skill execution.
+    await _set_cross_advisor_pending_status(
+        thread_id, user_id, CrossAdvisorPendingActionStatus.APPROVED.value
+    )
+    await advisor_cross_message_service.create_decision_reply(
+        thread_id=thread_id,
+        from_user_id=approver_user_id,
+        to_user_id=requester_user_id,
+        decision="approve",
+        summary="User approved.",
+    )
+
+    if action_type != CrossActionType.TASKS_COMPLETE.value:
+        # Should not happen in MVP — only tasks_complete is wired up.
+        await _set_cross_advisor_pending_status(
+            thread_id, user_id, CrossAdvisorPendingActionStatus.CONSUMED.value
+        )
+        return {
+            "type": "guidance",
+            "reply": "Approved, but I don't have a way to execute that action yet.",
+            "reply_class": "failed",
+            "is_write_operation_task": True,
+        }
+
+    # Build execution prompt for the tasks_complete skill.
+    task_id = action_params.get("task_id", "")
+    skill = skill_registry.get_skill("tasks_complete")
+    if not skill or skill.status != "indexed":
+        await _set_cross_advisor_pending_status(
+            thread_id, user_id, CrossAdvisorPendingActionStatus.CONSUMED.value
+        )
+        await advisor_cross_message_service.create_execution_result(
+            thread_id=thread_id,
+            from_user_id=approver_user_id,
+            to_user_id=requester_user_id,
+            success=False,
+            summary="tasks_complete skill is not available.",
+        )
+        return {
+            "type": "guidance",
+            "reply": "I approved this, but the task-completion skill is unavailable right now.",
+            "reply_class": "failed",
+            "is_write_operation_task": True,
+        }
+    if skill.capability_id not in enabled_caps:
+        # Auto-enable for the approver since they own the data.
+        await capability_service.toggle_capability(user_id, skill.capability_id, True)
+        enabled_caps = enabled_caps | {skill.capability_id}
+
+    skill_full_text = skill_registry.load_skill_full_text("tasks_complete")
+    credential = None
+    if skill.requires_credentials or skill.requires_ping:
+        cred_key = resolve_credential_key(skill)
+        credential = await skill_credential_service.get_credential(user_id, cred_key)
+        if not credential and skill.capability_id == "lumie_internal_data" and skill.requires_ping:
+            credential = await skill_credential_service.ensure_lumie_internal_credential(
+                user_id, skill.skill_id
+            )
+
+    execution_prompt = (
+        f"Mark task {task_id} as complete. "
+        f"This was approved by the task owner in response to a cross-advisor request."
+    )
+
+    job_id = await execution_service.create_execution_job(
+        user_id=user_id,
+        session_id=session_id,
+        skill=skill,
+        prompt=execution_prompt,
+        target_user_id=requester_user_id,  # complete the requester's task
+        team_id=None,
+        is_write_operation_task=True,
+        cross_advisor_context={
+            "thread_id": thread_id,
+            "source_message_id": pending["source_message_id"],
+            "requester_user_id": requester_user_id,
+            "approver_user_id": approver_user_id,
+            "action_type": action_type,
+            "action_params": action_params,
+        },
+    )
+
+    history_summary = _summarize_history(history) if history else ""
+    asyncio.create_task(
+        execution_service.run_execution_job(
+            job_id=job_id,
+            skill=skill,
+            skill_full_text=skill_full_text,
+            credential=credential,
+            user_context=ctx,
+            history_summary=history_summary,
+        )
+    )
+
+    await _set_cross_advisor_pending_status(
+        thread_id, user_id, CrossAdvisorPendingActionStatus.CONSUMED.value
+    )
+    await _post_collab_audit(
+        user_id=approver_user_id,
+        thread_id=thread_id,
+        peer_user_id=requester_user_id,
+        content=f"You approved. Marking task {task_id} complete now.",
+        collab_status="in_progress",
+    )
+
+    return {
+        "type": "execution",
+        "reply": "Approved — running the task completion now. I'll share the result.",
+        "reply_class": "planned",
+        "is_write_operation_task": True,
+        "job_id": job_id,
+        "skill_id": "tasks_complete",
+        "status": "pending",
+    }
+
+
+async def _lookup_display_name(user_id: str) -> str:
+    """Best-effort name lookup for templated questions / audit messages."""
+    try:
+        db = get_database()
+        profile = await db.profiles.find_one({"user_id": user_id}, {"name": 1, "_id": 0})
+        if profile and profile.get("name"):
+            return profile["name"]
+        user = await db.users.find_one({"user_id": user_id}, {"email": 1, "_id": 0})
+        if user and user.get("email"):
+            return user["email"]
+    except Exception:
+        pass
+    return "Another user"
+
+
 # ── Tool definitions ─────────────────────────────────────────────────────────
 
 def _build_tools(candidates: list[SkillIndexItem]) -> list[dict]:
@@ -603,6 +1255,27 @@ def _build_tools(candidates: list[SkillIndexItem]) -> list[dict]:
                 "target_user_hint": {
                     "type": "string",
                     "description": "If user asks about another person without email, put exact reference phrase; else empty string.",
+                },
+                "cross_advisor_action_type": {
+                    "type": "string",
+                    "enum": ["none", "tasks_complete"],
+                    "description": (
+                        "Set to 'tasks_complete' ONLY when the user wants to perform a "
+                        "WRITE action on ANOTHER user's data (e.g. mark another user's task "
+                        "complete). The receiving user must confirm. Use 'none' for self-actions "
+                        "or read-only queries about another user."
+                    ),
+                },
+                "cross_action_params": {
+                    "type": "object",
+                    "description": (
+                        "Parameters for the cross-advisor action. For tasks_complete, MUST "
+                        "include task_id (string) extracted from the user message. Empty object "
+                        "when cross_advisor_action_type='none'."
+                    ),
+                    "properties": {
+                        "task_id": {"type": "string", "description": "Target task id."},
+                    },
                 },
             },
             "required": ["reply_class", "is_write_operation_task", "should_execute_skill", "response_text", "skill_id"],
@@ -695,6 +1368,15 @@ Protocol contract:
 - Greetings, small talk, emotional support
 - Medical knowledge questions
 - Questions you can answer without data access
+
+**Cross-advisor write requests (`cross_advisor_action_type`):**
+- Default to `"none"`.
+- Set to `"tasks_complete"` ONLY when the user wants to mark ANOTHER user's task complete
+  (e.g., "mark Eimer's task xxxxx complete", "complete Mom's task task_abc").
+- When set to `"tasks_complete"`, you MUST also populate `cross_action_params.task_id` with
+  the task id from the user message, AND set `target_user_hint` (or `target_email`) to the
+  peer user.
+- Do NOT use `tasks_complete` for the user's own tasks — use the regular skill flow instead.
 
 **Key distinction:** "What medicine should I take now?" = needs data (execute skill) ≠ "What medications treat diabetes?" = general knowledge (direct response)
 {skill_summary}

@@ -33,6 +33,13 @@ class SessionSummaryResponse(BaseModel):
     last_message_at: str
     preview: str
     message_count: int
+    # Advisor cross-user collab thread metadata (§13.2). Defaults preserve
+    # backwards compatibility for legacy/normal sessions.
+    channel: str = "advisor_user"
+    readonly: bool = False
+    thread_id: Optional[str] = None
+    collab_status: Optional[str] = None
+    peer_user_id: Optional[str] = None
 
 
 class SessionListResponse(BaseModel):
@@ -58,6 +65,11 @@ async def list_sessions(
                 last_message_at=s.get("last_message_at", s["started_at"]),
                 preview=s["preview"],
                 message_count=s["message_count"],
+                channel=s.get("channel") or "advisor_user",
+                readonly=bool(s.get("readonly", False)),
+                thread_id=s.get("thread_id"),
+                collab_status=s.get("collab_status"),
+                peer_user_id=s.get("peer_user_id"),
             )
             for s in sessions
         ]

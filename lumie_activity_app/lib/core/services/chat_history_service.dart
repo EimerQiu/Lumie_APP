@@ -59,6 +59,11 @@ class SessionSummary {
   final String lastMessageAt;
   final String preview;
   final int messageCount;
+  final String channel; // "advisor_user" | "advisor_collab"
+  final bool readonly;
+  final String? threadId;
+  final String? collabStatus;
+  final String? peerUserId;
 
   const SessionSummary({
     required this.sessionId,
@@ -66,7 +71,14 @@ class SessionSummary {
     required this.lastMessageAt,
     required this.preview,
     required this.messageCount,
+    this.channel = 'advisor_user',
+    this.readonly = false,
+    this.threadId,
+    this.collabStatus,
+    this.peerUserId,
   });
+
+  bool get isCollabThread => channel == 'advisor_collab';
 
   factory SessionSummary.fromJson(Map<String, dynamic> json) {
     final startedAt = json['started_at'] as String? ?? '';
@@ -76,6 +88,11 @@ class SessionSummary {
       lastMessageAt: json['last_message_at'] as String? ?? startedAt,
       preview: json['preview'] as String? ?? '',
       messageCount: json['message_count'] as int? ?? 0,
+      channel: json['channel'] as String? ?? 'advisor_user',
+      readonly: json['readonly'] as bool? ?? false,
+      threadId: json['thread_id'] as String?,
+      collabStatus: json['collab_status'] as String?,
+      peerUserId: json['peer_user_id'] as String?,
     );
   }
 }

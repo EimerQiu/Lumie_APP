@@ -107,6 +107,17 @@ async def create_indexes():
         [("user_id", 1), ("session_id", 1), ("action_type", 1), ("status", 1)]
     )
     await db.db.advisor_pending_actions.create_index("expires_at")
+    await db.db.advisor_pending_actions.create_index("thread_id")
+
+    # Advisor cross-user messaging (advisor <-> advisor)
+    await db.db.advisor_cross_messages.create_index("message_id", unique=True)
+    await db.db.advisor_cross_messages.create_index([("thread_id", 1), ("created_at", 1)])
+    await db.db.advisor_cross_messages.create_index([("to_user_id", 1), ("status", 1)])
+    await db.db.advisor_cross_messages.create_index([("from_user_id", 1), ("created_at", -1)])
+    await db.db.advisor_cross_messages.create_index("expires_at")
+    await db.db.advisor_cross_messages.create_index(
+        "idempotency_key", unique=True, sparse=True
+    )
 
     # Proactive advisor: audit collections
     await db.db.proactive_runs.create_index("run_id", unique=True)

@@ -49,6 +49,29 @@ router = APIRouter(prefix="/advisor", tags=["advisor-v2"])
 
 # ── Chat ─────────────────────────────────────────────────────────────────────
 
+async def _is_session_readonly(user_id: str, session_id: str) -> bool:
+    """Read-only guard for advisor_collab threads (§13.5).
+
+    Returns True when the session's most recent message has
+    ``metadata.readonly = true`` or ``metadata.channel = 'advisor_collab'``.
+    """
+    if not session_id:
+        return False
+    db = get_database()
+    latest = await db.chat_messages.find_one(
+        {"user_id": user_id, "session_id": session_id},
+        sort=[("created_at", -1)],
+    )
+    if not latest:
+        return False
+    metadata = latest.get("metadata") or {}
+    if metadata.get("readonly") is True:
+        return True
+    if metadata.get("channel") == "advisor_collab":
+        return True
+    return False
+
+
 @router.post("/chat", response_model=AdvisorChatV2Response)
 async def advisor_chat_v2(
     request: AdvisorChatV2Request,
@@ -57,6 +80,14 @@ async def advisor_chat_v2(
     """Main v2 advisor chat endpoint with skill execution support."""
     if not request.message.strip():
         raise HTTPException(status_code=400, detail="Message cannot be empty")
+
+    # Hard guard: block writes to read-only collab threads BEFORE the
+    # orchestrator/LLM is invoked (§13.5).
+    if request.session_id and await _is_session_readonly(user_id, request.session_id):
+        raise HTTPException(
+            status_code=409,
+            detail="This advisor collaboration thread is read-only.",
+        )
 
     try:
         result = await advisor_orchestrator.handle_chat(

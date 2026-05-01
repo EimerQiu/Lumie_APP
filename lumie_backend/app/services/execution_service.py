@@ -87,8 +87,14 @@ async def create_execution_job(
     target_user_id: Optional[str] = None,
     team_id: Optional[str] = None,
     is_write_operation_task: bool = False,
+    cross_advisor_context: Optional[dict] = None,
 ) -> str:
-    """Create an execution job record in MongoDB. Returns job_id."""
+    """Create an execution job record in MongoDB. Returns job_id.
+
+    ``cross_advisor_context`` (when set) carries the cross-advisor thread
+    metadata so the post-completion hook can fire a result callback into
+    the requester's collab thread.
+    """
     db = get_database()
     job_id = str(uuid.uuid4())
     now = format_utc_datetime(datetime.utcnow())
@@ -104,6 +110,7 @@ async def create_execution_job(
         "target_user_id": target_user_id or user_id,
         "team_id": team_id,
         "is_write_operation_task": bool(is_write_operation_task),
+        "cross_advisor_context": cross_advisor_context,
         "normalized_request": {},
         "status": "pending",
         "generated_script": None,
@@ -544,6 +551,11 @@ async def _complete_job(
                 asyncio.create_task(
                     log_advisor_chat(user_id, user_name, prompt, summary, session_id=session_id)
                 )
+
+            # Cross-advisor callback: announce result back to the requester's
+            # collab thread.  Runs after main chat persistence so a callback
+            # failure cannot block normal post-execution behavior.
+            await _maybe_send_cross_advisor_callback(job, success=True, summary_text=summary, result_data=result_data)
     except Exception as e:
         logger.warning(f"Failed to save execution result to chat history: {e}")
 
@@ -603,6 +615,87 @@ async def _fail_job(
         }},
     )
     logger.warning(f"Job {job_id} failed: {error}")
+
+    try:
+        job = await db.execution_jobs.find_one({"job_id": job_id})
+        if job:
+            await _maybe_send_cross_advisor_callback(
+                job, success=False, summary_text=error, result_data=None
+            )
+    except Exception as e:
+        logger.warning(f"Failed to send cross-advisor failure callback: {e}")
+
+
+async def _maybe_send_cross_advisor_callback(
+    job: dict,
+    *,
+    success: bool,
+    summary_text: str,
+    result_data,
+) -> None:
+    """Post an ``execution_result`` cross-message + collab audits when the
+    job was kicked off in response to a cross-advisor approval.
+    """
+    ctx = job.get("cross_advisor_context")
+    if not ctx:
+        return
+
+    thread_id = ctx.get("thread_id")
+    requester_user_id = ctx.get("requester_user_id")
+    approver_user_id = ctx.get("approver_user_id")
+    if not (thread_id and requester_user_id and approver_user_id):
+        return
+
+    # Local imports to avoid circulars at module load.
+    from . import advisor_cross_message_service
+    from . import chat_history_service
+
+    sanitized = advisor_cross_message_service.sanitize_summary(
+        summary_text or ("Action completed." if success else "Action failed.")
+    )
+
+    try:
+        await advisor_cross_message_service.create_execution_result(
+            thread_id=thread_id,
+            from_user_id=approver_user_id,
+            to_user_id=requester_user_id,
+            success=success,
+            summary=sanitized,
+            detail={"job_id": job.get("job_id"), "skill_id": job.get("skill_id")},
+        )
+    except Exception as e:
+        logger.warning(f"cross_msg.execution_result write failed: {e}")
+
+    collab_status = "done" if success else "failed"
+    metadata = {
+        "channel": "advisor_collab",
+        "readonly": True,
+        "thread_id": thread_id,
+        "collab_status": collab_status,
+    }
+    requester_msg = (
+        f"Result: {sanitized}" if success else f"Action failed: {sanitized}"
+    )
+    approver_msg = (
+        f"Result reported back: {sanitized}" if success else f"Reported failure: {sanitized}"
+    )
+    try:
+        await chat_history_service.save_message(
+            user_id=requester_user_id,
+            session_id=f"collab:{thread_id}",
+            role="assistant",
+            content=requester_msg,
+            metadata={**metadata, "peer_user_id": approver_user_id},
+        )
+        await chat_history_service.save_message(
+            user_id=approver_user_id,
+            session_id=f"collab:{thread_id}",
+            role="assistant",
+            content=approver_msg,
+            metadata={**metadata, "peer_user_id": requester_user_id},
+        )
+    except Exception as e:
+        logger.warning(f"Failed to write cross-advisor collab audit: {e}")
 
 
 def _is_write_confirmed(result_data) -> bool:

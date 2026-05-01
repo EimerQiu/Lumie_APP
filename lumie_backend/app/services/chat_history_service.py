@@ -146,7 +146,12 @@ async def get_sessions(user_id: str, limit: int = 50) -> list[dict]:
     """Fetch distinct sessions for a user, ordered by most recent activity.
 
     Returns one entry per session:
-        session_id, started_at, last_message_at, preview (latest message), message_count
+        session_id, started_at, last_message_at, preview (latest message),
+        message_count, channel, readonly, thread_id, collab_status, peer_user_id
+
+    Collab-thread metadata fields (per §13.2) are aggregated from the
+    latest message's ``metadata`` and default to None / "advisor_user" /
+    False for normal sessions.
     """
     db = get_database()
     pipeline = [
@@ -159,6 +164,7 @@ async def get_sessions(user_id: str, limit: int = 50) -> list[dict]:
                 "last_message_at": {"$last": "$created_at"},
                 "preview": {"$last": "$content"},
                 "message_count": {"$sum": 1},
+                "last_metadata": {"$last": "$metadata"},
             }
         },
         {"$sort": {"last_message_at": -1}},
@@ -171,6 +177,15 @@ async def get_sessions(user_id: str, limit: int = 50) -> list[dict]:
                 "last_message_at": 1,
                 "preview": 1,
                 "message_count": 1,
+                "channel": {
+                    "$ifNull": ["$last_metadata.channel", "advisor_user"]
+                },
+                "readonly": {
+                    "$ifNull": ["$last_metadata.readonly", False]
+                },
+                "thread_id": "$last_metadata.thread_id",
+                "collab_status": "$last_metadata.collab_status",
+                "peer_user_id": "$last_metadata.peer_user_id",
             }
         },
     ]
