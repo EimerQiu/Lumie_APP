@@ -217,6 +217,62 @@ async def _get_pending_cross_advisor_action(user_id: str, session_id: Optional[s
     return await db.advisor_pending_actions.find_one(query, sort=[("updated_at", -1)])
 
 
+async def _get_pending_target_ambiguity(user_id: str, session_id: Optional[str]) -> Optional[dict]:
+    """Fetch pending target user ambiguity resolution."""
+    db = get_database()
+    if db is None:
+        return None
+    now = datetime.utcnow()
+    query = {
+        "user_id": user_id,
+        "action_type": "target_user_ambiguity_resolution",
+        "status": "awaiting_user_selection",
+        "expires_at": {"$gt": now},
+    }
+    if session_id:
+        query["session_id"] = session_id
+    return await db.advisor_pending_actions.find_one(query, sort=[("updated_at", -1)])
+
+
+async def _upsert_pending_target_ambiguity(
+    user_id: str,
+    session_id: Optional[str],
+    target_user_hint: str,
+    candidate_user_ids: list[str],
+    original_message: str,
+) -> None:
+    """Create or update a pending target user ambiguity resolution."""
+    db = get_database()
+    if db is None:
+        return
+    now = datetime.utcnow()
+    expires_at = now + timedelta(hours=2)
+    query = {
+        "user_id": user_id,
+        "session_id": session_id or "default",
+        "action_type": "target_user_ambiguity_resolution",
+        "status": "awaiting_user_selection",
+    }
+    await db.advisor_pending_actions.update_one(
+        query,
+        {
+            "$set": {
+                "user_id": user_id,
+                "session_id": session_id or "default",
+                "action_type": "target_user_ambiguity_resolution",
+                "status": "awaiting_user_selection",
+                "target_user_hint": target_user_hint,
+                "candidate_user_ids": candidate_user_ids,
+                "original_message": original_message,
+                "updated_at": now,
+                "expires_at": expires_at,
+            },
+            "$setOnInsert": {"created_at": now},
+        },
+        upsert=True,
+    )
+
+
 async def _get_pending_cross_advisor_outreach(user_id: str, session_id: Optional[str]) -> Optional[dict]:
     """Fetch the latest awaiting_user_decision outreach confirmation for ``user_id``."""
     db = get_database()
@@ -491,7 +547,21 @@ async def handle_chat(
         # Auto-provision ping credentials for Lumie internal skills
         await _ensure_lumie_credentials(user_id)
 
-    # ── Step 1.5: Resume pending task-create clarification if user provided schedule ──
+    # ── Step 1.5: Resume target user ambiguity resolution ──────────────────────
+    pending_ambiguity = await _get_pending_target_ambiguity(user_id, session_id)
+    if pending_ambiguity:
+        resumed = await _resume_target_user_ambiguity(
+            user_id=user_id,
+            session_id=session_id,
+            user_message=message,
+            pending=pending_ambiguity,
+            history=history,
+            team_id=team_id,
+        )
+        if resumed is not None:
+            return resumed
+
+    # ── Step 1.6: Resume pending task-create clarification if user provided schedule ──
     pending_task_create = await _get_pending_task_create_action(user_id, session_id)
     if pending_task_create and _looks_like_schedule_detail(message):
         original_request = pending_task_create.get("original_request") or "create a task"
@@ -775,7 +845,40 @@ async def _handle_skill_execution(
             team_id=team_id,
         )
         logger.info(f"Resolution result: {resolved_id}")
-        if resolved_id:
+
+        # Handle ambiguous matches
+        if resolved_id and resolved_id.startswith("__AMBIGUOUS__"):
+            ambiguous_user_ids = resolved_id.split("__AMBIGUOUS__")[1].split(",")
+            logger.info(f"Ambiguous resolution: {len(ambiguous_user_ids)} matches for '{target_user_hint}'")
+
+            # Create pending action for user to confirm which person they meant
+            await _upsert_pending_target_ambiguity(
+                user_id=user_id,
+                session_id=session_id,
+                target_user_hint=target_user_hint,
+                candidate_user_ids=ambiguous_user_ids,
+                original_message=message,
+            )
+
+            # Build confirmation question
+            confirmation_lines = ["I found multiple people with that name. Which one did you mean?\n"]
+            db = get_database()
+            for idx, cand_id in enumerate(ambiguous_user_ids[:10], 1):  # Limit to 10 options
+                profile = await db.profiles.find_one({"user_id": cand_id}, {"name": 1, "email": 1})
+                user_doc = await db.users.find_one({"user_id": cand_id}, {"email": 1})
+                name = profile.get("name") if profile else "Unknown"
+                email = user_doc.get("email") if user_doc else ""
+                confirmation_lines.append(f"{idx}. {name}" + (f" ({email})" if email else ""))
+
+            confirmation_lines.append("\nReply with the number of the person you meant (e.g., **1** or **2**).")
+
+            return {
+                "type": "guidance",
+                "reply": "\n".join(confirmation_lines),
+                "reply_class": "clarification_needed",
+                "is_write_operation_task": is_write_operation_task,
+            }
+        elif resolved_id:
             target_user_id = resolved_id
         else:
             logger.warning(f"Could not resolve target_user_hint: {target_user_hint}")
@@ -1487,6 +1590,74 @@ async def _process_incoming_cross_health_concern(message_doc: dict, requester_ct
     await advisor_cross_message_service.mark_processed(message_doc["message_id"])
 
 
+async def _resume_target_user_ambiguity(
+    *,
+    user_id: str,
+    session_id: Optional[str],
+    user_message: str,
+    pending: dict,
+    history: list[dict],
+    team_id: Optional[str] = None,
+) -> Optional[dict]:
+    """User selects which person from ambiguous matches.
+
+    Expected user_message: a number like "1", "2", etc. matching the list shown.
+    """
+    user_message_stripped = user_message.strip()
+
+    try:
+        # Parse selection as index (1-based)
+        selection_idx = int(user_message_stripped) - 1
+    except ValueError:
+        # Not a valid number
+        return None
+
+    candidate_user_ids = pending.get("candidate_user_ids", [])
+    if selection_idx < 0 or selection_idx >= len(candidate_user_ids):
+        return {
+            "type": "guidance",
+            "reply": f"Invalid selection. Please reply with a number between 1 and {len(candidate_user_ids)}.",
+            "reply_class": "clarification_needed",
+            "is_write_operation_task": False,
+        }
+
+    # Get the selected user_id
+    selected_user_id = candidate_user_ids[selection_idx]
+    db = get_database()
+
+    # Get the selected user's name for confirmation
+    profile = await db.profiles.find_one({"user_id": selected_user_id}, {"name": 1})
+    selected_name = profile.get("name") if profile else "that person"
+
+    # Mark this pending action as resolved
+    await db.advisor_pending_actions.update_one(
+        {
+            "user_id": user_id,
+            "action_type": "target_user_ambiguity_resolution",
+            "status": "awaiting_user_selection",
+        },
+        {"$set": {"status": "resolved", "selected_user_id": selected_user_id, "updated_at": datetime.utcnow()}},
+    )
+
+    # Re-process the original message with the resolved target_user_id
+    original_message = pending.get("original_message", "")
+    logger.info(f"User selected: {selected_user_id} ({selected_name}). Re-processing original message.")
+
+    # Call handle_chat recursively with the resolved target_user_id
+    result = await handle_chat(
+        user_id=user_id,
+        message=original_message,
+        history=history,
+        session_id=session_id,
+        target_user_id=selected_user_id,
+        team_id=team_id,
+    )
+
+    # Prepend acknowledgment
+    result["reply"] = f"Got it, {selected_name}. " + result.get("reply", "")
+    return result
+
+
 async def _lookup_display_name(user_id: str) -> str:
     """Best-effort name lookup for templated questions / audit messages."""
     try:
@@ -1950,6 +2121,12 @@ async def _resolve_target_user_hint(
         return exact_matches[0]
     if len(partial_matches) == 1:
         return partial_matches[0]
+
+    # Multiple matches found: return special marker to trigger confirmation flow
+    if len(exact_matches) > 1 or len(partial_matches) > 1:
+        ambiguous_matches = exact_matches + partial_matches
+        return f"__AMBIGUOUS__{','.join(ambiguous_matches)}"
+
     if hint_lower in family_hints:
         # Ambiguous family reference: if multiple members exist, prefer no resolution
         # over picking the wrong person.
