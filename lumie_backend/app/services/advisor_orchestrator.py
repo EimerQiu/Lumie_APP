@@ -217,6 +217,64 @@ async def _get_pending_cross_advisor_action(user_id: str, session_id: Optional[s
     return await db.advisor_pending_actions.find_one(query, sort=[("updated_at", -1)])
 
 
+async def _get_pending_cross_advisor_outreach(user_id: str, session_id: Optional[str]) -> Optional[dict]:
+    """Fetch the latest awaiting_user_decision outreach confirmation for ``user_id``."""
+    db = get_database()
+    if db is None:
+        return None
+    now = datetime.utcnow()
+    query = {
+        "user_id": user_id,
+        "action_type": "cross_advisor_outreach_confirmation",
+        "status": "awaiting_user_decision",
+        "expires_at": {"$gt": now},
+    }
+    if session_id:
+        query["session_id"] = session_id
+    return await db.advisor_pending_actions.find_one(query, sort=[("updated_at", -1)])
+
+
+async def _upsert_pending_cross_advisor_outreach(
+    user_id: str,
+    session_id: Optional[str],
+    target_user_id: str,
+    target_user_hint: str,
+    concern_message: str,
+    advisor_response: str,
+) -> None:
+    """Create or update a pending outreach confirmation. Follows the pattern of _upsert_pending_task_create_action."""
+    db = get_database()
+    if db is None:
+        return
+    now = datetime.utcnow()
+    expires_at = now + timedelta(hours=2)
+    query = {
+        "user_id": user_id,
+        "session_id": session_id or "default",
+        "action_type": "cross_advisor_outreach_confirmation",
+        "status": "awaiting_user_decision",
+    }
+    await db.advisor_pending_actions.update_one(
+        query,
+        {
+            "$set": {
+                "user_id": user_id,
+                "session_id": session_id or "default",
+                "action_type": "cross_advisor_outreach_confirmation",
+                "status": "awaiting_user_decision",
+                "target_user_id": target_user_id,
+                "target_user_hint": target_user_hint,
+                "concern_message": concern_message,
+                "advisor_response": advisor_response,
+                "updated_at": now,
+                "expires_at": expires_at,
+            },
+            "$setOnInsert": {"created_at": now},
+        },
+        upsert=True,
+    )
+
+
 async def _create_cross_advisor_pending_action(
     *,
     user_id: str,
@@ -463,7 +521,23 @@ async def handle_chat(
             await _mark_pending_task_create_resolved(user_id, session_id)
         return resumed
 
-    # ── Step 1.6: Resume cross-advisor confirmation ──────────────────────
+    # ── Step 1.6: Resume cross-advisor outreach confirmation ───────────
+    pending_outreach = await _get_pending_cross_advisor_outreach(user_id, session_id)
+    if pending_outreach:
+        resumed = await _resume_cross_advisor_outreach_after_user_reply(
+            user_id=user_id,
+            session_id=session_id,
+            user_message=message,
+            pending=pending_outreach,
+            ctx=ctx,
+            enabled_caps=enabled_caps,
+            history=history,
+            team_id=team_id,
+        )
+        if resumed is not None:
+            return resumed
+
+    # ── Step 1.7: Resume cross-advisor confirmation ──────────────────────
     pending_cross = await _get_pending_cross_advisor_action(user_id, session_id)
     if pending_cross:
         resumed = await _resume_cross_advisor_after_user_reply(
@@ -553,6 +627,29 @@ async def handle_chat(
         )
         if reply_class != "executed":
             response_text = _sanitize_non_executed_claims(response_text)
+
+        # ── Propose peer outreach (ask user if they want to reach out to peer advisor) ─
+        propose_outreach = bool(tool_input.get("propose_peer_outreach", False))
+        if propose_outreach and target_user_id and target_user_id != user_id:
+            outreach_question = (
+                f"{response_text}\n\n"
+                f"Would you like me to also reach out to their advisor and share this concern with them? "
+                f"(Reply **yes** or **no**)"
+            )
+            await _upsert_pending_cross_advisor_outreach(
+                user_id=user_id,
+                session_id=session_id,
+                target_user_id=target_user_id,
+                target_user_hint=tool_input.get("target_user_hint", ""),
+                concern_message=message,
+                advisor_response=response_text,
+            )
+            return {
+                "type": "guidance",
+                "reply": outreach_question,
+                "reply_class": "clarification_needed",
+                "is_write_operation_task": True,
+            }
 
         # ── Cross-advisor write request branch ───────────────────────
         cross_action_raw = (tool_input.get("cross_advisor_action_type") or "none").strip()
@@ -968,16 +1065,14 @@ async def _process_incoming_cross_request(message_doc: dict) -> None:
     requester_name = await _lookup_display_name(requester_user_id)
     approver_name = await _lookup_display_name(approver_user_id)
     if action_type == CrossActionType.TASKS_COMPLETE.value:
-        task_id = action_params.get("task_id", "")
         task_name = action_params.get("task_name") or "Unknown"
         open_time = action_params.get("open_datetime") or "Unknown"
         close_time = action_params.get("close_datetime") or "Unknown"
         reason = action_params.get("reason") or "Not provided"
         question = (
-            f"{requester_name} requested to mark one of her tasks completed: "
-            f"task_id={task_id}, task_name={task_name}, open_time={open_time}, "
-            f"close_time={close_time}, reason={reason}. "
-            "Reply **yes** to approve or **no** to decline."
+            f"**{requester_name} wants to mark \"{task_name}\" as done**\n\n"
+            f"They completed it between {open_time} and {close_time} with the note: \"{reason}\"\n\n"
+            "Can you approve this? (Reply **yes** or **no**)"
         )
     else:
         question = (
@@ -1214,6 +1309,179 @@ async def _resume_cross_advisor_after_user_reply(
     }
 
 
+async def _resume_cross_advisor_outreach_after_user_reply(
+    *,
+    user_id: str,
+    session_id: Optional[str],
+    user_message: str,
+    pending: dict,
+    ctx: dict,
+    enabled_caps: set[str],
+    history: list[dict],
+    team_id: Optional[str] = None,
+) -> Optional[dict]:
+    """User decides whether to send concern to another user's advisor.
+
+    If yes: initiate cross-advisor request with the concern message.
+    If no: acknowledge and provide the advisor's response normally.
+    If ask_more: stay pending for more clarification.
+    """
+    decision = _classify_user_confirmation(user_message)
+    if decision == "ask_more":
+        return None
+
+    thread_id = pending["thread_id"]
+    target_user_id = pending["target_user_id"]
+    concern_message = pending["concern_message"]
+    advisor_response = pending["advisor_response"]
+
+    if decision == "reject":
+        db = get_database()
+        if db:
+            await db.advisor_pending_actions.update_one(
+                {
+                    "user_id": user_id,
+                    "thread_id": thread_id,
+                    "action_type": CROSS_ADVISOR_OUTREACH_TYPE,
+                },
+                {"$set": {"status": "declined", "updated_at": datetime.utcnow()}},
+            )
+        return {
+            "type": "direct",
+            "reply": f"Understood. {advisor_response}",
+            "reply_class": "planned",
+            "is_write_operation_task": False,
+        }
+
+    # Decision == approve → initiate cross-advisor message
+    db = get_database()
+    if db:
+        await db.advisor_pending_actions.update_one(
+            {
+                "user_id": user_id,
+                "thread_id": thread_id,
+                "action_type": CROSS_ADVISOR_OUTREACH_TYPE,
+            },
+            {"$set": {"status": "approved", "updated_at": datetime.utcnow()}},
+        )
+
+    # Initiate cross-advisor request
+    idempotency_key = f"health_concern:{user_id}:{target_user_id}"
+    cross_msg = await advisor_cross_message_service.create_request(
+        from_user_id=user_id,
+        to_user_id=target_user_id,
+        action_type=CrossActionType.TASKS_COMPLETE,  # Reuse for general coordination
+        action_params={
+            "concern_type": "health_advice",
+            "message": concern_message,
+            "advisor_context": advisor_response,
+        },
+        require_confirmation=True,
+        idempotency_key=idempotency_key,
+    )
+    cross_thread_id = cross_msg["thread_id"]
+
+    # Seed collab audit
+    await _post_collab_audit(
+        user_id=user_id,
+        thread_id=cross_thread_id,
+        peer_user_id=target_user_id,
+        content=f"Shared health concern with scientific advice. Awaiting peer's advisor confirmation.",
+        collab_status="in_progress",
+    )
+
+    # Trigger receiver-side processing
+    try:
+        await _process_incoming_cross_health_concern(cross_msg, ctx)
+    except Exception as exc:
+        logger.exception("cross health_concern.deliver_failed thread=%s: %s", cross_thread_id, exc)
+        await advisor_cross_message_service.mark_failed(
+            cross_msg["message_id"], reason=str(exc)
+        )
+
+    return {
+        "type": "direct",
+        "reply": f"{advisor_response}\n\nI'm reaching out to their advisor now to share this concern. They'll review it and get back to us.",
+        "reply_class": "planned",
+        "is_write_operation_task": True,
+    }
+
+
+async def _process_incoming_cross_health_concern(message_doc: dict, requester_ctx: dict) -> None:
+    """Receiver-side: notify the receiving user's advisor about a health concern.
+
+    A peer (parent/advisor) has shared a health concern about the receiving user.
+    Post this to the receiving user's advisor chat in a read-only audit thread,
+    and ask them to acknowledge receipt and decide if action is needed.
+    """
+    payload = message_doc.get("payload") or {}
+    action_params = payload.get("action_params") or {}
+    thread_id = message_doc["thread_id"]
+    requester_user_id = message_doc["from_user_id"]
+    receiver_user_id = message_doc["to_user_id"]
+
+    requester_name = await _lookup_display_name(requester_user_id)
+    receiver_name = await _lookup_display_name(receiver_user_id)
+
+    concern_message = action_params.get("message") or "A health concern was shared"
+    advisor_context = action_params.get("advisor_context") or ""
+
+    # Build user-facing notification
+    question = (
+        f"**{requester_name} shared a health concern about {receiver_name}:**\n\n"
+        f"{concern_message}\n\n"
+        f"**Advisor guidance shared:** {advisor_context}\n\n"
+        f"Reply with any follow-up actions or observations."
+    )
+    question = advisor_cross_message_service.sanitize_summary(question, max_len=600)
+
+    confirm_session_id = _cross_confirm_session_id(thread_id)
+
+    # Post to receiver's confirmation session
+    await chat_history_service.save_message(
+        user_id=receiver_user_id,
+        session_id=confirm_session_id,
+        role="assistant",
+        content=question,
+        metadata={
+            "type": "cross_advisor_health_concern",
+            "thread_id": thread_id,
+            "peer_user_id": requester_user_id,
+        },
+    )
+
+    # Mirror to collab audit thread
+    await _post_collab_audit(
+        user_id=receiver_user_id,
+        thread_id=thread_id,
+        peer_user_id=requester_user_id,
+        content=question,
+        collab_status="waiting_user_respond",
+        role="user",
+        sender_label=f"{requester_name}'s advisor",
+    )
+
+    # Persist pending action for receiving side (using standard cross-advisor action type)
+    await _create_cross_advisor_pending_action(
+        user_id=receiver_user_id,
+        session_id=confirm_session_id,
+        thread_id=thread_id,
+        source_message_id=message_doc["message_id"],
+        requester_user_id=requester_user_id,
+        approver_user_id=receiver_user_id,
+        resume_payload={
+            "concern_type": "health_advice",
+            "concern_message": concern_message,
+            "advisor_context": advisor_context,
+            "question_to_user": question,
+        },
+        status=CrossAdvisorPendingActionStatus.AWAITING_USER_CONFIRM.value,
+        turn_count=0,
+    )
+
+    await advisor_cross_message_service.mark_processed(message_doc["message_id"])
+
+
 async def _lookup_display_name(user_id: str) -> str:
     """Best-effort name lookup for templated questions / audit messages."""
     try:
@@ -1304,6 +1572,15 @@ def _build_tools(candidates: list[SkillIndexItem]) -> list[dict]:
                         "reason": {"type": "string", "description": "Why requester asks for completion."},
                     },
                 },
+                "propose_peer_outreach": {
+                    "type": "boolean",
+                    "description": (
+                        "Set to true when the user expressed concern/worry about another person's health "
+                        "and you'd like to offer reaching out to their advisor. Example: user says 'I'm worried "
+                        "about Emma's sleep' — you give advice, then ask 'Would you like me to reach out to her "
+                        "advisor?' This creates a confirmation prompt before initiating cross-advisor contact."
+                    ),
+                },
             },
             "required": ["reply_class", "is_write_operation_task", "should_execute_skill", "response_text", "skill_id"],
         },
@@ -1374,6 +1651,12 @@ This app helps teens and young adults with chronic health conditions stay active
 You have one mandatory routing tool: `route_response`.
 Always call it exactly once for every user message.
 
+**When another person is mentioned** (by name, relationship, or email):
+1. Always set the appropriate `target_user_hint` or `target_email`
+2. Consider whether this is a health concern → if yes, set `propose_peer_outreach=true` and provide advice
+3. If it's a write action (marking task complete), use cross-advisor routing instead
+4. The system will auto-detect family/team relationships and resolve who you mean
+
 Protocol contract:
 - `reply_class` must be one of: `clarification_needed`, `planned`, `executed`, `failed`.
 - You must set `is_write_operation_task` as a boolean judgment in this first call.
@@ -1383,12 +1666,25 @@ Protocol contract:
 **Set `should_execute_skill=true` when:**
 - The user asks a question that requires querying their personal data
 - The user asks about their activity, sleep, tasks, medication schedule, health trends
-- The user wants to ADD, CREATE, or SET a new task or reminder
-- The user wants to COMPLETE, MARK DONE, or FINISH a task (including another person's task)
+- The user wants to ADD, CREATE, or SET a new task or reminder (their own)
 - The user asks about school homework, email, or anything requiring external system access
 - Choose the most relevant skill from the available candidates
 - If the user mentions another person by email (e.g., "check tasks of alice@example.com"), set `target_email` to that email so we query that person's data instead of the requester's
 - If the user refers to another person without an email (e.g., "my daughter", "my son", "my child", or a team member's name like "Eimer"), set `target_user_hint` to that exact phrase or name. **Do NOT ask for confirmation — just pass it to the skill and let it look up the person in your teams.**
+
+**Use cross-advisor routing when:**
+- The user wants to take a WRITE action on ANOTHER person's data (e.g., mark their task complete, confirm their action)
+- The user wants to SEND A MESSAGE or COMMUNICATE something to another user through their advisor
+- This is the coordination mechanism — the receiving user must confirm before the action proceeds
+- Set `cross_advisor_action_type` to `"tasks_complete"` and populate `cross_action_params` with the intent
+
+**Propose peer outreach (`propose_peer_outreach=true`) when:**
+- The user expresses **worry, concern, or observation** about another person's health (e.g., "I'm worried about Emma's sleep", "Eimer seems anxious lately")
+- You provide relevant health advice or guidance in your response
+- AND you want to offer reaching out to that person's advisor so they can help directly
+- Your response should acknowledge the concern, provide advice, THEN ask "Would you like me to reach out to their advisor?"
+- Set both `target_user_hint`/`target_email` (to identify the person) AND `propose_peer_outreach=true`
+- Do NOT set this if the user is asking about their own health — only for concerns about others
 
 **Set `should_execute_skill=false` when:**
 - General health advice or tips
@@ -1398,13 +1694,16 @@ Protocol contract:
 
 **Cross-advisor write requests (`cross_advisor_action_type`):**
 - Default to `"none"`.
-- Set to `"tasks_complete"` ONLY when the user wants to mark ANOTHER user's task complete
-  (e.g., "mark Eimer's task xxxxx complete", "complete Mom's task task_abc").
-- When set to `"tasks_complete"`, you MUST also populate `cross_action_params.task_id` with
-  the task id from the user message, AND set `target_user_hint` (or `target_email`) to the
-  peer user.
-- Also populate `cross_action_params.reason` when the user provides one.
-- Do NOT use `tasks_complete` for the user's own tasks — use the regular skill flow instead.
+- **When another person is involved in a write action (not just a read/query)**, use cross-advisor routing.
+  This is the mechanism for coordinating between users. Examples:
+  - "mark Eimer's task xxxxx complete" → `"tasks_complete"`
+  - "tell Mom's advisor that Emma took her medication" → `"tasks_complete"`
+  - "let her know..." or "forward a message to..." about another user → `"tasks_complete"` (brief message in the context)
+- When set to `"tasks_complete"`, populate `cross_action_params` with available context:
+  - `task_id` (required if it's a task action)
+  - `task_name`, `reason`, or the core message intent
+  - Set `target_user_hint` (or `target_email`) to identify the peer user
+- Do NOT use cross-advisor routing for the user's own data — use the regular skill flow.
 
 **Key distinction:** "What medicine should I take now?" = needs data (execute skill) ≠ "What medications treat diabetes?" = general knowledge (direct response)
 {skill_summary}
