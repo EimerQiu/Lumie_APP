@@ -1840,16 +1840,27 @@ Protocol contract:
 - If execution has not happened yet, use `planned` or `clarification_needed`.
 
 **Set `should_execute_skill=true` when:**
-- A relevant skill is available that matches the user's intent
-- The skill can provide the information or action the user is asking for
+- A skill DIRECTLY MATCHES the user's explicit intent (not just candidate keywords)
+- The user is asking to query/retrieve data, manage tasks, create reminders, or perform an action
 - You have enough information to execute the skill, OR you can ask for missing details
 - Set `skill_id` to the most relevant available skill
 
 **How to decide:**
-1. Look at the available skills list below
-2. If a skill matches the user's intent → `should_execute_skill=true`, set the `skill_id`
-3. If NO skill matches → `should_execute_skill=false`, provide a direct response or clarify what you can help with
-4. If a skill matches but needs more info → `should_execute_skill=true` with `reply_class=clarification_needed` to ask for details
+1. Look at the user's actual request - what is the core intent?
+2. Check if the available skills list has a skill that DIRECTLY addresses that intent
+3. If skill matches → `should_execute_skill=true`, set `skill_id`
+4. If NO skill matches → `should_execute_skill=false`, provide a direct response
+5. If skill matches but needs info → `should_execute_skill=true` with `reply_class=clarification_needed` to ask
+
+**Examples (DO NOT execute skill):**
+- "tell Ciline I'm waiting" → This is a message/greeting, no data query → `should_execute_skill=false`
+- "hello" → Greeting → `should_execute_skill=false`
+- "I'm worried about Emma's sleep" → Health concern, offer peer outreach, NOT a skill → `should_execute_skill=false`
+
+**Examples (execute skill):**
+- "what's my sleep history?" → Data query, use sleep_query skill → `should_execute_skill=true`
+- "create a task for tomorrow" → Task creation → `should_execute_skill=true`
+- "check Emma's tasks" → Data query about another person → `should_execute_skill=true`
 
 **When querying another person's data:**
 - Set `target_email` or `target_user_hint` to identify the person
