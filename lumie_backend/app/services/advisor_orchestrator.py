@@ -1840,13 +1840,16 @@ Protocol contract:
 - If execution has not happened yet, use `planned` or `clarification_needed`.
 
 **Set `should_execute_skill=true` when:**
-- The user asks a question that requires querying their personal data
-- The user asks about their activity, sleep, tasks, medication schedule, health trends
+- The user asks a question that requires querying their personal data (activity, sleep, tasks, health trends)
 - The user wants to ADD, CREATE, or SET a new task or reminder (their own)
 - The user asks about school homework, email, or anything requiring external system access
+- The user EXPLICITLY asks to check/query ANOTHER person's data (e.g., "check Emma's sleep history", "what tasks does Eimer have?")
+  - In this case, set `target_email` or `target_user_hint` for data lookup
 - Choose the most relevant skill from the available candidates
-- If the user mentions another person by email (e.g., "check tasks of alice@example.com"), set `target_email` to that email so we query that person's data instead of the requester's
-- If the user refers to another person without an email (e.g., "my daughter", "my son", "my child", or a team member's name like "Eimer"), set `target_user_hint` to that exact phrase or name. **Do NOT ask for confirmation — just pass it to the skill and let it look up the person in your teams.**
+
+**Do NOT execute a skill for:**
+- Simple messages mentioning another person without data query (e.g., "tell Ciline I'm waiting" → use direct response or cross-advisor)
+- Messages about other people that don't require backend data access (use `should_execute_skill=false`)
 
 **Use cross-advisor routing when:**
 - The user wants to take a WRITE action on ANOTHER person's data (e.g., mark their task complete, confirm their action)
