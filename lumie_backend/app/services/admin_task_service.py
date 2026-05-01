@@ -4,7 +4,7 @@ Business logic for admin dashboard task operations (global task view,
 admin complete, admin delete, reward calculation).
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional, List
 from fastapi import HTTPException, status
 
@@ -73,9 +73,11 @@ class AdminTaskService:
         # Get template info if from a template
         rpttask_list = []
         min_interval = 0
+        template_name = None
         if task.get("rpttask_id"):
             template = await db.task_templates.find_one({"id": task["rpttask_id"]})
             if template:
+                template_name = template.get("template_name")
                 min_interval = template.get("min_interval", 0)
                 for tw in template.get("time_window_list", []):
                     # Convert HH:MM to minutes from midnight
@@ -107,6 +109,7 @@ class AdminTaskService:
             min_interval=min_interval,
             family_id=task.get("team_id"),
             family_name=family_name,
+            template_name=template_name,
         )
 
     async def get_task_by_id(self, task_id: str, requesting_user_id: str) -> AdminTaskData:
@@ -245,6 +248,7 @@ class AdminTaskService:
         admin_user_id: str,
         task_id: str,
         time_zone: str = "UTC",
+        completed_at: Optional[datetime] = None,
     ) -> dict:
         """Admin marks any task as completed"""
         db = get_database()
@@ -279,10 +283,23 @@ class AdminTaskService:
             return {"message": "Task is already completed"}
 
         now = datetime.utcnow()
+        # If admin supplied an explicit completed_at (e.g. for expired tasks,
+        # the UI sends the task's close time), honor it but never write a
+        # future timestamp. Normalize to naive UTC so it lines up with how
+        # the rest of the codebase stores timestamps.
+        effective_completed_at = now
+        if completed_at is not None:
+            naive_completed_at = (
+                completed_at.astimezone(timezone.utc).replace(tzinfo=None)
+                if completed_at.tzinfo is not None
+                else completed_at
+            )
+            if naive_completed_at <= now:
+                effective_completed_at = naive_completed_at
         await db.tasks.update_one(
             {"task_id": task_id},
             {"$set": {
-                "completed_at": now,
+                "completed_at": effective_completed_at,
                 "updated_at": now,
             }}
         )

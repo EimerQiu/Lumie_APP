@@ -8,10 +8,11 @@ import shutil
 import subprocess
 import base64
 import logging
+import json
 import re
 from pathlib import Path
 from datetime import datetime, timedelta
-from typing import Optional, List
+from typing import Optional, List, Any
 from fastapi import HTTPException, status, UploadFile
 from zoneinfo import ZoneInfo
 import httpx
@@ -332,6 +333,165 @@ class TaskService:
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
                 detail="Failed to analyze nutrition images",
+            )
+
+    async def analyze_medicine_prescription_uploads(
+        self, files: List[UploadFile]
+    ) -> list[dict[str, str]]:
+        """Analyze prescription images and return structured medicine+frequency rows."""
+        if not files:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="No files uploaded",
+            )
+        if len(files) > 12:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="At most 12 files are allowed",
+            )
+
+        content: list[dict[str, Any]] = [
+            {
+                "type": "text",
+                "text": (
+                    "You are extracting structured prescription information from medical prescription photos. "
+                    "Return JSON only in this exact shape: "
+                    '{"medications":[{"medicine_name":"...","frequency":"..."}]}. '
+                    "Include only medicines that are clearly visible. "
+                    "If frequency is unclear, use 'Unknown'. "
+                    "Do not include dosage unless it is part of the medicine name text itself. "
+                    "No markdown, no extra keys, no commentary."
+                ),
+            }
+        ]
+
+        added = 0
+        for upload in files:
+            try:
+                media_type, _ = self._validate_media_upload(upload)
+                if media_type != "image":
+                    continue
+                image_bytes = await upload.read()
+                if not image_bytes:
+                    continue
+                content_type = (upload.content_type or "").lower()
+                if not content_type.startswith("image/"):
+                    content_type = "image/jpeg"
+                b64 = base64.b64encode(image_bytes).decode("ascii")
+                content.append(
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": f"data:{content_type};base64,{b64}"},
+                    }
+                )
+                added += 1
+            finally:
+                await upload.close()
+
+        if added == 0:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Please upload at least one image file",
+            )
+
+        async def _call_openai_direct() -> Optional[str]:
+            if not settings.OPENAI_API_KEY:
+                return None
+            url = f"{settings.OPENAI_API_BASE_URL.rstrip('/')}/chat/completions"
+            payload = {
+                "model": settings.OPENAI_VISION_MODEL,
+                "messages": [{"role": "user", "content": content}],
+                "max_tokens": 220 * added,
+                "temperature": 0.0,
+                "response_format": {"type": "json_object"},
+            }
+            headers = {
+                "Authorization": f"Bearer {settings.OPENAI_API_KEY}",
+                "Content-Type": "application/json",
+            }
+            async with httpx.AsyncClient(timeout=120.0) as client:
+                resp = await client.post(url, headers=headers, json=payload)
+                if resp.status_code >= 400:
+                    logger.warning(
+                        "OpenAI prescription analyze failed: status=%s body=%s",
+                        resp.status_code,
+                        resp.text[:500],
+                    )
+                    return None
+                data = resp.json()
+            message = ((data.get("choices") or [{}])[0] or {}).get("message") or {}
+            raw = message.get("content")
+            if isinstance(raw, str):
+                return raw
+            if isinstance(raw, list):
+                parts = [
+                    item.get("text", "")
+                    for item in raw
+                    if isinstance(item, dict) and isinstance(item.get("text"), str)
+                ]
+                return " ".join(parts)
+            return None
+
+        def _parse_output(raw_text: str) -> list[dict[str, str]]:
+            text = raw_text.strip()
+            start = text.find("{")
+            end = text.rfind("}")
+            if start != -1 and end != -1 and end > start:
+                text = text[start : end + 1]
+            data = {}
+            try:
+                data = json.loads(text)
+            except Exception:
+                pass
+            meds = data.get("medications", []) if isinstance(data, dict) else []
+            if not isinstance(meds, list):
+                meds = []
+
+            parsed: list[dict[str, str]] = []
+            for item in meds:
+                if not isinstance(item, dict):
+                    continue
+                name = str(item.get("medicine_name", "")).strip()
+                freq = str(item.get("frequency", "")).strip()
+                if not name:
+                    continue
+                parsed.append(
+                    {
+                        "medicine_name": name[:200],
+                        "frequency": (freq or "Unknown")[:120],
+                    }
+                )
+            return parsed
+
+        try:
+            direct_text = await _call_openai_direct()
+            if direct_text is not None:
+                text = direct_text
+            else:
+                logger.info(
+                    "Falling back to PALEBLUEDOT vision path for prescription analysis"
+                )
+                response = await chat_completion(
+                    messages=[{"role": "user", "content": content}],
+                    max_tokens=1200,
+                    temperature=0.0,
+                )
+                text = response.text or ""
+
+            rows = _parse_output(text)
+            if not rows:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail="Could not extract medicine information from images",
+                )
+            return rows
+        except HTTPException:
+            raise
+        except Exception as exc:
+            logger.warning("Prescription upload analysis failed: %s", exc)
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="Failed to analyze prescription images",
             )
 
     def _validate_media_upload(self, upload: UploadFile) -> tuple[str, str]:

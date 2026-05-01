@@ -226,6 +226,7 @@ class AdminTaskData(BaseModel):
     min_interval: int = 0
     family_id: Optional[str] = None
     family_name: Optional[str] = None
+    template_name: Optional[str] = None
 
 
 class AdminTaskListResponse(BaseModel):
@@ -238,6 +239,7 @@ class AdminTaskCompleteRequest(BaseModel):
     """Request to complete a task as admin"""
     task_id: str
     time_zone: str = "UTC"
+    completed_at: Optional[datetime] = None
 
 
 # ============ AI Tips Models ============

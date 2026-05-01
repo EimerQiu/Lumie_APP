@@ -684,10 +684,11 @@ Protocol contract:
 - The user asks a question that requires querying their personal data
 - The user asks about their activity, sleep, tasks, medication schedule, health trends
 - The user wants to ADD, CREATE, or SET a new task or reminder
+- The user wants to COMPLETE, MARK DONE, or FINISH a task (including another person's task)
 - The user asks about school homework, email, or anything requiring external system access
 - Choose the most relevant skill from the available candidates
 - If the user mentions another person by email (e.g., "check tasks of alice@example.com"), set `target_email` to that email so we query that person's data instead of the requester's
-- If the user refers to another person without an email (e.g., "my daughter", "my son", "my child", or a team member's name), set `target_user_hint` to that exact phrase or name
+- If the user refers to another person without an email (e.g., "my daughter", "my son", "my child", or a team member's name like "Eimer"), set `target_user_hint` to that exact phrase or name. **Do NOT ask for confirmation — just pass it to the skill and let it look up the person in your teams.**
 
 **Set `should_execute_skill=false` when:**
 - General health advice or tips

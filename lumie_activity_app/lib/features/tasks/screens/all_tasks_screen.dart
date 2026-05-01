@@ -949,6 +949,10 @@ class _AdminTaskCard extends StatelessWidget {
     }
   }
 
+  Color get _cardBackgroundColor {
+    return _statusColor.withValues(alpha: 0.1);
+  }
+
   String get _statusLabel {
     switch (task.status) {
       case 'completed':
@@ -971,6 +975,19 @@ class _AdminTaskCard extends StatelessWidget {
     return 'View only - this is another user\'s personal task';
   }
 
+  String _formatCompletedAt(String completedAtStr) {
+    try {
+      final dt = DateTime.parse(completedAtStr).toLocal();
+      final date =
+          '${dt.year}-${dt.month.toString().padLeft(2, '0')}-${dt.day.toString().padLeft(2, '0')}';
+      final time =
+          '${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
+      return '$date $time';
+    } catch (_) {
+      return completedAtStr;
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     // If user is not admin, disable swipe actions
@@ -978,7 +995,7 @@ class _AdminTaskCard extends StatelessWidget {
       return Card(
         margin: const EdgeInsets.only(bottom: 8),
         elevation: 0,
-        color: Colors.white.withValues(alpha: 0.70),
+        color: _cardBackgroundColor,
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(12),
           side: BorderSide(color: AppColors.surfaceLight),
@@ -1018,6 +1035,7 @@ class _AdminTaskCard extends StatelessWidget {
       child: Card(
         margin: const EdgeInsets.only(bottom: 8),
         elevation: 0,
+        color: _cardBackgroundColor,
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(12),
           side: BorderSide(color: AppColors.surfaceLight),
@@ -1037,6 +1055,23 @@ class _AdminTaskCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          // Time window (moved to top)
+          Row(
+            children: [
+              const Icon(Icons.schedule, size: 14, color: AppColors.textLight),
+              const SizedBox(width: 4),
+              Text(
+                task.timeWindowText,
+                style: const TextStyle(
+                  fontSize: 12,
+                  color: AppColors.textSecondary,
+                ),
+              ),
+            ],
+          ),
+
+          const SizedBox(height: 8),
+
           // Header: name + status badge
           Row(
             children: [
@@ -1070,6 +1105,28 @@ class _AdminTaskCard extends StatelessWidget {
               ),
             ],
           ),
+
+          // Completed at (for completed tasks)
+          if (task.isCompleted && task.completedAt != null) ...[
+            const SizedBox(height: 4),
+            Row(
+              children: [
+                const Icon(
+                  Icons.check_circle_outline,
+                  size: 14,
+                  color: AppColors.success,
+                ),
+                const SizedBox(width: 4),
+                Text(
+                  'Completed: ${_formatCompletedAt(task.completedAt!)}',
+                  style: const TextStyle(
+                    fontSize: 12,
+                    color: AppColors.success,
+                  ),
+                ),
+              ],
+            ),
+          ],
 
           // Description
           if (task.rpttaskInfo != null && task.rpttaskInfo!.isNotEmpty) ...[
@@ -1113,23 +1170,6 @@ class _AdminTaskCard extends StatelessWidget {
           ],
 
           const SizedBox(height: 8),
-
-          // Time window
-          Row(
-            children: [
-              const Icon(Icons.schedule, size: 14, color: AppColors.textLight),
-              const SizedBox(width: 4),
-              Text(
-                task.timeWindowText,
-                style: const TextStyle(
-                  fontSize: 12,
-                  color: AppColors.textSecondary,
-                ),
-              ),
-            ],
-          ),
-
-          const SizedBox(height: 4),
 
           // User + team info
           Row(

@@ -53,6 +53,7 @@ async def admin_complete_task(
         admin_user_id=user_id,
         task_id=data.task_id,
         time_zone=data.time_zone,
+        completed_at=data.completed_at,
     )
 
 

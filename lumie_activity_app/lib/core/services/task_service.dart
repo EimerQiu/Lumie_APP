@@ -249,6 +249,62 @@ class TaskService {
     }
   }
 
+  /// Analyze prescription images and return structured medicine entries.
+  Future<List<PrescriptionMedicineItem>> analyzeMedicinePrescriptionImages({
+    required List<File> files,
+  }) async {
+    if (_token == null) throw Exception('Not authenticated');
+    if (files.isEmpty) throw Exception('No files to analyze');
+    if (files.length > 12) throw Exception('At most 12 photos are allowed');
+
+    final multipartFiles = <MultipartFile>[];
+    for (final file in files) {
+      final filename = file.path.split('/').last;
+      multipartFiles.add(
+        await MultipartFile.fromFile(file.path, filename: filename),
+      );
+    }
+
+    try {
+      final response = await _dio.post(
+        '${ApiConstants.baseUrl}/tasks/medicine/analyze-images',
+        data: FormData.fromMap({'files': multipartFiles}),
+        options: Options(headers: {'Authorization': 'Bearer $_token'}),
+      );
+      final data = response.data;
+      if (data is! Map<String, dynamic>) {
+        throw Exception('Invalid prescription analysis response');
+      }
+      final rows = (data['prescriptions'] as List?) ?? const [];
+      final parsed = <PrescriptionMedicineItem>[];
+      for (final row in rows) {
+        if (row is! Map<String, dynamic>) continue;
+        final name =
+            (row['medicine_name'] ?? row['medicine'] ?? row['name'] ?? '')
+                .toString()
+                .trim();
+        final frequency =
+            (row['frequency'] ?? row['intake_frequency'] ?? 'Unknown')
+                .toString()
+                .trim();
+        if (name.isEmpty) continue;
+        parsed.add(
+          PrescriptionMedicineItem(
+            medicineName: name,
+            frequency: frequency.isEmpty ? 'Unknown' : frequency,
+          ),
+        );
+      }
+      return parsed;
+    } on DioException catch (e) {
+      final data = e.response?.data;
+      if (data is Map<String, dynamic> && data['detail'] != null) {
+        throw Exception(data['detail'].toString());
+      }
+      throw Exception('Failed to analyze prescription images');
+    }
+  }
+
   /// Extend a task's close_datetime by 10% of its duration
   Future<Task> extendTask(String taskId) async {
     if (_token == null) throw Exception('Not authenticated');
@@ -517,16 +573,25 @@ class TaskService {
   }
 
   /// Admin complete a task
+  ///
+  /// Pass [completedAt] to override the server-side timestamp (used for
+  /// expired tasks so the done time matches the close time, not now).
   Future<void> adminCompleteTask({
     required String taskId,
     String timeZone = 'UTC',
+    DateTime? completedAt,
   }) async {
     if (_token == null) throw Exception('Not authenticated');
+
+    final body = <String, dynamic>{'task_id': taskId, 'time_zone': timeZone};
+    if (completedAt != null) {
+      body['completed_at'] = completedAt.toUtc().toIso8601String();
+    }
 
     final response = await http.post(
       Uri.parse('${ApiConstants.baseUrl}${ApiConstants.adminTaskComplete}'),
       headers: _headers,
-      body: json.encode({'task_id': taskId, 'time_zone': timeZone}),
+      body: json.encode(body),
     );
 
     if (response.statusCode == 200) return;
@@ -594,4 +659,14 @@ class TaskService {
     }
     _handleError(response, 'get AI tips');
   }
+}
+
+class PrescriptionMedicineItem {
+  final String medicineName;
+  final String frequency;
+
+  const PrescriptionMedicineItem({
+    required this.medicineName,
+    required this.frequency,
+  });
 }

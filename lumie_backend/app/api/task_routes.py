@@ -217,6 +217,22 @@ async def analyze_nutrition_images(
     return {"summary": summary}
 
 
+@router.post("/medicine/analyze-images")
+async def analyze_medicine_images(
+    files: list[UploadFile] = File(...),
+    user_id: str = Depends(get_current_user_id),
+):
+    """
+    Analyze prescription photos and extract structured medicine rows.
+
+    - Max 12 images
+    - Returns medicine_name + frequency pairs
+    """
+    _ = user_id  # auth gate
+    prescriptions = await task_service.analyze_medicine_prescription_uploads(files)
+    return {"prescriptions": prescriptions}
+
+
 @router.post("/{task_id}/extend", response_model=TaskResponse)
 async def extend_task(
     task_id: str,

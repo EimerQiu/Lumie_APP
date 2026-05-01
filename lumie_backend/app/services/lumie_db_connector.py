@@ -146,7 +146,9 @@ async def execute(
     # ── Step 7: Execute the script ───────────────────────────────────────
     logger.info(f"[connector] job={job_id} executing script...")
     try:
-        result = await _execute_script(db, script, request_user_id, target_user_id, user_timezone)
+        result = await _execute_script(
+            db, script, request_user_id, target_user_id, user_timezone, skill_id
+        )
     except Exception as e:
         tb = traceback.format_exc()
         logger.error(f"[connector] job={job_id} script execution exception: {e}")
@@ -249,13 +251,13 @@ def _analyze_script(script: str) -> dict:
 
 
 # ── Script execution ─────────────────────────────────────────────────────────
-
 async def _execute_script(
     db_instance,
     script: str,
     request_user_id: str,
     target_user_id: Optional[str],
     user_timezone: str = "UTC",
+    skill_id: str = "",
 ) -> dict:
     """Execute the script in a restricted context with DB access.
 
@@ -282,13 +284,97 @@ async def _execute_script(
         })
         return max(0, pending_before - pending_after)
 
+    # Runtime guard state for sensitive single-task flows.
+    guard_state: dict[str, Any] = {
+        "last_query_count": None,
+        "last_query_task_id": None,
+    }
+
+    class _GuardedCursor:
+        def __init__(self, cursor):
+            self._cursor = cursor
+
+        async def to_list(self, length=None):
+            docs = await self._cursor.to_list(length=length)
+            if skill_id == "tasks_complete":
+                guard_state["last_query_count"] = len(docs)
+                if len(docs) == 1 and isinstance(docs[0], dict):
+                    guard_state["last_query_task_id"] = docs[0].get("task_id")
+                else:
+                    guard_state["last_query_task_id"] = None
+            return docs
+
+        def __getattr__(self, name):
+            return getattr(self._cursor, name)
+
+    class _GuardedTasksCollection:
+        def __init__(self, coll):
+            self._coll = coll
+
+        def find(self, *args, **kwargs):
+            return _GuardedCursor(self._coll.find(*args, **kwargs))
+
+        async def find_one(self, *args, **kwargs):
+            doc = await self._coll.find_one(*args, **kwargs)
+            if skill_id == "tasks_complete":
+                guard_state["last_query_count"] = 1 if doc else 0
+                guard_state["last_query_task_id"] = doc.get("task_id") if isinstance(doc, dict) else None
+            return doc
+
+        async def update_many(self, *args, **kwargs):
+            if skill_id == "tasks_complete":
+                raise RuntimeError("tasks_complete: batch updates are not allowed")
+            return await self._coll.update_many(*args, **kwargs)
+
+        async def delete_many(self, *args, **kwargs):
+            if skill_id == "tasks_complete":
+                raise RuntimeError("tasks_complete: batch deletes are not allowed")
+            return await self._coll.delete_many(*args, **kwargs)
+
+        async def update_one(self, filter_doc, *args, **kwargs):
+            if skill_id == "tasks_complete":
+                if guard_state.get("last_query_count") != 1:
+                    raise RuntimeError("tasks_complete: query must resolve exactly one task before write")
+                resolved_task_id = guard_state.get("last_query_task_id")
+                if not resolved_task_id:
+                    raise RuntimeError("tasks_complete: missing resolved task_id from query")
+                write_task_id = (filter_doc or {}).get("task_id")
+                if write_task_id != resolved_task_id:
+                    raise RuntimeError("tasks_complete: write must target the single resolved task_id")
+            return await self._coll.update_one(filter_doc, *args, **kwargs)
+
+        async def delete_one(self, filter_doc, *args, **kwargs):
+            if skill_id == "tasks_complete":
+                if guard_state.get("last_query_count") != 1:
+                    raise RuntimeError("tasks_complete: query must resolve exactly one task before delete")
+                resolved_task_id = guard_state.get("last_query_task_id")
+                if not resolved_task_id:
+                    raise RuntimeError("tasks_complete: missing resolved task_id from query")
+                write_task_id = (filter_doc or {}).get("task_id")
+                if write_task_id != resolved_task_id:
+                    raise RuntimeError("tasks_complete: delete must target the single resolved task_id")
+            return await self._coll.delete_one(filter_doc, *args, **kwargs)
+
+        def __getattr__(self, name):
+            return getattr(self._coll, name)
+
+    class _GuardedDB:
+        def __init__(self, raw_db):
+            self._raw = raw_db
+            self.tasks = _GuardedTasksCollection(raw_db.tasks)
+
+        def __getattr__(self, name):
+            return getattr(self._raw, name)
+
+    effective_db = _GuardedDB(db_instance) if skill_id == "tasks_complete" else db_instance
+
     # Build the execution namespace
     import asyncio as _asyncio
     from datetime import timedelta, timezone
     from zoneinfo import ZoneInfo
     namespace = {
         "asyncio": _asyncio,
-        "db": db_instance,
+        "db": effective_db,
         "request_user_id": request_user_id,
         "target_user_id": target_user_id or request_user_id,
         "TARGET_USER_ID": target_user_id or request_user_id,

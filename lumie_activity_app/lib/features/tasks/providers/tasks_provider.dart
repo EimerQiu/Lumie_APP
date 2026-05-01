@@ -24,12 +24,9 @@ class TasksProvider extends ChangeNotifier {
   // Getters
   TasksState get state => _state;
   List<Task> get tasks => _tasks;
-  List<Task> get pendingTasks =>
-      _tasks.where((t) => t.isPending).toList();
-  List<Task> get expiredTasks =>
-      _tasks.where((t) => t.isExpired).toList();
-  List<Task> get completedTasks =>
-      _tasks.where((t) => t.isCompleted).toList();
+  List<Task> get pendingTasks => _tasks.where((t) => t.isPending).toList();
+  List<Task> get expiredTasks => _tasks.where((t) => t.isExpired).toList();
+  List<Task> get completedTasks => _tasks.where((t) => t.isCompleted).toList();
 
   /// Display list: backend already filters to within-window + not-done tasks
   List<Task> get activeTasks => _tasks;
@@ -210,6 +207,12 @@ class TasksProvider extends ChangeNotifier {
 
   Future<String> analyzeNutritionImages({required List<File> files}) async {
     return await _taskService.analyzeNutritionImages(files: files);
+  }
+
+  Future<List<PrescriptionMedicineItem>> analyzeMedicinePrescriptionImages({
+    required List<File> files,
+  }) async {
+    return await _taskService.analyzeMedicinePrescriptionImages(files: files);
   }
 
   /// Extend a task's close_datetime by 10% of its duration

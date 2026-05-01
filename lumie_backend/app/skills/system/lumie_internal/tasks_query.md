@@ -70,12 +70,13 @@ The primary skill for all task and medication queries — whether the user wants
 See [`TaskResponse` in models/task.py](../../models/task.py)
 
 ### Relevant fields for task queries:
-- `task_name` (string) — For template-generated: `"{template_name} - {window_name}"` (e.g., "Daily Med - 9AM Phosphate"). Extract display name from part after " - "
+- `task_name` (string) 
 - `task_type` (TaskType enum) — "Medicine", "Study", "Exercise", "Nutrition", "Work", "Hobbies", "Social", "Life"
 - `open_datetime` (string, "YYYY-MM-DD HH:MM" UTC format, no Z suffix) — window opens
 - `close_datetime` (string, "YYYY-MM-DD HH:MM" UTC format, no Z suffix) — window closes
 - `completed_at` (datetime ISO 8601 with Z suffix, if present) — field ABSENT if not completed
 - `task_info` (string or null) — optional notes
+- `rpttask_id` (string or null) — template ID for template-generated tasks; 
 
 **Timestamp format note:** `open_datetime` and `close_datetime` use simplified `"YYYY-MM-DD HH:MM"` format (UTC, no Z). `completed_at` uses full ISO 8601 format with Z suffix (e.g., `"2026-04-10T14:30:00Z"`).
 
@@ -159,24 +160,23 @@ def fmt_local(dt_str):
     except Exception:
         return dt_str
 
-def display_name(task_name):
-    if " - " in task_name:
-        return task_name.split(" - ", 1)[1]
-    return task_name
+
 ```
 
 # Output Guidance
 
 ## Summary
-- Time-range: "You have **Vitamin D** to take right now. **DHA** is coming up at 4:00 PM. You took **Iron** this morning."
+- Time-range (current): "You have **Vitamin D** to take right now. **DHA** is coming up at 4:00 PM. You took **Iron** this morning."
+- Time-range (expired): "You had 2 expired tasks from 2026-04-28: **Daily Med - 9AM Phosphate** and **Weekly Exercise - Monday Strength**."
 - Keyword search: "I found 2 tasks matching 'flight': **Flight Booking** (due Mar 30, 3:00 PM - 5:00 PM) with note: 'Book before April'."
 - No results: "No tasks found for that period." / "No tasks matching '[keyword]'."
 
-Rules: bold task names, local timezone times, mention missed tasks.
+Rules: 
+- Bold all task names, local timezone times, mention missed/expired tasks
 
 ## Data arrays
 ```json
-{"name": "Phosphate", "task_type": "Medicine", "time_window": "12:00 PM - 2:00 PM", "status": "active|completed|missed|upcoming", "task_info": "..."}
+{"name": "Daily Med - 9AM Phosphate", "task_type": "Medicine", "time_window": "9:00 AM - 10:00 AM", "status": "active|completed|missed|upcoming", "task_info": "..."}
 ```
 Do NOT include task_id, user_id, _id, or created_by.
 

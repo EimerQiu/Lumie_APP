@@ -842,7 +842,7 @@ class _TaskCompleteDialogState extends State<_TaskCompleteDialog> {
                       const SizedBox(height: 6),
                     ],
                     ConstrainedBox(
-                      constraints: const BoxConstraints(minHeight: 180),
+                      constraints: const BoxConstraints(minHeight: 130),
                       child: TextField(
                         controller: _noteController,
                         decoration: InputDecoration(

@@ -247,64 +247,79 @@ class AdminTasksProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Admin complete a task
+  /// Admin complete a task.
+  ///
+  /// For expired tasks, the completion timestamp is set to the task's close
+  /// time (not "now") so reward windows and history reflect when the task was
+  /// actually due.
   Future<void> completeTask(String taskId) async {
+    final task = _findTask(taskId);
+    final overrideCompletedAt = (task != null && task.isExpired)
+        ? _parseCloseDatetimeUtc(task.closeDatetime)
+        : null;
+
     await _taskService.adminCompleteTask(
       taskId: taskId,
       timeZone: _getDeviceTimezone(),
+      completedAt: overrideCompletedAt,
     );
-    // Update local state: set completedAt timestamp
-    _previousTasks = _previousTasks.map((t) {
-      if (t.taskId == taskId) {
-        return AdminTaskData(
-          taskId: t.taskId,
-          userId: t.userId,
-          username: t.username,
-          taskType: t.taskType,
-          openDatetime: t.openDatetime,
-          closeDatetime: t.closeDatetime,
-          rpttaskId: t.rpttaskId,
-          rpttaskName: t.rpttaskName,
-          rpttaskInfo: t.rpttaskInfo,
-          note: t.note,
-          attachments: t.attachments,
-          completedAt: DateTime.now().toIso8601String(),
-          rpttaskType: t.rpttaskType,
-          rpttaskList: t.rpttaskList,
-          smallTaskId: t.smallTaskId,
-          minInterval: t.minInterval,
-          familyId: t.familyId,
-          familyName: t.familyName,
-        );
-      }
-      return t;
-    }).toList();
-    _upcomingTasks = _upcomingTasks.map((t) {
-      if (t.taskId == taskId) {
-        return AdminTaskData(
-          taskId: t.taskId,
-          userId: t.userId,
-          username: t.username,
-          taskType: t.taskType,
-          openDatetime: t.openDatetime,
-          closeDatetime: t.closeDatetime,
-          rpttaskId: t.rpttaskId,
-          rpttaskName: t.rpttaskName,
-          rpttaskInfo: t.rpttaskInfo,
-          note: t.note,
-          attachments: t.attachments,
-          completedAt: DateTime.now().toIso8601String(),
-          rpttaskType: t.rpttaskType,
-          rpttaskList: t.rpttaskList,
-          smallTaskId: t.smallTaskId,
-          minInterval: t.minInterval,
-          familyId: t.familyId,
-          familyName: t.familyName,
-        );
-      }
-      return t;
-    }).toList();
+
+    // Mirror the same timestamp locally so the UI matches what the server
+    // stored.
+    final localCompletedAt =
+        (overrideCompletedAt ?? DateTime.now().toUtc()).toIso8601String();
+
+    AdminTaskData markCompleted(AdminTaskData t) => AdminTaskData(
+      taskId: t.taskId,
+      userId: t.userId,
+      username: t.username,
+      taskType: t.taskType,
+      openDatetime: t.openDatetime,
+      closeDatetime: t.closeDatetime,
+      rpttaskId: t.rpttaskId,
+      rpttaskName: t.rpttaskName,
+      rpttaskInfo: t.rpttaskInfo,
+      note: t.note,
+      attachments: t.attachments,
+      completedAt: localCompletedAt,
+      rpttaskType: t.rpttaskType,
+      rpttaskList: t.rpttaskList,
+      smallTaskId: t.smallTaskId,
+      minInterval: t.minInterval,
+      familyId: t.familyId,
+      familyName: t.familyName,
+    );
+
+    _previousTasks = _previousTasks
+        .map((t) => t.taskId == taskId ? markCompleted(t) : t)
+        .toList();
+    _upcomingTasks = _upcomingTasks
+        .map((t) => t.taskId == taskId ? markCompleted(t) : t)
+        .toList();
     notifyListeners();
+  }
+
+  AdminTaskData? _findTask(String taskId) {
+    for (final t in _previousTasks) {
+      if (t.taskId == taskId) return t;
+    }
+    for (final t in _upcomingTasks) {
+      if (t.taskId == taskId) return t;
+    }
+    return null;
+  }
+
+  /// Backend stores close_datetime as `YYYY-MM-DD HH:MM:SS` in UTC with no
+  /// timezone suffix. Append `Z` before parsing so it isn't interpreted as
+  /// device-local.
+  DateTime? _parseCloseDatetimeUtc(String raw) {
+    try {
+      var s = raw.replaceAll(' ', 'T');
+      if (!s.endsWith('Z') && !s.contains('+')) s += 'Z';
+      return DateTime.parse(s);
+    } catch (_) {
+      return null;
+    }
   }
 
   Future<void> uploadTaskAttachments({
