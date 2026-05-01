@@ -1883,12 +1883,19 @@ async def _resolve_target_user_hint(
     if not candidate_user_ids:
         try:
             if "@" not in hint_lower:
-                # Search by profile name globally - case-insensitive
-                profiles = await db.profiles.find({
-                    "name": {"$regex": hint, "$options": "i"}
-                }).to_list(length=20)
-                if profiles:
-                    candidate_user_ids = {p["user_id"] for p in profiles if p.get("user_id") != request_user_id}
+                # Search by profile name globally - load all and match (case-insensitive)
+                all_profiles = await db.profiles.find({}).to_list(length=None)
+                for profile in all_profiles:
+                    if profile.get("user_id") == request_user_id:
+                        continue
+                    profile_name = (profile.get("name") or "").lower().strip()
+                    if profile_name == hint_lower:  # Exact match
+                        candidate_user_ids.add(profile["user_id"])
+                        break  # Take first exact match
+                    elif hint_lower in profile_name:  # Substring match
+                        candidate_user_ids.add(profile["user_id"])
+
+                if candidate_user_ids:
                     logger.info(f"Global name search: hint='{hint}' found {len(candidate_user_ids)} profile(s)")
         except Exception as e:
             logger.warning(f"Global name search failed: {e}")
