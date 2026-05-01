@@ -1881,26 +1881,33 @@ async def _resolve_target_user_hint(
             if m.get("user_id") != request_user_id
         }
 
-    # Strategy 2: Fallback to global search by name/email if team search found nothing
+    # Strategy 2: Fallback to all team members of all teams the requester belongs to
     if not candidate_user_ids:
         try:
-            if "@" not in hint_lower:
-                # Search by profile name globally - load all and match (case-insensitive)
-                all_profiles = await db.profiles.find({}).to_list(length=None)
-                for profile in all_profiles:
-                    if profile.get("user_id") == request_user_id:
-                        continue
-                    profile_name = (profile.get("name") or "").lower().strip()
-                    if profile_name == hint_lower:  # Exact match
-                        candidate_user_ids.add(profile["user_id"])
-                        break  # Take first exact match
-                    elif hint_lower in profile_name:  # Substring match
-                        candidate_user_ids.add(profile["user_id"])
+            # Find all teams the requester belongs to (any role, any status)
+            all_user_teams = await db.team_members.find({
+                "user_id": request_user_id,
+                "status": "member",
+            }).to_list(length=100)
+
+            if all_user_teams:
+                team_ids = [m["team_id"] for m in all_user_teams]
+                # Get all members of those teams
+                team_members = await db.team_members.find({
+                    "team_id": {"$in": team_ids},
+                    "status": "member",
+                }).to_list(length=500)
+
+                candidate_user_ids = {
+                    m["user_id"]
+                    for m in team_members
+                    if m.get("user_id") != request_user_id
+                }
 
                 if candidate_user_ids:
-                    logger.info(f"Global name search: hint='{hint}' found {len(candidate_user_ids)} profile(s)")
+                    logger.info(f"Team member search: hint='{hint}' found {len(candidate_user_ids)} candidate(s) from {len(team_ids)} team(s)")
         except Exception as e:
-            logger.warning(f"Global name search failed: {e}")
+            logger.warning(f"Team member search failed: {e}")
 
     if not candidate_user_ids:
         return None
