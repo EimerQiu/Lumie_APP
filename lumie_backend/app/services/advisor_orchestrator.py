@@ -766,14 +766,17 @@ async def _handle_skill_execution(
                 "is_write_operation_task": is_write_operation_task,
             }
     elif target_user_hint:
+        logger.info(f"Resolving target_user_hint: {target_user_hint} for user_id={user_id}")
         resolved_id = await _resolve_target_user_hint(
             request_user_id=user_id,
             target_user_hint=target_user_hint,
             team_id=team_id,
         )
+        logger.info(f"Resolution result: {resolved_id}")
         if resolved_id:
             target_user_id = resolved_id
         else:
+            logger.warning(f"Could not resolve target_user_hint: {target_user_hint}")
             return {
                 "type": "guidance",
                 "reply": (
