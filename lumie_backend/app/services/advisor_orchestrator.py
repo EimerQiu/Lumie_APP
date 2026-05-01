@@ -1852,7 +1852,9 @@ async def _resolve_target_user_hint(
 
     db = get_database()
 
-    # Build the set of teams the requester administers.
+    candidate_user_ids: set[str] = set()
+
+    # Strategy 1: Search teams the requester administers
     team_query: dict = {
         "user_id": request_user_id,
         "role": "admin",
@@ -1862,20 +1864,32 @@ async def _resolve_target_user_hint(
         team_query["team_id"] = team_id
 
     admin_memberships = await db.team_members.find(team_query).to_list(length=50)
-    if not admin_memberships:
-        return None
+    if admin_memberships:
+        team_ids = [m["team_id"] for m in admin_memberships]
+        team_members = await db.team_members.find({
+            "team_id": {"$in": team_ids},
+            "status": "member",
+        }).to_list(length=200)
+        candidate_user_ids = {
+            m["user_id"]
+            for m in team_members
+            if m.get("user_id") != request_user_id
+        }
 
-    team_ids = [m["team_id"] for m in admin_memberships]
-    team_members = await db.team_members.find({
-        "team_id": {"$in": team_ids},
-        "status": "member",
-    }).to_list(length=200)
+    # Strategy 2: Fallback to global search by name/email if team search found nothing
+    if not candidate_user_ids:
+        try:
+            # Try email search first (faster, more specific)
+            if "@" not in hint_lower:
+                # Search by profile name or user email globally
+                profiles = await db.profiles.find({
+                    "name": {"$regex": f"^{re.escape(hint.split()[0])}.*", "$options": "i"}
+                }).to_list(length=10)
+                if profiles:
+                    candidate_user_ids = {p["user_id"] for p in profiles if p.get("user_id") != request_user_id}
+        except Exception as e:
+            logger.debug(f"Global name search failed: {e}")
 
-    candidate_user_ids = {
-        m["user_id"]
-        for m in team_members
-        if m.get("user_id") != request_user_id
-    }
     if not candidate_user_ids:
         return None
 
