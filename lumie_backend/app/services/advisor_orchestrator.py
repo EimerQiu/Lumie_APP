@@ -413,24 +413,25 @@ async def _load_cross_task_details(task_id: str, owner_user_id: str) -> dict:
 
 
 async def _extract_target_person_with_llm(message: str) -> Optional[str]:
-    """Use LLM to detect if the user is asking about someone else's health/status.
+    """Use LLM to detect if the user is mentioning another person by name/relationship.
 
-    Returns the person's name/reference if asking about someone else, None if asking about self.
+    Returns the person's name/reference if mentioning someone else, None if talking about self.
 
     Examples:
     - "Did Eimer take all her medication?" → "Eimer"
     - "Emma's sleep is low" → "Emma"
     - "How is my daughter?" → "my daughter"
+    - "Tell Ciline I love her" → "Ciline"
     - "What's my heart rate?" → None (self)
     """
-    prompt = f"""Analyze this message and determine if the user is asking about someone ELSE's health/status, or about their own.
+    prompt = f"""Analyze this message and determine if the user is mentioning or talking about someone ELSE, or about themselves.
 
 Message: "{message}"
 
-If the user is asking about SOMEONE ELSE's health/medication/sleep/exercise/status, respond with ONLY their name or relationship (e.g., "Emma", "John", "my daughter", "my son").
-If the user is asking about their own health/status, or if it's unclear, respond with: "self"
+If the user is mentioning, asking about, or addressing SOMEONE ELSE (by name, email, or relationship), respond with ONLY their name, email, or relationship descriptor (e.g., "Eimer", "Emma", "my daughter", "my son", "Ciline", "john@example.com").
+If the user is talking about their own status, health, or matters, or if it's unclear, respond with: "self"
 
-Do NOT include quotes or explanation. Just the name or "self"."""
+Do NOT include quotes or explanation. Just the name/email/relationship or "self"."""
 
     try:
         response = await chat_completion(
@@ -446,6 +447,7 @@ Do NOT include quotes or explanation. Just the name or "self"."""
         if result in {"self", "self.", "myself", "me", "my own", ""}:
             return None
 
+        logger.debug(f"Extracted target person: {result} from message: {message[:50]}")
         # Otherwise return the name/hint the LLM extracted
         return result if result else None
     except Exception as e:
