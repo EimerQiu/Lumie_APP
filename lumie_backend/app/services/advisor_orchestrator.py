@@ -1840,16 +1840,20 @@ Protocol contract:
 - If execution has not happened yet, use `planned` or `clarification_needed`.
 
 **Set `should_execute_skill=true` when:**
-- The user asks a question that requires querying their personal data (activity, sleep, tasks, health trends)
-- The user wants to ADD, CREATE, or SET a new task or reminder (their own)
-- The user asks about school homework, email, or anything requiring external system access
-- The user EXPLICITLY asks to check/query ANOTHER person's data (e.g., "check Emma's sleep history", "what tasks does Eimer have?")
-  - In this case, set `target_email` or `target_user_hint` for data lookup
-- Choose the most relevant skill from the available candidates
+- A relevant skill is available that matches the user's intent
+- The skill can provide the information or action the user is asking for
+- You have enough information to execute the skill, OR you can ask for missing details
+- Set `skill_id` to the most relevant available skill
 
-**Do NOT execute a skill for:**
-- Simple messages mentioning another person without data query (e.g., "tell Ciline I'm waiting" → use direct response or cross-advisor)
-- Messages about other people that don't require backend data access (use `should_execute_skill=false`)
+**How to decide:**
+1. Look at the available skills list below
+2. If a skill matches the user's intent → `should_execute_skill=true`, set the `skill_id`
+3. If NO skill matches → `should_execute_skill=false`, provide a direct response or clarify what you can help with
+4. If a skill matches but needs more info → `should_execute_skill=true` with `reply_class=clarification_needed` to ask for details
+
+**When querying another person's data:**
+- Set `target_email` or `target_user_hint` to identify the person
+- Example: "check Emma's sleep" → find appropriate skill, set `target_user_hint="Emma"`
 
 **Use cross-advisor routing when:**
 - The user wants to take a WRITE action on ANOTHER person's data (e.g., mark their task complete, confirm their action)
@@ -1866,10 +1870,9 @@ Protocol contract:
 - Do NOT set this if the user is asking about their own health — only for concerns about others
 
 **Set `should_execute_skill=false` when:**
-- General health advice or tips
-- Greetings, small talk, emotional support
-- Medical knowledge questions
-- Questions you can answer without data access
+- NO skill matches the user's intent (no candidates available)
+- The message is general advice, greetings, emotional support, or medical knowledge questions
+- You can provide a helpful direct response without needing a skill
 
 **Cross-advisor write requests (`cross_advisor_action_type`):**
 - Default to `"none"`.
