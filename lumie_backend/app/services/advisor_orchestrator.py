@@ -1966,12 +1966,14 @@ Protocol contract:
 - **When another person is involved in any message or write action**, use cross-advisor routing.
   This is the mechanism for coordinating between users. Examples:
   - "tell Ciline I'm waiting" → Set `cross_advisor_action_type="tasks_complete"`, `target_user_hint="Ciline"`, `cross_action_params={{"message": "I'm waiting"}}`
+  - "tell cc I love her" (where cc is female) → Normalize to "I love you": `cross_advisor_action_type="tasks_complete"`, `target_user_hint="cc"`, `cross_action_params={{"message": "I love you"}}`
   - "mark Eimer's task xxxxx complete" → `cross_advisor_action_type="tasks_complete"`, `cross_action_params={{"task_id": "xxxxx"}}`
   - "tell Mom's advisor that Emma took her medication" → `cross_advisor_action_type="tasks_complete"`, `cross_action_params={{"message": "Emma took her medication"}}`
 - When set to `"tasks_complete"`, populate `cross_action_params` with available context:
   - For task-related actions: `task_id` (required), plus optional `task_name`, `reason`
   - For simple messages: `message` (required) containing what you want to communicate
   - Set `target_user_hint` (or `target_email`) to identify the peer user
+  - **Important:** If the message contains pronouns referring to the recipient (e.g., "tell cc I love her" where "her"=cc), normalize to second person: "I love you" instead of "I love her". This makes the message unambiguous to the receiver.
 - Do NOT use cross-advisor routing for the user's own data — use the regular skill flow.
 
 **Key distinction:** "What medicine should I take now?" = needs data (execute skill) ≠ "What medications treat diabetes?" = general knowledge (direct response)
