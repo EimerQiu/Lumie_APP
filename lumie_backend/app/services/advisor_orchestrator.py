@@ -1068,26 +1068,35 @@ async def _initiate_cross_advisor_request(
         }
 
     task_id = (cross_action_params.get("task_id") or "").strip() if isinstance(cross_action_params, dict) else ""
-    if not task_id:
+    message_to_send = (cross_action_params.get("message") or "").strip() if isinstance(cross_action_params, dict) else ""
+
+    # Either task_id OR message must be present
+    if not task_id and not message_to_send:
         return {
             "type": "guidance",
-            "reply": "Which task should be marked complete? Please share the task id.",
+            "reply": "I need either a task to mark complete or a message to relay to the other person.",
             "reply_class": "clarification_needed",
             "is_write_operation_task": True,
         }
 
-    # Idempotency: same requester + target + task within the open window
-    # collapses to one thread.
-    idempotency_key = f"tasks_complete:{requester_user_id}:{target_user_id}:{task_id}"
-    task_detail = await _load_cross_task_details(task_id, requester_user_id)
-    reason_fallback = _extract_labeled_value(message, "reason")
-    enriched_action_params = {
-        "task_id": task_id,
-        "task_name": task_detail.get("task_name") or cross_action_params.get("task_name"),
-        "open_datetime": task_detail.get("open_datetime") or cross_action_params.get("open_datetime"),
-        "close_datetime": task_detail.get("close_datetime") or cross_action_params.get("close_datetime"),
-        "reason": cross_action_params.get("reason") or reason_fallback or task_detail.get("task_info") or "",
-    }
+    # Idempotency: for task-based actions, use task_id; for messages, use message content hash
+    if task_id:
+        idempotency_key = f"tasks_complete:{requester_user_id}:{target_user_id}:{task_id}"
+        task_detail = await _load_cross_task_details(task_id, requester_user_id)
+        reason_fallback = _extract_labeled_value(message, "reason")
+        enriched_action_params = {
+            "task_id": task_id,
+            "task_name": task_detail.get("task_name") or cross_action_params.get("task_name"),
+            "open_datetime": task_detail.get("open_datetime") or cross_action_params.get("open_datetime"),
+            "close_datetime": task_detail.get("close_datetime") or cross_action_params.get("close_datetime"),
+            "reason": cross_action_params.get("reason") or reason_fallback or task_detail.get("task_info") or "",
+        }
+    else:
+        # Simple message routing
+        idempotency_key = f"message:{requester_user_id}:{target_user_id}:{message_to_send[:50]}"
+        enriched_action_params = {
+            "message": message_to_send,
+        }
 
     cross_msg = await advisor_cross_message_service.create_request(
         from_user_id=requester_user_id,
@@ -1100,11 +1109,15 @@ async def _initiate_cross_advisor_request(
     thread_id = cross_msg["thread_id"]
 
     # Seed the requester-side collab audit thread.
+    if task_id:
+        audit_content = f"Requested mark-complete for task {task_id}. Awaiting confirmation from peer."
+    else:
+        audit_content = f"Sent message: \"{message_to_send}\". Awaiting confirmation from peer."
     await _post_collab_audit(
         user_id=requester_user_id,
         thread_id=thread_id,
         peer_user_id=target_user_id,
-        content=f"Requested mark-complete for task {task_id}. Awaiting confirmation from peer.",
+        content=audit_content,
         collab_status="in_progress",
     )
 
@@ -1173,15 +1186,28 @@ async def _process_incoming_cross_request(message_doc: dict) -> None:
     requester_name = await _lookup_display_name(requester_user_id)
     approver_name = await _lookup_display_name(approver_user_id)
     if action_type == CrossActionType.TASKS_COMPLETE.value:
-        task_name = action_params.get("task_name") or "Unknown"
-        open_time = action_params.get("open_datetime") or "Unknown"
-        close_time = action_params.get("close_datetime") or "Unknown"
-        reason = action_params.get("reason") or "Not provided"
-        question = (
-            f"**{requester_name} wants to mark \"{task_name}\" as done**\n\n"
-            f"They completed it between {open_time} and {close_time} with the note: \"{reason}\"\n\n"
-            "Can you approve this? (Reply **yes** or **no**)"
-        )
+        # Check if this is a simple message or a task action
+        message_to_relay = action_params.get("message")
+        task_id = action_params.get("task_id")
+
+        if message_to_relay and not task_id:
+            # Simple message relay
+            question = (
+                f"**{requester_name} sent you a message:**\n\n"
+                f"\"{message_to_relay}\"\n\n"
+                "Acknowledge? (Reply **yes** or **no**)"
+            )
+        else:
+            # Task completion request
+            task_name = action_params.get("task_name") or "Unknown"
+            open_time = action_params.get("open_datetime") or "Unknown"
+            close_time = action_params.get("close_datetime") or "Unknown"
+            reason = action_params.get("reason") or "Not provided"
+            question = (
+                f"**{requester_name} wants to mark \"{task_name}\" as done**\n\n"
+                f"They completed it between {open_time} and {close_time} with the note: \"{reason}\"\n\n"
+                "Can you approve this? (Reply **yes** or **no**)"
+            )
     else:
         question = (
             f"{requester_name}'s advisor is requesting an action on your account. "
@@ -1333,8 +1359,30 @@ async def _resume_cross_advisor_after_user_reply(
             "is_write_operation_task": True,
         }
 
-    # Build execution prompt for the tasks_complete skill.
+    # Check if this is a simple message or a task action
     task_id = action_params.get("task_id", "")
+    message_to_confirm = action_params.get("message", "")
+
+    # For simple message relay, just acknowledge and close
+    if message_to_confirm and not task_id:
+        await _set_cross_advisor_pending_status(
+            thread_id, user_id, CrossAdvisorPendingActionStatus.CONSUMED.value
+        )
+        await _post_collab_audit(
+            user_id=requester_user_id,
+            thread_id=thread_id,
+            peer_user_id=approver_user_id,
+            content=f"{approver_name} confirmed receiving the message.",
+            collab_status="done",
+        )
+        return {
+            "type": "direct",
+            "reply": "Done — I let them know your message was delivered.",
+            "reply_class": "executed",
+            "is_write_operation_task": True,
+        }
+
+    # Build execution prompt for the tasks_complete skill.
     skill = skill_registry.get_skill("tasks_complete")
     if not skill or skill.status != "indexed":
         await _set_cross_advisor_pending_status(
@@ -1867,8 +1915,8 @@ Protocol contract:
 - Example: "check Emma's sleep" → find appropriate skill, set `target_user_hint="Emma"`
 
 **Use cross-advisor routing when:**
-- The user wants to take a WRITE action on ANOTHER person's data (e.g., mark their task complete, confirm their action)
-- The user wants to SEND A MESSAGE or COMMUNICATE something to another user through their advisor
+- The user wants to SEND A MESSAGE or COMMUNICATE something to another user (e.g., "tell Ciline I'm waiting")
+- The user wants to take a WRITE action on ANOTHER person's data (e.g., mark their task complete)
 - This is the coordination mechanism — the receiving user must confirm before the action proceeds
 - Set `cross_advisor_action_type` to `"tasks_complete"` and populate `cross_action_params` with the intent
 
@@ -1887,14 +1935,14 @@ Protocol contract:
 
 **Cross-advisor write requests (`cross_advisor_action_type`):**
 - Default to `"none"`.
-- **When another person is involved in a write action (not just a read/query)**, use cross-advisor routing.
+- **When another person is involved in any message or write action**, use cross-advisor routing.
   This is the mechanism for coordinating between users. Examples:
-  - "mark Eimer's task xxxxx complete" → `"tasks_complete"`
-  - "tell Mom's advisor that Emma took her medication" → `"tasks_complete"`
-  - "let her know..." or "forward a message to..." about another user → `"tasks_complete"` (brief message in the context)
+  - "tell Ciline I'm waiting" → Set `cross_advisor_action_type="tasks_complete"`, `target_user_hint="Ciline"`, `cross_action_params={{"message": "I'm waiting"}}`
+  - "mark Eimer's task xxxxx complete" → `cross_advisor_action_type="tasks_complete"`, `cross_action_params={{"task_id": "xxxxx"}}`
+  - "tell Mom's advisor that Emma took her medication" → `cross_advisor_action_type="tasks_complete"`, `cross_action_params={{"message": "Emma took her medication"}}`
 - When set to `"tasks_complete"`, populate `cross_action_params` with available context:
-  - `task_id` (required if it's a task action)
-  - `task_name`, `reason`, or the core message intent
+  - For task-related actions: `task_id` (required), plus optional `task_name`, `reason`
+  - For simple messages: `message` (required) containing what you want to communicate
   - Set `target_user_hint` (or `target_email`) to identify the peer user
 - Do NOT use cross-advisor routing for the user's own data — use the regular skill flow.
 
