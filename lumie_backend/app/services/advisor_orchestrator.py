@@ -1901,7 +1901,7 @@ Protocol contract:
 5. If skill matches but needs info → `should_execute_skill=true` with `reply_class=clarification_needed` to ask
 
 **Examples (DO NOT execute skill):**
-- "tell Ciline I'm waiting" → This is a message/greeting, no data query → `should_execute_skill=false`
+- "let my family know I'm okay" → This is a message/greeting, no data query → `should_execute_skill=false`
 - "hello" → Greeting → `should_execute_skill=false`
 - "I'm worried about Emma's sleep" → Health concern, offer peer outreach, NOT a skill → `should_execute_skill=false`
 
