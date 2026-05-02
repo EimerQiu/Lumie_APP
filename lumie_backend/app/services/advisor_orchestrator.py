@@ -1368,12 +1368,40 @@ async def _resume_cross_advisor_after_user_reply(
         await _set_cross_advisor_pending_status(
             thread_id, user_id, CrossAdvisorPendingActionStatus.CONSUMED.value
         )
+        await advisor_cross_message_service.create_decision_reply(
+            thread_id=thread_id,
+            from_user_id=approver_user_id,
+            to_user_id=requester_user_id,
+            decision="approve",
+            summary=f"{approver_name} confirmed receiving the message.",
+        )
+        # Notify requester in their chat that the message was confirmed
+        await chat_history_service.save_message(
+            user_id=requester_user_id,
+            session_id="default",
+            role="assistant",
+            content=f"{approver_name} confirmed receiving your message.",
+            metadata={
+                "type": "cross_advisor_confirmation",
+                "thread_id": thread_id,
+                "peer_user_id": approver_user_id,
+            },
+        )
         await _post_collab_audit(
             user_id=requester_user_id,
             thread_id=thread_id,
             peer_user_id=approver_user_id,
             content=f"{approver_name} confirmed receiving the message.",
             collab_status="done",
+        )
+        await _post_collab_audit(
+            user_id=approver_user_id,
+            thread_id=thread_id,
+            peer_user_id=requester_user_id,
+            content="Confirmed.",
+            collab_status="done",
+            role="user",
+            sender_label=approver_name,
         )
         return {
             "type": "direct",
