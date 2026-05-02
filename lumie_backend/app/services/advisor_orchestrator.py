@@ -160,44 +160,77 @@ CROSS_ADVISOR_ACTION_TYPE = "cross_advisor_action_confirmation"
 DEFAULT_MAX_CROSS_TURNS = 5
 CROSS_PENDING_TTL_HOURS = 24
 
-_CONFIRM_TOKENS = {
-    "yes", "y", "yep", "yeah", "ok", "okay", "sure", "confirm", "confirmed",
-    "approve", "approved", "agree", "agreed", "do it", "go ahead", "proceed",
-    "是", "好", "好的", "可以", "同意", "确认", "行",
-}
-_REJECT_TOKENS = {
-    "no", "n", "nope", "cancel", "stop", "reject", "rejected", "deny", "denied",
-    "don't", "dont", "do not",
-    "不", "不要", "取消", "拒绝",
-}
+async def _interpret_user_confirmation(
+    text: str, question_to_user: Optional[str] = None
+) -> tuple[str, Optional[str]]:
+    """Interpret confirmation reply in one LLM call.
 
-
-def _classify_user_confirmation(text: str) -> str:
-    """Classify a user reply as approve | reject | ask_more.
-
-    Pure keyword matching for MVP — short replies like "yes" or "no" are the
-    common case.  Anything that doesn't clearly map to approve/reject is
-    treated as ``ask_more`` so the pending action stays open.
+    Returns (decision, followup_note):
+    - decision: approve | reject | ask_more
+    - followup_note: extra intent to relay, or None
     """
-    if not text:
-        return "ask_more"
-    normalized = text.strip().lower().rstrip(".!?。！？")
-    if normalized in _CONFIRM_TOKENS:
-        return "approve"
-    if normalized in _REJECT_TOKENS:
-        return "reject"
-    # Multi-word: check the first 3 tokens for an unambiguous signal.
-    head = " ".join(normalized.split()[:3])
-    if head in _CONFIRM_TOKENS:
-        return "approve"
-    if head in _REJECT_TOKENS:
-        return "reject"
-    for tok in normalized.split():
-        if tok in _CONFIRM_TOKENS:
-            return "approve"
-        if tok in _REJECT_TOKENS:
-            return "reject"
-    return "ask_more"
+    if not (text or "").strip():
+        return "ask_more", None
+
+    prompt = (
+        "You are a strict parser for confirmation flows.\n"
+        "Given assistant question and user reply, output exactly two lines:\n"
+        "decision: approve|reject|ask_more\n"
+        "followup: <text or NONE>\n\n"
+        "Rules:\n"
+        "- approve: clear agreement/acknowledgement.\n"
+        "- reject: clear decline/cancel.\n"
+        "- ask_more: unclear, mixed, or not a decision.\n"
+        "- Be conservative: if uncertain, use ask_more.\n"
+        "- followup should contain only extra content beyond pure yes/no.\n"
+        "- If no extra content, followup must be NONE.\n\n"
+        f"Assistant question:\n{(question_to_user or '').strip() or '(none)'}\n\n"
+        f"User reply:\n{text.strip()}\n"
+    )
+
+    try:
+        response = await chat_completion(
+            model=_MODEL,
+            max_tokens=10,
+            temperature=0,
+            messages=[{"role": "user", "content": prompt}],
+        )
+    except Exception as exc:
+        logger.warning("LLM confirmation intent classification failed: %s", exc)
+        return "ask_more", None
+
+    parsed_decision = "ask_more"
+    parsed_followup: Optional[str] = None
+    raw_text = (response.text or "").strip()
+    for line in (response.text or "").splitlines():
+        normalized = line.strip()
+        if normalized.lower().startswith("decision:"):
+            val = normalized.split(":", 1)[1].strip().lower()
+            if val in {"approve", "reject", "ask_more"}:
+                parsed_decision = val
+        elif normalized.lower().startswith("followup:"):
+            val = normalized.split(":", 1)[1].strip()
+            if val and val.upper() != "NONE":
+                parsed_followup = val
+    # Robust fallback if model didn't follow the strict 2-line format.
+    if parsed_decision == "ask_more":
+        lowered = raw_text.lower()
+        if "approve" in lowered:
+            parsed_decision = "approve"
+        elif "reject" in lowered:
+            parsed_decision = "reject"
+
+    # Fallback follow-up extraction from the same user text (no extra LLM call).
+    if parsed_decision in {"approve", "reject"} and not parsed_followup:
+        cleaned = re.sub(
+            r"^\s*(yes|y|yeah|yep|ok|okay|sure|no|n|nope|approve|reject|confirm|confirmed)\b[\s,.;:!?-]*",
+            "",
+            text.strip(),
+            flags=re.IGNORECASE,
+        ).strip()
+        if cleaned:
+            parsed_followup = cleaned
+    return parsed_decision, parsed_followup
 
 
 async def _get_pending_cross_advisor_action(user_id: str, session_id: Optional[str]) -> Optional[dict]:
@@ -1195,7 +1228,7 @@ async def _process_incoming_cross_request(message_doc: dict) -> None:
             question = (
                 f"**{requester_name} sent you a message:**\n\n"
                 f"\"{message_to_relay}\"\n\n"
-                "Acknowledge? (Reply **yes** or **no**)"
+                "Would you like to respond?"
             )
         else:
             # Task completion request
@@ -1277,14 +1310,17 @@ async def _resume_cross_advisor_after_user_reply(
     ``None`` to fall through to the normal LLM routing (treated as
     ``ask_more`` clarification).
     """
-    decision = _classify_user_confirmation(user_message)
-    if decision == "ask_more":
-        return None
-
     thread_id = pending["thread_id"]
     requester_user_id = pending["requester_user_id"]
     approver_user_id = pending["approver_user_id"]
     resume_payload = pending.get("resume_payload") or {}
+    decision, followup_note = await _interpret_user_confirmation(
+        user_message,
+        question_to_user=resume_payload.get("question_to_user"),
+    )
+    if decision == "ask_more":
+        return None
+
     action_type = resume_payload.get("action_type")
     action_params = resume_payload.get("action_params") or {}
     approver_name = await _lookup_display_name(approver_user_id)
@@ -1326,28 +1362,28 @@ async def _resume_cross_advisor_after_user_reply(
             "is_write_operation_task": False,
         }
 
-    # Decision == approve → mark approved, run skill execution.
+    # Decision == approve → mark approved, run downstream action.
     await _set_cross_advisor_pending_status(
         thread_id, user_id, CrossAdvisorPendingActionStatus.APPROVED.value
     )
-    await advisor_cross_message_service.create_decision_reply(
-        thread_id=thread_id,
-        from_user_id=approver_user_id,
-        to_user_id=requester_user_id,
-        decision="approve",
-        summary="User approved.",
-    )
-    await _post_collab_audit(
-        user_id=approver_user_id,
-        thread_id=thread_id,
-        peer_user_id=requester_user_id,
-        content=f"{approver_name} approved.",
-        collab_status="in_progress",
-        role="user",
-        sender_label=approver_name,
-    )
 
     if action_type != CrossActionType.TASKS_COMPLETE.value:
+        await advisor_cross_message_service.create_decision_reply(
+            thread_id=thread_id,
+            from_user_id=approver_user_id,
+            to_user_id=requester_user_id,
+            decision="approve",
+            summary="User approved.",
+        )
+        await _post_collab_audit(
+            user_id=approver_user_id,
+            thread_id=thread_id,
+            peer_user_id=requester_user_id,
+            content=f"{approver_name} approved.",
+            collab_status="in_progress",
+            role="user",
+            sender_label=approver_name,
+        )
         # Should not happen in MVP — only tasks_complete is wired up.
         await _set_cross_advisor_pending_status(
             thread_id, user_id, CrossAdvisorPendingActionStatus.CONSUMED.value
@@ -1373,14 +1409,22 @@ async def _resume_cross_advisor_after_user_reply(
             from_user_id=approver_user_id,
             to_user_id=requester_user_id,
             decision="approve",
-            summary=f"{approver_name} confirmed receiving the message.",
+            summary=(
+                f"{approver_name} confirmed receiving the message."
+                if not followup_note
+                else f"{approver_name} replied: {followup_note}"
+            ),
         )
         # Notify requester in their chat that the message was confirmed
         await chat_history_service.save_message(
             user_id=requester_user_id,
             session_id="default",
             role="assistant",
-            content=f"{approver_name} confirmed receiving your message.",
+            content=(
+                f"{approver_name} confirmed receiving your message."
+                if not followup_note
+                else f"{approver_name} replied: {followup_note}"
+            ),
             metadata={
                 "type": "cross_advisor_confirmation",
                 "thread_id": thread_id,
@@ -1391,7 +1435,11 @@ async def _resume_cross_advisor_after_user_reply(
             user_id=requester_user_id,
             thread_id=thread_id,
             peer_user_id=approver_user_id,
-            content=f"{approver_name} confirmed receiving the message.",
+            content=(
+                f"{approver_name} confirmed receiving the message."
+                if not followup_note
+                else f"{approver_name} replied: {followup_note}"
+            ),
             collab_status="done",
         )
         await _post_collab_audit(
@@ -1405,10 +1453,31 @@ async def _resume_cross_advisor_after_user_reply(
         )
         return {
             "type": "direct",
-            "reply": "Done — I let them know your message was delivered.",
+            "reply": (
+                "Done — I let them know your message was delivered."
+                if not followup_note
+                else "Done — I shared your response with them."
+            ),
             "reply_class": "executed",
             "is_write_operation_task": True,
         }
+
+    await advisor_cross_message_service.create_decision_reply(
+        thread_id=thread_id,
+        from_user_id=approver_user_id,
+        to_user_id=requester_user_id,
+        decision="approve",
+        summary="User approved.",
+    )
+    await _post_collab_audit(
+        user_id=approver_user_id,
+        thread_id=thread_id,
+        peer_user_id=requester_user_id,
+        content=f"{approver_name} approved.",
+        collab_status="in_progress",
+        role="user",
+        sender_label=approver_name,
+    )
 
     # Build execution prompt for the tasks_complete skill.
     skill = skill_registry.get_skill("tasks_complete")
@@ -1510,7 +1579,10 @@ async def _resume_cross_advisor_outreach_after_user_reply(
     If no: acknowledge and provide the advisor's response normally.
     If ask_more: stay pending for more clarification.
     """
-    decision = _classify_user_confirmation(user_message)
+    decision, _ = await _interpret_user_confirmation(
+        user_message,
+        question_to_user=pending.get("question_to_user"),
+    )
     if decision == "ask_more":
         return None
 

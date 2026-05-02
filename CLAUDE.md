@@ -115,6 +115,18 @@ Flutter catches this as `SubscriptionLimitException`.
 - ❌ Don't: Add query code examples in `execution_prompt_service.py` AND in skill markdown
 - ✅ Do: Define query guidance in `lumie_schema.json` notes, load it into the prompt, reference it from skills
 
+### Use LLM API for Semantic Judgments, Not Enums
+- When making **semantic decisions** (categorization, intent detection, routing, tone assessment), use the Claude API instead of hardcoded enums/if-else logic
+- Hardcoded enums are brittle and don't adapt to nuanced user input
+- The LLM API handles edge cases, ambiguous contexts, and evolving requirements naturally
+- **Examples:**
+  - ❌ Don't: `if message.type in ["greeting", "closing"] → MessageCategory.SIMPLE`
+  - ✅ Do: Call Claude to classify the message intent and reason about it contextually
+  - ❌ Don't: Hardcoded routing rules with regex or keyword matching
+  - ✅ Do: Use Claude to understand the semantic intent and route accordingly
+- **Cost:** Use prompt caching and batch processing where appropriate to reduce API costs for high-volume operations
+- **Fallback:** For critical paths without API calls, use enums only as a last resort with detailed reasoning in comments
+
 ## Development Logs
 
 After completing a feature or significant implementation work, **always** create a dev log in `docs/dev-logs/`.
