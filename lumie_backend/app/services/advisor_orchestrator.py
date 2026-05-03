@@ -1259,7 +1259,10 @@ async def _process_incoming_cross_request(message_doc: dict) -> None:
         content=question,
         metadata={
             "type": "cross_advisor_confirmation",
+            "channel": "advisor_collab",
+            "readonly": False,
             "thread_id": thread_id,
+            "collab_status": "waiting_user_confirm",
             "peer_user_id": requester_user_id,
         },
     )
@@ -1712,7 +1715,10 @@ async def _process_incoming_cross_health_concern(message_doc: dict, requester_ct
         content=question,
         metadata={
             "type": "cross_advisor_health_concern",
+            "channel": "advisor_collab",
+            "readonly": False,
             "thread_id": thread_id,
+            "collab_status": "waiting_user_respond",
             "peer_user_id": requester_user_id,
         },
     )
