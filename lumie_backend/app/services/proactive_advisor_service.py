@@ -4,10 +4,10 @@ New design (v3):
   1. All proactive-eligible assessment skills run in parallel each round via execution service.
   2. Skills are executed dynamically by reading markdown and generating code — no hardcoded assessments.
   3. Raw execution results are persisted in proactive_information_rounds collection.
-  4. LLM gets: current round results + last round results + today's dayprint + last nudge.
+  4. A proactive checklist is assembled before decision: manual priorities + today's dayprint + enabled skills.
+  5. LLM gets: current round results + last round results + today's dayprint + last nudge + proactive checklist.
   5. LLM decides whether to nudge (no deterministic guardrails, no hardcoded scores).
-  6. If LLM says no: fall back to LLM-ranked 15-day dayprint topics.
-  7. Audit records persisted for observability.
+  6. Audit records persisted for observability.
 
 Skills are flat and unsorted by domain — all assessment skills run, sorted by priority.
 """
@@ -345,158 +345,59 @@ def _find_skill_by_domain(skill_data_list: list[ProactiveSkillData], domain: str
     return None
 
 
-async def _collect_recent_topics(
-    db,
-    user_id: str,
-    now_utc: datetime,
-    days: int = 15,
-) -> list[dict]:
-    """Collect all candidate concern topics from recent dayprints."""
-    since_date = (now_utc - timedelta(days=days)).strftime("%Y-%m-%d")
-    docs = await db.dayprints.find(
-        {"user_id": user_id, "date": {"$gte": since_date}},
-        {"_id": 0, "date": 1, "events": 1},
-    ).sort("date", -1).to_list(200)
+async def _read_manual_checklist_items(db, user_id: str, profile: dict) -> list[str]:
+    """Read user-defined proactive priorities for checklist item #1."""
+    items: list[str] = []
 
-    by_key: dict[str, dict] = {}
-    for doc in docs:
-        date = doc.get("date", "")
-        for event in (doc.get("events") or []):
-            e_type = event.get("type")
-            if e_type not in {"important_insight", "advisor_chat"}:
-                continue
-            data = event.get("data") or {}
-            category = _canonicalize(data.get("category") or e_type or "other") or "other"
-            summary = (data.get("summary") or "").strip()
-            if not summary:
-                continue
+    checklist_doc = await db.proactive_checklists.find_one({"user_id": user_id}, {"_id": 0})
+    if checklist_doc:
+        raw_items = checklist_doc.get("manual_items")
+        if isinstance(raw_items, list):
+            for item in raw_items:
+                if isinstance(item, str):
+                    t = item.strip()
+                    if t:
+                        items.append(t)
+                elif isinstance(item, dict):
+                    t = str(item.get("text", "")).strip()
+                    if t:
+                        items.append(t)
 
-            canonical_summary = _canonicalize(summary)
-            stem = " ".join(canonical_summary.split(" ")[:8])
-            digest = hashlib.sha1(f"{category}|{stem}".encode("utf-8")).hexdigest()[:12]
-            topic_key = f"{category}:{digest}"
+    # Backward-compatible fallback in profile for local testing/gradual rollout
+    profile_items = profile.get("proactive_manual_items")
+    if isinstance(profile_items, list):
+        for item in profile_items:
+            if isinstance(item, str):
+                t = item.strip()
+                if t and t not in items:
+                    items.append(t)
 
-            current = by_key.get(topic_key)
-            if current is None:
-                by_key[topic_key] = {
-                    "topic_key": topic_key,
-                    "category": category,
-                    "summary": summary,
-                    "count": 1,
-                    "last_seen_at": date,
-                }
-            else:
-                current["count"] += 1
-                if date > (current.get("last_seen_at") or ""):
-                    current["last_seen_at"] = date
-                    current["summary"] = summary
-
-    return sorted(by_key.values(), key=lambda x: (x.get("count", 0), x.get("last_seen_at", "")), reverse=True)
+    return items[:20]
 
 
-async def _rank_topics_with_llm(
-    user_name: str,
-    local_time_str: str,
-    topics: list[dict],
-) -> list[dict]:
-    """Use LLM to score and rank concern topics."""
-    if not topics:
-        return []
-
-    compact_topics = [
-        {
-            "topic_key": t["topic_key"],
-            "category": t.get("category"),
-            "summary": t.get("summary"),
-            "count": t.get("count"),
-            "last_seen_at": t.get("last_seen_at"),
-        }
-        for t in topics[:30]
-    ]
-
-    system_prompt = (
-        f"You are ranking proactive concern topics for {user_name}.\n"
-        f"Current local time: {local_time_str}.\n"
-        "Score each topic 0.0-1.0 by urgency+importance for a caring check-in.\n"
-        "Return JSON only:\n"
-        '{"ranked":[{"topic_key":"...","score":0.0,"reason":"...","suggested_message":"<=120 chars"}]}'
-    )
-    user_message = "Topics JSON:\n" + json.dumps(compact_topics, ensure_ascii=False, indent=2)
-
-    try:
-        response = await chat_completion(
-            model=_DECISION_MODEL,
-            max_tokens=2000,
-            temperature=0,
-            system=system_prompt,
-            messages=[{"role": "user", "content": user_message}],
-        )
-        raw = response.text.strip()
-        if raw.startswith("```"):
-            raw_lines = raw.split("\n")
-            raw = "\n".join(raw_lines[1:-1]) if len(raw_lines) > 2 else raw
-        parsed = json.loads(raw)
-        ranked = parsed.get("ranked") or []
-        if not isinstance(ranked, list):
-            return []
-        by_key = {t["topic_key"]: t for t in topics}
-        out: list[dict] = []
-        for r in ranked:
-            key = r.get("topic_key")
-            if key not in by_key:
-                continue
-            out.append({
-                "topic_key": key,
-                "score": float(r.get("score", 0.0)),
-                "reason": r.get("reason", ""),
-                "suggested_message": (r.get("suggested_message") or "").strip(),
-                "topic": by_key[key],
-            })
-        return out
-    except Exception as e:
-        logger.warning("Topic LLM ranking failed: %s", e)
-        return []
-
-
-async def _pick_alternate_topic_nudge(
-    db,
-    user_id: str,
-    user_name: str,
-    local_time_str: str,
-    now_utc: datetime,
-    sent_topic_keys: set[str],
-) -> tuple[str, str, str, str, str] | None:
-    """Pick next unsent topic from last 15 days using LLM topic scoring."""
-    topics = await _collect_recent_topics(db, user_id, now_utc, days=15)
-    if not topics:
-        return None
-
-    ranked = await _rank_topics_with_llm(user_name, local_time_str, topics)
-    if not ranked:
-        ranked = [
+def _build_checklist(
+    manual_items: list[str],
+    today_dayprint: dict | None,
+    selected_skills: list[SkillIndexItem],
+) -> dict:
+    """Build normalized proactive checklist payload for this run."""
+    return {
+        "manual_items": manual_items,
+        "today_dayprint": {
+            "date": (today_dayprint or {}).get("date"),
+            "summary": (today_dayprint or {}).get("summary", ""),
+            "events_count": len((today_dayprint or {}).get("events", [])),
+        } if today_dayprint else None,
+        "enabled_skills": [
             {
-                "topic_key": t["topic_key"],
-                "score": min(1.0, 0.2 + 0.08 * int(t.get("count", 1))),
-                "reason": "fallback_topic_ranking",
-                "suggested_message": "",
-                "topic": t,
+                "skill_id": s.skill_id,
+                "domain": s.proactive_domain or "unknown",
+                "priority": s.proactive_priority,
+                "title": s.title,
             }
-            for t in topics
-        ]
-
-    for item in ranked:
-        topic_key = item["topic_key"]
-        if topic_key in sent_topic_keys:
-            continue
-        score = float(item.get("score", 0.0))
-        suggested = item.get("suggested_message") or ""
-        summary = (item.get("topic") or {}).get("summary", "")
-        message = suggested if suggested else f"Quick check-in: {summary[:96]}"
-        reason = f"alternate_topic_queue_llm_scored:{topic_key}"
-        concern_key = f"topic:{topic_key}"
-        return "dayprint", message, reason, concern_key, topic_key
-
-    return None
+            for s in selected_skills
+        ],
+    }
 
 
 # ── LLM decision prompt ────────────────────────────────────────────────────
@@ -509,6 +410,7 @@ def _build_decision_prompt(
     skill_data: list[ProactiveSkillData],
     last_round_results: list[dict],
     today_dayprint: dict | None,
+    proactive_checklist: dict | None,
     last_nudge_str: str,
 ) -> tuple[str, str]:
     """Build compact system + user prompt from raw skill execution data.
@@ -551,7 +453,7 @@ def _build_decision_prompt(
         "3. Look for concrete concerns, patterns, or insights worth mentioning (urgent OR routine check-ins).\n"
         "4. Include positive signals and good news alongside concerns — balanced perspective matters.\n"
         "5. Consider trends from the previous round (if available).\n"
-        "6. Check today's dayprint for context (if available).\n"
+        "6. Check today's dayprint and proactive checklist for context.\n"
         "7. Send nudges regularly (not just emergencies) to build supportive, ongoing connection.\n"
         "8. Compare recent nudge evidence to current data. Only nudge if significant change detected.\n"
         "9. Prefer personalized, grounded insights over vague ones. Include specific numbers (temperature, duration, percentage).\n\n"
@@ -578,6 +480,10 @@ def _build_decision_prompt(
         }
         user_parts.append(json.dumps(dayprint_summary, indent=2))
 
+    if proactive_checklist:
+        user_parts.append("\n=== PROACTIVE CHECKLIST ===\n")
+        user_parts.append(json.dumps(proactive_checklist, indent=2))
+
     user_parts.append("\n\nBased on these assessments and context, should I reach out to the user?\n\n"
                       "GUIDANCE FOR YOUR MESSAGE:\n"
                       "- Weave together insights from multiple domains (e.g., sleep + activity + energy) in a single message.\n"
@@ -603,9 +509,10 @@ async def run_proactive_check(user_id: str) -> dict:
     New architecture:
     - All proactive-eligible assessment skills run in parallel
     - Information rounds are persisted for trend analysis
-    - LLM gets current round + last round + today's dayprint + last nudge
+    - A proactive checklist (manual priorities + today's dayprint + enabled skills)
+      is assembled before decision.
+    - LLM gets current round + last round + today's dayprint + last nudge + checklist
     - No deterministic guardrails; LLM decides everything
-    - If LLM says no nudge: fallback to LLM-ranked 15-day topic selection
 
     Returns:
         {
@@ -649,6 +556,17 @@ async def run_proactive_check(user_id: str) -> dict:
 
     logger.info("Proactive[%s]: run_id=%s round_id=%s capabilities=%s", user_id, run_id, round_id, sorted(enabled_cap_ids))
 
+    # ── 2.5 Build proactive checklist context ─────────────────────────────
+    manual_items = await _read_manual_checklist_items(db, user_id, profile)
+
+    today_str = now_local.date().isoformat()
+    today_dayprint = await db.dayprints.find_one(
+        {"user_id": user_id, "date": today_str},
+        {"_id": 0},
+    )
+    if today_dayprint:
+        logger.info("Proactive[%s]: found today's dayprint with %d events", user_id, len(today_dayprint.get("events", [])))
+
     # ── 3. Select and run proactive skills (enabled capabilities only) ──
     selected_skills = select_proactive_skills(enabled_cap_ids)
     if not selected_skills:
@@ -659,6 +577,12 @@ async def run_proactive_check(user_id: str) -> dict:
         "Proactive[%s]: selected proactive skills=%s",
         user_id,
         [(s.skill_id, s.proactive_domain, s.proactive_priority) for s in selected_skills],
+    )
+
+    proactive_checklist = _build_checklist(
+        manual_items=manual_items,
+        today_dayprint=today_dayprint,
+        selected_skills=selected_skills,
     )
 
     # Build user context for execution
@@ -685,7 +609,14 @@ async def run_proactive_check(user_id: str) -> dict:
         return {"nudged": False, "message": None, "reason": "all_skills_failed"}
 
     # ── 3.5. Save information round for this proactive run ─────────────────
-    await audit.save_round_record(db, round_id, user_id, now_utc, skill_data)
+    await audit.save_round_record(
+        db,
+        round_id,
+        user_id,
+        now_utc,
+        skill_data,
+        checklist=proactive_checklist,
+    )
 
     # ── 4. Fetch nudge history (last 6 hours), last round, and today's dayprint
     checkin_doc = await db.advisor_checkins.find_one({"user_id": user_id})
@@ -737,21 +668,14 @@ async def run_proactive_check(user_id: str) -> dict:
             {
                 "skill_id": r.get("skill_id"),
                 "domain": r.get("domain"),
-                "status": r.get("status"),
-                "score": r.get("score"),
+                "status": r.get("execution_status"),
+                "priority": r.get("priority"),
+                "summary": r.get("summary"),
+                "data": r.get("data"),
             }
-            for r in last_round_doc.get("skill_results", [])
+            for r in last_round_doc.get("skill_data", [])
         ]
         logger.info("Proactive[%s]: found last round with %d results", user_id, len(last_round_results))
-
-    # Fetch today's dayprint for context
-    today_str = now_local.date().isoformat()
-    today_dayprint = await db.dayprints.find_one(
-        {"user_id": user_id, "date": today_str},
-        {"_id": 0},
-    )
-    if today_dayprint:
-        logger.info("Proactive[%s]: found today's dayprint with %d events", user_id, len(today_dayprint.get("events", [])))
 
     # ── 5. Build prompt and call LLM ────────────────────────────────────────
     system_prompt, user_message = _build_decision_prompt(
@@ -762,6 +686,7 @@ async def run_proactive_check(user_id: str) -> dict:
         skill_data=skill_data,
         last_round_results=last_round_results,
         today_dayprint=today_dayprint,
+        proactive_checklist=proactive_checklist,
         last_nudge_str=last_nudge_str,
     )
 
@@ -792,7 +717,7 @@ async def run_proactive_check(user_id: str) -> dict:
             "primary_domain": None,
             "confidence": 0.0,
         }
-        await audit.save_run_record(db, run_id, user_id, now_utc, skill_results, error_decision, None, round_id)
+        await audit.save_run_record(db, run_id, user_id, now_utc, skill_data, error_decision, None, round_id)
         return {"nudged": False, "message": None, "reason": f"llm_error: {e}"}
 
     should_nudge: bool = bool(result.get("should_nudge", False))
@@ -805,10 +730,6 @@ async def run_proactive_check(user_id: str) -> dict:
         ((checkin_doc or {}).get("daily_sent_concerns") or {}).get(local_date_key) or []
     )
     sent_concern_keys = set(daily_sent_concerns)
-    daily_sent_topics = (
-        ((checkin_doc or {}).get("daily_sent_topics") or {}).get(local_date_key) or []
-    )
-    sent_topic_keys = set(daily_sent_topics)
 
     # Get nudge history for 6-hour cooldown check
     nudge_history = checkin_doc.get("nudge_history", []) if checkin_doc else []
@@ -820,7 +741,6 @@ async def run_proactive_check(user_id: str) -> dict:
 
     selected_skill_data = _find_skill_by_domain(skill_data, selected_domain)
     concern_key = _build_concern_key(selected_domain or "unknown", reason, selected_skill_data)
-    selected_topic_key = ""
 
     # Check for duplicate: same-day concern OR same domain within 6 hours
     is_duplicate = should_nudge and message and (
@@ -831,34 +751,23 @@ async def run_proactive_check(user_id: str) -> dict:
     )
     if is_duplicate:
         logger.info(
-            "Proactive[%s]: suppress duplicate concern key=%s for date=%s, trying topic fallback",
+            "Proactive[%s]: suppress duplicate concern key=%s for date=%s",
             user_id,
             concern_key,
             local_date_key,
         )
 
-    # If no nudge OR duplicate: try topic fallback (LLM-ranked 15-day dayprint topics)
+    # If no nudge OR duplicate: finalize as no nudge (no topic fallback)
     if not should_nudge or is_duplicate:
-        alt_topic = await _pick_alternate_topic_nudge(
-            db=db,
-            user_id=user_id,
-            user_name=user_name,
-            local_time_str=local_time_str,
-            now_utc=now_utc,
-            sent_topic_keys=sent_topic_keys,
-        )
-        if alt_topic is not None:
-            selected_domain, message, reason, concern_key, selected_topic_key = alt_topic
-            result["primary_domain"] = selected_domain
-            should_nudge = True  # Override to true if we found a good topic
-            logger.info("Proactive[%s]: selected topic fallback key=%s", user_id, concern_key)
-        else:
-            should_nudge = False
-            message = None
-            reason = "no_concern_or_duplicate_no_topic_fallback"
-            selected_domain = None
-            concern_key = ""
-            logger.info("Proactive[%s]: no nudge and no topic fallback", user_id)
+        should_nudge = False
+        message = None
+        if is_duplicate:
+            reason = "duplicate_concern_or_domain_in_6h"
+        elif not reason:
+            reason = "llm_decided_no_nudge"
+        selected_domain = None
+        concern_key = ""
+        logger.info("Proactive[%s]: no nudge after decision/dedupe, reason=%s", user_id, reason)
 
     # ── 7. Deliver ──────────────────────────────────────────────────────────
     decision_data = {
@@ -883,7 +792,6 @@ async def run_proactive_check(user_id: str) -> dict:
                 "run_id": run_id,
                 "primary_domain": selected_domain,
                 "concern_key": concern_key,
-                "topic_key": selected_topic_key or None,
             },
         )
 
@@ -921,7 +829,6 @@ async def run_proactive_check(user_id: str) -> dict:
                 "$addToSet": {
                     f"daily_sent_concerns.{local_date_key}": concern_key,
                     f"daily_sent_domains.{local_date_key}": selected_domain or "unknown",
-                    f"daily_sent_topics.{local_date_key}": selected_topic_key or concern_key,
                 },
                 "$inc": {
                     f"daily_sent_count.{local_date_key}": 1,
