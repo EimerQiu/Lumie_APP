@@ -901,7 +901,7 @@ class _AdvisorNotificationBannerState extends State<_AdvisorNotificationBanner>
     final title = _getSessionTitle(widget.session);
     final preview = () {
       final cleaned = _cleanPreview(widget.session.preview);
-      return cleaned.length > 80 ? '${cleaned.substring(0, 80)}…' : cleaned;
+      return cleaned.length > 500 ? '${cleaned.substring(0, 500)}…' : cleaned;
     }();
     final semanticLabel = '$title: $preview';
 

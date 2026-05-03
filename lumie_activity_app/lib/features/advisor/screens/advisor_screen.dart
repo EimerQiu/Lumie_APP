@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:provider/provider.dart';
 import '../../wellness/providers/wellness_provider.dart';
@@ -185,8 +186,8 @@ class _AdvisorScreenState extends State<AdvisorScreen>
                     ),
                   ),
                   subtitle: Text(
-                    session.preview.length > 60
-                        ? '${session.preview.substring(0, 60)}…'
+                    session.preview.length > 500
+                        ? '${session.preview.substring(0, 500)}…'
                         : session.preview,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
@@ -968,8 +969,8 @@ class _HistoryPanelState extends State<_HistoryPanel> {
         final s = _sessions[i];
         final isProactive = s.sessionId == 'proactive';
         final isCollab = s.isCollabThread;
-        final preview = s.preview.length > 70
-            ? '${s.preview.substring(0, 70)}…'
+        final preview = s.preview.length > 500
+            ? '${s.preview.substring(0, 500)}…'
             : s.preview;
         final String subtitle = isCollab
             ? '${_formatDate(s.lastMessageAt)} · ${s.collabStatus ?? "in_progress"}'
@@ -1119,108 +1120,154 @@ class _ChatBubble extends StatelessWidget {
     this.isCancelling = false,
   });
 
+  Future<void> _showCopyMenu(BuildContext context, Offset globalPosition) async {
+    final overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
+    final selected = await showMenu<String>(
+      context: context,
+      position: RelativeRect.fromRect(
+        Rect.fromLTWH(globalPosition.dx, globalPosition.dy, 1, 1),
+        Offset.zero & overlay.size,
+      ),
+      items: const [
+        PopupMenuItem<String>(
+          value: 'copy',
+          child: Text('Copy'),
+        ),
+      ],
+    );
+
+    if (selected == 'copy') {
+      await Clipboard.setData(ClipboardData(text: message.text));
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Copied to clipboard')),
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 12),
-      child: Column(
-        crossAxisAlignment: message.isUser
-            ? CrossAxisAlignment.end
-            : CrossAxisAlignment.start,
-        children: [
-          if (showTimestamp && (timeLabel?.isNotEmpty ?? false))
-            Padding(
-              padding: const EdgeInsets.only(bottom: 6),
-              child: Text(
-                timeLabel!,
-                style: TextStyle(
-                  fontSize: 11,
-                  color: AppColors.textSecondary.withValues(alpha: 0.75),
-                  fontWeight: FontWeight.w500,
-                ),
-              ),
-            ),
-          if (message.isProactive) ...[
-            Padding(
-              padding: const EdgeInsets.only(left: 36, bottom: 6),
-              child: Text(
-                'Proactive check-in',
-                style: TextStyle(
-                  fontSize: 11,
-                  fontWeight: FontWeight.w600,
-                  color: AppColors.textSecondary.withValues(alpha: 0.85),
-                  letterSpacing: 0.2,
-                ),
-              ),
-            ),
-          ],
-          if ((message.senderLabel ?? '').trim().isNotEmpty)
-            Padding(
-              padding: EdgeInsets.only(
-                bottom: 6,
-                left: message.isUser ? 0 : 36,
-                right: message.isUser ? 2 : 0,
-              ),
-              child: Text(
-                message.senderLabel!.trim(),
-                textAlign: message.isUser ? TextAlign.right : TextAlign.left,
-                style: TextStyle(
-                  fontSize: 11,
-                  fontWeight: FontWeight.w600,
-                  color: AppColors.textSecondary.withValues(alpha: 0.9),
-                ),
-              ),
-            ),
-          Row(
-            mainAxisAlignment: message.isUser
-                ? MainAxisAlignment.end
-                : MainAxisAlignment.start,
-            crossAxisAlignment: CrossAxisAlignment.end,
-            children: [
-              if (!message.isUser) ...[
-                Container(
-                  width: 28,
-                  height: 28,
-                  margin: const EdgeInsets.only(right: 8),
-                  decoration: const BoxDecoration(
-                    color: AppColors.primaryLemon,
-                    shape: BoxShape.circle,
+    return TweenAnimationBuilder<double>(
+      tween: Tween<double>(begin: 20, end: 0),
+      duration: const Duration(milliseconds: 1000),
+      curve: Curves.easeOutCubic,
+      builder: (context, dy, child) {
+        final progress = (20 - dy) / 20;
+        return Opacity(
+          opacity: progress.clamp(0.0, 1.0),
+          child: Transform.translate(
+            offset: Offset(0, dy),
+            child: child,
+          ),
+        );
+      },
+      child: Padding(
+        padding: const EdgeInsets.only(bottom: 12),
+        child: Column(
+          crossAxisAlignment: message.isUser
+              ? CrossAxisAlignment.end
+              : CrossAxisAlignment.start,
+          children: [
+            if (showTimestamp && (timeLabel?.isNotEmpty ?? false))
+              Padding(
+                padding: const EdgeInsets.only(bottom: 6),
+                child: Text(
+                  timeLabel!,
+                  style: TextStyle(
+                    fontSize: 11,
+                    color: AppColors.textSecondary.withValues(alpha: 0.75),
+                    fontWeight: FontWeight.w500,
                   ),
-                  child: const Center(
-                    child: Text(
-                      '✦',
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: AppColors.textOnYellow,
+                ),
+              ),
+            if (message.isProactive) ...[
+              Padding(
+                padding: const EdgeInsets.only(left: 36, bottom: 6),
+                child: Text(
+                  'Proactive check-in',
+                  style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w600,
+                    color: AppColors.textSecondary.withValues(alpha: 0.85),
+                    letterSpacing: 0.2,
+                  ),
+                ),
+              ),
+            ],
+            if ((message.senderLabel ?? '').trim().isNotEmpty)
+              Padding(
+                padding: EdgeInsets.only(
+                  bottom: 6,
+                  left: message.isUser ? 0 : 36,
+                  right: message.isUser ? 2 : 0,
+                ),
+                child: Text(
+                  message.senderLabel!.trim(),
+                  textAlign: message.isUser ? TextAlign.right : TextAlign.left,
+                  style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w600,
+                    color: AppColors.textSecondary.withValues(alpha: 0.9),
+                  ),
+                ),
+              ),
+            Row(
+              mainAxisAlignment: message.isUser
+                  ? MainAxisAlignment.end
+                  : MainAxisAlignment.start,
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                if (!message.isUser) ...[
+                  Container(
+                    width: 28,
+                    height: 28,
+                    margin: const EdgeInsets.only(right: 8),
+                    decoration: const BoxDecoration(
+                      color: AppColors.primaryLemon,
+                      shape: BoxShape.circle,
+                    ),
+                    child: const Center(
+                      child: Text(
+                        '✦',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: AppColors.textOnYellow,
+                        ),
                       ),
+                    ),
+                  ),
+                ],
+                Flexible(
+                  child: GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onLongPressStart: (details) {
+                      _showCopyMenu(context, details.globalPosition);
+                    },
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 14,
+                        vertical: 10,
+                      ),
+                      decoration: BoxDecoration(
+                        color: message.isUser
+                            ? AppColors.primaryLemonDark
+                            : AppColors.backgroundWhite,
+                        borderRadius: BorderRadius.only(
+                          topLeft: const Radius.circular(16),
+                          topRight: const Radius.circular(16),
+                          bottomLeft: Radius.circular(message.isUser ? 16 : 4),
+                          bottomRight: Radius.circular(message.isUser ? 4 : 16),
+                        ),
+                        boxShadow: AppColors.cardShadow,
+                      ),
+                      child: _buildContent(),
                     ),
                   ),
                 ),
               ],
-              Flexible(
-                child: Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 14,
-                    vertical: 10,
-                  ),
-                  decoration: BoxDecoration(
-                    color: message.isUser
-                        ? AppColors.primaryLemonDark
-                        : AppColors.backgroundWhite,
-                    borderRadius: BorderRadius.only(
-                      topLeft: const Radius.circular(16),
-                      topRight: const Radius.circular(16),
-                      bottomLeft: Radius.circular(message.isUser ? 16 : 4),
-                      bottomRight: Radius.circular(message.isUser ? 4 : 16),
-                    ),
-                    boxShadow: AppColors.cardShadow,
-                  ),
-                  child: _buildContent(),
-                ),
-              ),
-            ],
-          ),
-        ],
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -1228,9 +1275,39 @@ class _ChatBubble extends StatelessWidget {
   Widget _buildContent() {
     // User message
     if (message.isUser) {
-      return Text(
-        message.text,
-        style: const TextStyle(fontSize: 14, color: Colors.white, height: 1.4),
+      return MarkdownBody(
+        data: message.text,
+        styleSheet: MarkdownStyleSheet(
+          p: const TextStyle(fontSize: 16, color: Colors.white, height: 1.4),
+          strong: const TextStyle(
+            fontSize: 16,
+            color: Colors.white,
+            fontWeight: FontWeight.bold,
+            height: 1.4,
+          ),
+          em: const TextStyle(
+            fontSize: 16,
+            color: Colors.white,
+            fontStyle: FontStyle.italic,
+            height: 1.4,
+          ),
+          code: TextStyle(
+            fontSize: 15,
+            color: Colors.white,
+            backgroundColor: Colors.white.withValues(alpha: 0.2),
+            height: 1.4,
+          ),
+          blockquote: const TextStyle(
+            fontSize: 16,
+            color: Colors.white,
+            height: 1.4,
+          ),
+          listBullet: const TextStyle(
+            fontSize: 16,
+            color: Colors.white,
+            height: 1.4,
+          ),
+        ),
       );
     }
 
@@ -1256,7 +1333,7 @@ class _ChatBubble extends StatelessWidget {
                 child: Text(
                   message.text,
                   style: const TextStyle(
-                    fontSize: 14,
+                    fontSize: 16,
                     color: AppColors.textSecondary,
                     height: 1.4,
                   ),
@@ -1299,7 +1376,7 @@ class _ChatBubble extends StatelessWidget {
             child: Text(
               message.text,
               style: const TextStyle(
-                fontSize: 14,
+                fontSize: 16,
                 color: AppColors.textSecondary,
                 height: 1.4,
               ),
@@ -1322,12 +1399,12 @@ class _ChatBubble extends StatelessWidget {
               data: message.text,
               styleSheet: MarkdownStyleSheet(
                 p: const TextStyle(
-                  fontSize: 14,
+                  fontSize: 16,
                   color: AppColors.textPrimary,
                   height: 1.4,
                 ),
                 strong: const TextStyle(
-                  fontSize: 14,
+                  fontSize: 16,
                   color: AppColors.textPrimary,
                   fontWeight: FontWeight.bold,
                   height: 1.4,
@@ -1344,7 +1421,7 @@ class _ChatBubble extends StatelessWidget {
       return AnalysisResultCard(result: message.analysisResult!);
     }
 
-    // Normal assistant message — markdown + optional nav hint
+    // Normal assistant message (including collaboration messages) — markdown + optional nav hint
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       mainAxisSize: MainAxisSize.min,
@@ -1353,14 +1430,26 @@ class _ChatBubble extends StatelessWidget {
           data: message.text,
           styleSheet: MarkdownStyleSheet(
             p: const TextStyle(
-              fontSize: 14,
+              fontSize: 16,
               color: AppColors.textPrimary,
               height: 1.4,
             ),
             strong: const TextStyle(
-              fontSize: 14,
+              fontSize: 16,
               color: AppColors.textPrimary,
               fontWeight: FontWeight.bold,
+              height: 1.4,
+            ),
+            em: const TextStyle(
+              fontSize: 16,
+              color: AppColors.textPrimary,
+              fontStyle: FontStyle.italic,
+              height: 1.4,
+            ),
+            code: TextStyle(
+              fontSize: 15,
+              color: AppColors.textSecondary,
+              backgroundColor: AppColors.surfaceLight.withValues(alpha: 0.5),
               height: 1.4,
             ),
           ),

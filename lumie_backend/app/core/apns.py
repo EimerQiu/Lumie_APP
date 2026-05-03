@@ -6,7 +6,7 @@ its own httpx client for APNs, but this module is designed for ad-hoc
 sends triggered by API requests (e.g. important-insight alerts).
 
 Env vars required (same as notification_daemon):
-    APNS_KEY_PATH, APNS_KEY_ID, APNS_TEAM_ID, APNS_TOPIC, APNS_USE_SANDBOX
+    APNS_KEY_PATH, APNS_KEY_ID, APNS_TEAM_ID, APNS_TOPIC, APNS_ENV, APNS_USE_SANDBOX
 """
 
 import logging
@@ -24,6 +24,7 @@ APNS_KEY_PATH = os.getenv("APNS_KEY_PATH", "")
 APNS_KEY_ID = os.getenv("APNS_KEY_ID", "")
 APNS_TEAM_ID = os.getenv("APNS_TEAM_ID", "")
 APNS_TOPIC = os.getenv("APNS_TOPIC", "")
+APNS_ENV = os.getenv("APNS_ENV", "").strip().lower()
 APNS_USE_SANDBOX = os.getenv("APNS_USE_SANDBOX", "true").lower() == "true"
 
 # ── JWT token cache ───────────────────────────────────────────────────────────
@@ -56,7 +57,21 @@ def get_apns_jwt() -> str:
     return _apns_token
 
 
-def apns_base_url() -> str:
+def apns_env_order() -> list[str]:
+    """Resolve APNs environment order (production/sandbox/auto)."""
+    if APNS_ENV == "production":
+        return ["production"]
+    if APNS_ENV == "sandbox":
+        return ["sandbox"]
+    if APNS_ENV == "auto":
+        return ["production", "sandbox"]
+    # Backward-compatible fallback for older APNS_USE_SANDBOX-only setups.
     if APNS_USE_SANDBOX:
+        return ["sandbox"]
+    return ["production"]
+
+
+def apns_base_url(env: str = "production") -> str:
+    if env == "sandbox":
         return "https://api.sandbox.push.apple.com"
     return "https://api.push.apple.com"

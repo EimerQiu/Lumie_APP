@@ -1299,7 +1299,7 @@ async def _process_incoming_cross_request(message_doc: dict) -> None:
 
     # Queue push notification to alert the receiving user
     notification_body = (
-        question[:100] + "…" if len(question) > 100 else question
+        question[:500] + "…" if len(question) > 500 else question
     )
     await notification_service.queue_important_insight_notification(
         user_id=approver_user_id,
@@ -1756,7 +1756,7 @@ async def _process_incoming_cross_health_concern(message_doc: dict, requester_ct
 
     # Queue push notification to alert the receiving user
     notification_body = (
-        question[:100] + "…" if len(question) > 100 else question
+        question[:500] + "…" if len(question) > 500 else question
     )
     await notification_service.queue_important_insight_notification(
         user_id=receiver_user_id,

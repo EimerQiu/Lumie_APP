@@ -14,7 +14,10 @@ Env vars (same as the API server):
     APNS_KEY_ID          – Apple key ID
     APNS_TEAM_ID         – Apple team ID
     APNS_TOPIC           – bundle identifier (e.g. com.lumie.app)
-    APNS_USE_SANDBOX     – "true" for development (default), "false" for production
+    APNS_ENV             – "auto" (default), "production", or "sandbox"
+                           auto = try production first (TestFlight-friendly),
+                           then fallback to sandbox for token env mismatch.
+    APNS_USE_SANDBOX     – legacy fallback flag when APNS_ENV is unset
 """
 
 import asyncio
@@ -41,6 +44,7 @@ APNS_KEY_PATH = os.getenv("APNS_KEY_PATH", "")
 APNS_KEY_ID = os.getenv("APNS_KEY_ID", "")
 APNS_TEAM_ID = os.getenv("APNS_TEAM_ID", "")
 APNS_TOPIC = os.getenv("APNS_TOPIC", "")
+APNS_ENV = os.getenv("APNS_ENV", "").strip().lower()
 APNS_USE_SANDBOX = os.getenv("APNS_USE_SANDBOX", "true").lower() == "true"
 
 POLL_INTERVAL = 60  # seconds
@@ -92,8 +96,27 @@ def _get_apns_token() -> str:
     return _apns_token
 
 
-def _apns_base_url() -> str:
+def _apns_env_order() -> list[str]:
+    """
+    Resolve APNs environment order.
+    - production: production only (TestFlight/App Store)
+    - sandbox: sandbox only (debug/dev)
+    - auto/default: production first, then sandbox fallback
+    """
+    if APNS_ENV == "production":
+        return ["production"]
+    if APNS_ENV == "sandbox":
+        return ["sandbox"]
+    if APNS_ENV == "auto":
+        return ["production", "sandbox"]
+    # Backward-compatible fallback for older deployments.
     if APNS_USE_SANDBOX:
+        return ["sandbox"]
+    return ["production"]
+
+
+def _apns_base_url(env: str) -> str:
+    if env == "sandbox":
         return "https://api.sandbox.push.apple.com"
     return "https://api.push.apple.com"
 
@@ -119,7 +142,6 @@ async def send_apns(
         logger.error("APNs token error: %s", e)
         return False
 
-    url = f"{_apns_base_url()}/3/device/{device_token}"
     aps: dict = {}
     if include_alert:
         aps["alert"] = {"title": title, "body": body}
@@ -144,22 +166,53 @@ async def send_apns(
         "apns-push-type": push_type,
         "apns-priority": priority,
     }
-    try:
-        resp = await client.post(url, json=payload, headers=headers)
-        if resp.status_code == 200:
-            logger.info("Sent → %s (%s)", title, device_token[:12])
-            return True
-        else:
+    env_order = _apns_env_order()
+    for idx, env in enumerate(env_order):
+        url = f"{_apns_base_url(env)}/3/device/{device_token}"
+        try:
+            resp = await client.post(url, json=payload, headers=headers)
+            if resp.status_code == 200:
+                logger.info("Sent [%s] → %s (%s)", env, title, device_token[:12])
+                return True
+
+            # Retry once on the alternate endpoint when token env mismatches.
+            retryable_env_mismatch = (
+                idx + 1 < len(env_order)
+                and resp.status_code == 400
+                and ("BadDeviceToken" in resp.text or "DeviceTokenNotForTopic" in resp.text)
+            )
+            if retryable_env_mismatch:
+                logger.warning(
+                    "APNs %s on %s for token %s: %s; retrying %s",
+                    resp.status_code,
+                    env,
+                    device_token[:12],
+                    resp.text,
+                    env_order[idx + 1],
+                )
+                continue
+
             logger.warning(
-                "APNs %s for token %s: %s",
+                "APNs %s on %s for token %s: %s",
                 resp.status_code,
+                env,
                 device_token[:12],
                 resp.text,
             )
             return False
-    except Exception as e:
-        logger.error("APNs request failed: %s", e)
-        return False
+        except Exception as e:
+            # Network/transient errors may succeed on fallback env in auto mode.
+            if idx + 1 < len(env_order):
+                logger.warning(
+                    "APNs request failed on %s: %s; retrying %s",
+                    env,
+                    e,
+                    env_order[idx + 1],
+                )
+                continue
+            logger.error("APNs request failed on %s: %s", env, e)
+            return False
+    return False
 
 
 # ---------------------------------------------------------------------------
