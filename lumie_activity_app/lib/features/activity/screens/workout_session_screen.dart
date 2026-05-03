@@ -59,6 +59,12 @@ class _WorkoutSessionScreenState extends State<WorkoutSessionScreen>
 
   // ── Session ───────────────────────────────────────────────────────────────
   _SessionState _state = _SessionState.preview;
+
+  // Re-entrancy guard for [_exitToToday]. Every exit path on this screen
+  // (Discard, Save & Exit, natural finish, preview Close, system back) routes
+  // through that one helper and we want it to fire exactly once even if the
+  // user double-taps or two paths fire in the same frame.
+  bool _exiting = false;
   int _exerciseIndex = 0;
   int _setIndex = 0;
   int _currentReps = 0;
@@ -1452,7 +1458,9 @@ class _WorkoutSessionScreenState extends State<WorkoutSessionScreen>
     final isLastExercise =
         _exerciseIndex >= widget.workoutPlan.exercises.length - 1;
     if (isLastSet && isLastExercise) {
-      _endSession();
+      // Natural finish — every set of every exercise done. Same exit path as
+      // the End button so the user always lands on Today.
+      _exitToToday();
       return;
     }
     setState(() {
@@ -1546,18 +1554,131 @@ class _WorkoutSessionScreenState extends State<WorkoutSessionScreen>
     _demoController.forward(from: 0.0);
   }
 
-  void _endSession() {
-    _cameraController?.stopImageStream();
-    setState(() => _state = _SessionState.complete);
+  /// Single source of truth for leaving the workout screen.
+  ///
+  /// Every exit path on this screen — Discard, Save & Exit, completing all
+  /// reps naturally, the preview Close button, the system back gesture —
+  /// routes through here so we always end up on the Today page in exactly the
+  /// same way:
+  ///
+  ///   1. Cancel the rest timer so it can't fire setState on a popped widget.
+  ///   2. Stop the camera image stream (errors swallowed — dispose() will
+  ///      finish teardown either way).
+  ///   3. [Navigator.pushNamedAndRemoveUntil] '/home', clearing every route
+  ///      above the root and pushing a fresh [MainNavigationScreen] which
+  ///      starts on the Today tab (index 0). This is atomic at the framework
+  ///      level, so there is no intermediate frame where a black scaffold or
+  ///      a half-disposed camera widget can be visible — which is what was
+  ///      causing the stuck-black-screen state on the previous fix.
+  ///
+  /// The [_exiting] guard makes this idempotent — back-to-back taps or two
+  /// paths firing in the same frame don't double-navigate.
+  void _exitToToday() {
+    if (_exiting) return;
+    _exiting = true;
+    _restTimer?.cancel();
+    _cameraController?.stopImageStream().catchError((_) {});
+    if (!mounted) return;
+    Navigator.of(context).pushNamedAndRemoveUntil('/home', (_) => false);
+  }
+
+  // ── End-workout button (matches customised flow) ──────────────────────────
+
+  Widget _buildEndButton() {
+    return GestureDetector(
+      onTap: _confirmEndWorkout,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+        decoration: BoxDecoration(
+          color: Colors.red.withAlpha(30),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: Colors.red.withAlpha(60)),
+        ),
+        child: Text(
+          'End',
+          style: TextStyle(
+            color: Colors.red.shade300,
+            fontSize: 12,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _confirmEndWorkout() {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('End Workout?'),
+        content: const Text(
+            'Do you want to save your progress, or discard the workout?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Keep Going'),
+          ),
+          TextButton(
+            onPressed: () {
+              Navigator.pop(ctx);
+              showDialog(
+                context: context,
+                builder: (ctx2) => AlertDialog(
+                  title: const Text('Discard Workout?'),
+                  content: const Text(
+                      'All sets logged in this session will be lost.'),
+                  actions: [
+                    TextButton(
+                      onPressed: () => Navigator.pop(ctx2),
+                      child: const Text('Cancel'),
+                    ),
+                    TextButton(
+                      onPressed: () {
+                        Navigator.pop(ctx2);
+                        _exitToToday();
+                      },
+                      child: const Text('Discard',
+                          style: TextStyle(color: Colors.red)),
+                    ),
+                  ],
+                ),
+              );
+            },
+            child: Text('Discard',
+                style: TextStyle(color: Colors.red.shade300)),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              Navigator.pop(ctx);
+              _exitToToday();
+            },
+            style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.primaryLemon),
+            child: const Text('Save & Exit',
+                style: TextStyle(color: AppColors.textOnYellow)),
+          ),
+        ],
+      ),
+    );
   }
 
   // ── Build ──────────────────────────────────────────────────────────────────
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: Colors.black,
-      body: SafeArea(child: _buildBody()),
+    // PopScope intercepts the system back gesture (Android back button / iOS
+    // back swipe) so the back hardware path can't bypass the End-workout
+    // confirmation and leave the user on Activity History instead of Today.
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, _) {
+        if (didPop || _exiting) return;
+        _confirmEndWorkout();
+      },
+      child: Scaffold(
+        backgroundColor: Colors.black,
+        body: SafeArea(child: _buildBody()),
+      ),
     );
   }
 
@@ -1572,7 +1693,10 @@ class _WorkoutSessionScreenState extends State<WorkoutSessionScreen>
       case _SessionState.rest:
         return _buildRest();
       case _SessionState.complete:
-        return _buildComplete();
+        // Unreachable — _exitToToday() is now the only path off this screen
+        // and it pushes /home before any rebuild can land here. Kept for
+        // switch exhaustiveness only.
+        return const SizedBox.shrink();
     }
   }
 
@@ -1585,12 +1709,13 @@ class _WorkoutSessionScreenState extends State<WorkoutSessionScreen>
       fit: StackFit.expand,
       children: [
         _buildCameraFeed(),
-        // Close button
+        // Close button — direct exit to Today (no confirmation; no in-flight
+        // session data exists yet on the preview screen).
         Positioned(
           top: 12,
           left: 16,
           child: GestureDetector(
-            onTap: () => Navigator.of(context).pop(),
+            onTap: _exitToToday,
             child: Container(
               padding: const EdgeInsets.all(8),
               decoration: BoxDecoration(
@@ -1774,7 +1899,7 @@ class _WorkoutSessionScreenState extends State<WorkoutSessionScreen>
               Positioned(
                 top: 22,
                 left: 72,
-                right: 16,
+                right: 72,
                 child: Text(
                   exercise.name,
                   textAlign: TextAlign.center,
@@ -1784,6 +1909,12 @@ class _WorkoutSessionScreenState extends State<WorkoutSessionScreen>
                     fontWeight: FontWeight.bold,
                   ),
                 ),
+              ),
+              // End button — top right
+              Positioned(
+                top: 20,
+                right: 16,
+                child: _buildEndButton(),
               ),
               // Beginner cue — lower centre
               Positioned(
@@ -1877,6 +2008,8 @@ class _WorkoutSessionScreenState extends State<WorkoutSessionScreen>
                     fontWeight: FontWeight.w600,
                   ),
                 ),
+                const SizedBox(width: 8),
+                _buildEndButton(),
               ],
             ),
           ),
@@ -2065,6 +2198,12 @@ class _WorkoutSessionScreenState extends State<WorkoutSessionScreen>
             ],
           ),
         ),
+        // End button — top right
+        Positioned(
+          top: 12,
+          right: 16,
+          child: _buildEndButton(),
+        ),
       ],
     );
   }
@@ -2080,151 +2219,10 @@ class _WorkoutSessionScreenState extends State<WorkoutSessionScreen>
     return 'Next: ${_currentExercise.name} — Set ${_setIndex + 2}';
   }
 
-  // ── Complete view ──────────────────────────────────────────────────────────
-
-  Widget _buildComplete() {
-    final plan = widget.workoutPlan;
-    final totalSets = plan.exercises.fold(0, (s, e) => s + e.sets);
-    final totalReps = plan.exercises.fold(
-      0,
-      (s, e) => s + e.targetReps * e.sets,
-    );
-    return Column(
-      children: [
-        const SizedBox(height: 24),
-        const Text(
-          'Workout Complete',
-          style: TextStyle(
-            fontSize: 24,
-            fontWeight: FontWeight.bold,
-            color: Colors.white,
-          ),
-        ),
-        Expanded(
-          child: SingleChildScrollView(
-            padding: const EdgeInsets.all(32),
-            child: Column(
-              children: [
-                const SizedBox(height: 16),
-                Container(
-                  width: 88,
-                  height: 88,
-                  decoration: BoxDecoration(
-                    color: AppColors.primaryLemon.withValues(alpha: 0.12),
-                    shape: BoxShape.circle,
-                  ),
-                  child: Center(
-                    child: Text(
-                      plan.emoji,
-                      style: const TextStyle(fontSize: 44),
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 12),
-                Text(
-                  plan.name,
-                  style: const TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.w500,
-                    color: Colors.white70,
-                  ),
-                ),
-                const SizedBox(height: 40),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                  children: [
-                    _CompleteStat(
-                      icon: Icons.fitness_center,
-                      label: 'Exercises',
-                      value: '${plan.exercises.length}',
-                    ),
-                    _CompleteStat(
-                      icon: Icons.repeat,
-                      label: 'Total Sets',
-                      value: '$totalSets',
-                    ),
-                    _CompleteStat(
-                      icon: Icons.numbers,
-                      label: 'Total Reps',
-                      value: '$totalReps',
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 32),
-                // Exercise breakdown
-                ...plan.exercises.map(
-                  (ex) => Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 6),
-                    child: Row(
-                      children: [
-                        Expanded(
-                          child: Text(
-                            ex.name,
-                            style: const TextStyle(
-                              color: Colors.white70,
-                              fontSize: 14,
-                            ),
-                          ),
-                        ),
-                        Text(
-                          '${ex.sets} × ${ex.targetReps}',
-                          style: const TextStyle(
-                            color: AppColors.primaryLemonDark,
-                            fontSize: 14,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-        // Save / Discard
-        Padding(
-          padding: const EdgeInsets.fromLTRB(24, 0, 24, 32),
-          child: Column(
-            children: [
-              SizedBox(
-                width: double.infinity,
-                child: ElevatedButton(
-                  onPressed: () {
-                    // TODO: Save workout record to backend via API
-                    Navigator.of(context).pop();
-                  },
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: AppColors.primaryLemonDark,
-                    padding: const EdgeInsets.symmetric(vertical: 20),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(18),
-                    ),
-                  ),
-                  child: const Text(
-                    'Save Workout',
-                    style: TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.bold,
-                      color: Color(0xFF78350F),
-                    ),
-                  ),
-                ),
-              ),
-              const SizedBox(height: 12),
-              TextButton(
-                onPressed: () => Navigator.of(context).pop(),
-                child: const Text(
-                  'Discard',
-                  style: TextStyle(fontSize: 14, color: Colors.white30),
-                ),
-              ),
-            ],
-          ),
-        ),
-      ],
-    );
-  }
+  // The inline complete view used to render here on a black scaffold and was
+  // the source of the stuck-black-screen bug. Every exit path now routes
+  // through [_exitToToday] which pushes '/home' atomically — no intermediate
+  // summary screen is shown.
 
   // ── Camera feed widget ────────────────────────────────────────────────────
 
@@ -2516,40 +2514,4 @@ class _StickFigurePainter extends CustomPainter {
 
   @override
   bool shouldRepaint(_StickFigurePainter old) => true;
-}
-
-// ─── Stat widget for complete view ────────────────────────────────────────────
-
-class _CompleteStat extends StatelessWidget {
-  final IconData icon;
-  final String label;
-  final String value;
-
-  const _CompleteStat({
-    required this.icon,
-    required this.label,
-    required this.value,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      children: [
-        Icon(icon, color: AppColors.primaryLemonDark, size: 22),
-        const SizedBox(height: 4),
-        Text(
-          value,
-          style: const TextStyle(
-            fontSize: 20,
-            fontWeight: FontWeight.bold,
-            color: Colors.white,
-          ),
-        ),
-        Text(
-          label,
-          style: const TextStyle(fontSize: 11, color: Colors.white54),
-        ),
-      ],
-    );
-  }
 }

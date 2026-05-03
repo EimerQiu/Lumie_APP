@@ -17,6 +17,7 @@ class TodayStepsProvider extends ChangeNotifier {
   final StepsService _service = StepsService();
 
   DailyStepData? _today;
+  DailyStepData? _yesterday;
   bool _isLoading = false;
 
   RingProvider? _ringProvider;
@@ -25,6 +26,10 @@ class TodayStepsProvider extends ChangeNotifier {
   // ─── Getters ──────────────────────────────────────────────────────────────
 
   DailyStepData? get today => _today;
+
+  /// Yesterday's record — used to seed today's morning "carry-forward"
+  /// activity score so the Today page doesn't open at zero.
+  DailyStepData? get yesterday => _yesterday;
   bool get isLoading => _isLoading;
   bool get hasData => _today != null;
 
@@ -80,14 +85,18 @@ class TodayStepsProvider extends ChangeNotifier {
         }
       }
 
-      // 2. Fetch today's record from the backend.
+      // 2. Fetch today + yesterday from the backend. Yesterday is used to
+      //    seed the morning carry-forward activity score on the Today page.
       final now = DateTime.now();
+      final today0 = DateTime(now.year, now.month, now.day);
       final history = await _service.getHistory(
-        start: DateTime(now.year, now.month, now.day),
+        start: today0.subtract(const Duration(days: 1)),
         end: now,
       );
       final todayStr = _fmtDate(now);
+      final yesterdayStr = _fmtDate(now.subtract(const Duration(days: 1)));
       _today = history.where((h) => h.dateStr == todayStr).firstOrNull;
+      _yesterday = history.where((h) => h.dateStr == yesterdayStr).firstOrNull;
     } catch (e) {
       debugPrint('[TodaySteps] load error: $e');
     } finally {
@@ -103,6 +112,7 @@ class TodayStepsProvider extends ChangeNotifier {
     _ringProvider = null;
     _lastRingConnected = false;
     _today = null;
+    _yesterday = null;
     _isLoading = false;
     notifyListeners();
   }

@@ -44,6 +44,7 @@ enum SkyMood {
     final activityHas = activityScore != null;
     final sleepHas = sleepScore != null && sleepScore > 0;
     final stressHas = stressScore != null && stressScore > 0;
+    final isMorning = now.hour < 12;
 
     // Aurora — every available signal needs to be peak.
     final allTracked = sleepHas && activityHas && stressHas;
@@ -62,8 +63,10 @@ enum SkyMood {
       return SkyMood.warmTwilight;
     }
 
-    // Low / sedentary day.
-    if (activityHas && !isRestDay && activityScore < 30) {
+    // Low / sedentary day. Suppressed in the morning so the Today page never
+    // opens to a flat grey sky before today's data has had a chance to land —
+    // we fall through to pastelSunrise instead.
+    if (activityHas && !isRestDay && activityScore < 30 && !isMorning) {
       return SkyMood.overcast;
     }
 

@@ -2,8 +2,10 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/services/rest_days_service.dart';
+import '../../../core/services/sleep_service.dart';
 import '../../../core/services/steps_service.dart';
 import '../../../shared/models/rest_days_models.dart';
+import '../../../shared/models/sleep_models.dart';
 import '../../../shared/models/user_models.dart';
 import '../../settings/providers/activity_goal_provider.dart';
 import '../providers/today_steps_provider.dart';
@@ -71,6 +73,11 @@ class _ActivityHistoryScreenState extends State<ActivityHistoryScreen> {
   /// Resolved rest-day schedule. Drives the Recovery Time card's 7-day icon row
   /// — without this, recurring weekly rest days would always render as "active".
   RestDaySettings? _restDays;
+
+  /// Sleep quality score per night, keyed by the local-date string the user
+  /// woke up on (yyyy-MM-dd). Feeds the combined Recovery Time logic — rest +
+  /// sleep — so a poor night reduces a rest day's recovery credit.
+  Map<String, int> _sleepScoreByDate = const {};
 
   RingProvider? _ringProvider;
   bool _lastConnected = false;
@@ -166,6 +173,14 @@ class _ActivityHistoryScreenState extends State<ActivityHistoryScreen> {
 
     final history = await StepsService().getHistory(start: startDate, end: now);
     final todayGoal = await StepsService().getGoal(now);
+    final sleepHistory = await SleepService()
+        .getSleepHistory(startDate: startDate, endDate: now)
+        .catchError((_) => <SleepSession>[]);
+    final sleepScoreByDate = <String, int>{
+      for (final s in sleepHistory)
+        _fmtDate(s.wakeTime.toLocal()):
+            s.sleepQualityScore.round().clamp(0, 100),
+    };
 
     // 3. Build a _DayData entry for each of the last 7 days.
     //    Days with no ring data show 0 steps / 0 active minutes.
@@ -223,6 +238,7 @@ class _ActivityHistoryScreenState extends State<ActivityHistoryScreen> {
     if (mounted) {
       setState(() {
         _weekData = weekData;
+        _sleepScoreByDate = sleepScoreByDate;
         _isLoading = false;
       });
     }
@@ -356,18 +372,11 @@ class _ActivityHistoryScreenState extends State<ActivityHistoryScreen> {
                         const SizedBox(height: 16),
                         _buildSelectedDaySummary(goalType),
                         const SizedBox(height: 8),
-                        _MeetDailyGoalsCard(
-                          day: _weekData[_selectedDayIndex],
-                          goalType: goalType,
-                        ),
-                        const SizedBox(height: 8),
-                        _TrainingFrequencyCard(week: _weekData),
-                        const SizedBox(height: 8),
-                        _TrainingVolumeCard(week: _weekData),
-                        const SizedBox(height: 8),
-                        _RecoveryTimeCard(
+                        _ContributorsCard(
                           week: _weekData,
+                          goalType: goalType,
                           restDays: _restDays,
+                          sleepScoreByDate: _sleepScoreByDate,
                         ),
                         const SizedBox(height: 8),
                         _buildActivityList(),
@@ -749,345 +758,216 @@ class _MetricLine extends StatelessWidget {
   }
 }
 
-// ─── Contributor cards ────────────────────────────────────────────────────────
+// ─── Contributors card ────────────────────────────────────────────────────────
 
-/// Oura-style contributor card. Title + lighter description, big metric value,
-/// progress bar, italic encouraging tail message. Always gold-themed and
-/// always written in progress-positive language — never raises a warning.
-class _ContributorCard extends StatelessWidget {
-  final IconData icon;
-  final String title;
-  final String description;
-  final String metricValue;
-  final String metricSuffix;
-  final double progress; // 0–1, clamped before drawing
-  final String message;
-  final Widget? extraBelowMetric;
+/// One Oura-style stacked card containing every contributor as a tight row:
+/// bold name on the left, status value on the right, a thin gold progress bar
+/// directly underneath, then a hairline divider separating the next row.
+/// No per-row borders, gaps, or warning colours.
+class _ContributorsCard extends StatelessWidget {
+  final List<_DayData> week;
+  final ActivityGoalType goalType;
+  final RestDaySettings? restDays;
+  final Map<String, int> sleepScoreByDate;
 
-  const _ContributorCard({
-    required this.icon,
-    required this.title,
-    required this.description,
-    required this.metricValue,
-    required this.metricSuffix,
-    required this.progress,
-    required this.message,
-    this.extraBelowMetric,
+  const _ContributorsCard({
+    required this.week,
+    required this.goalType,
+    required this.restDays,
+    required this.sleepScoreByDate,
   });
+
+  // ── Per-contributor logic ────────────────────────────────────────────────
+
+  /// Days the daily activity goal was hit in the 7-day window.
+  ({String value, double progress}) _meetDailyGoals() {
+    final hit = week.where((d) => d.goalMet(goalType)).length;
+    final progress = (hit / 7).clamp(0.0, 1.0);
+    final status = hit >= 5
+        ? 'Optimal'
+        : hit == 4
+            ? 'Good'
+            : 'Keep building';
+    return (value: '$hit/7 days · $status', progress: progress);
+  }
+
+  ({String value, double progress}) _trainingFrequency() {
+    final sessions = week
+        .where((d) => d.activeMinutes >= _kSessionMinutesThreshold)
+        .length;
+    final progress = (sessions / _kWeeklyFrequencyTarget).clamp(0.0, 1.0);
+    final status = sessions >= _kWeeklyFrequencyTarget
+        ? 'Optimal'
+        : sessions >= _kWeeklyFrequencyTarget - 1
+            ? 'Good'
+            : 'Keep building';
+    return (
+      value: '$sessions/$_kWeeklyFrequencyTarget sessions · $status',
+      progress: progress,
+    );
+  }
+
+  ({String value, double progress}) _trainingVolume() {
+    final volume = week.fold<int>(0, (sum, d) => sum + d.activeMinutes);
+    final progress = (volume / _kWeeklyVolumeTarget).clamp(0.0, 1.0);
+    final status = volume >= _kWeeklyVolumeTarget
+        ? 'Optimal'
+        : volume >= (_kWeeklyVolumeTarget * 0.6).round()
+            ? 'Good'
+            : 'Keep building';
+    return (
+      value: '$volume/$_kWeeklyVolumeTarget min · $status',
+      progress: progress,
+    );
+  }
+
+  /// Combined rest + sleep recovery score over the 7-day window.
+  ///
+  /// Each day earns a fractional credit (0.0–1.0) blending whether the day was
+  /// physically restful and how well the user slept that night:
+  ///   rested + good sleep   → 1.0
+  ///   rested + ok sleep     → 0.7
+  ///   rested + poor sleep   → 0.4   (poor sleep blunts a rest day)
+  ///   active + good sleep   → 0.6   (good sleep helps even on training days)
+  ///   active + ok sleep     → 0.3
+  ///   active + poor sleep   → 0.0
+  /// Missing sleep data falls back to a neutral mid-credit so unsynced nights
+  /// don't crash the score.
+  double _recoveryCreditForDay(_DayData day) {
+    final rested = (restDays?.isRestDay(day.date) ?? false) ||
+        day.activeMinutes < _kSessionMinutesThreshold;
+    final dateStr =
+        '${day.date.year}-${day.date.month.toString().padLeft(2, '0')}-${day.date.day.toString().padLeft(2, '0')}';
+    final sleep = sleepScoreByDate[dateStr];
+    if (rested) {
+      if (sleep == null) return 0.7;
+      if (sleep >= 70) return 1.0;
+      if (sleep >= 50) return 0.7;
+      return 0.4;
+    } else {
+      if (sleep == null) return 0.3;
+      if (sleep >= 70) return 0.6;
+      if (sleep >= 50) return 0.3;
+      return 0.0;
+    }
+  }
+
+  ({String value, double progress}) _recoveryTime() {
+    final total = week.fold<double>(0, (sum, d) => sum + _recoveryCreditForDay(d));
+    final progress = (total / 7).clamp(0.0, 1.0);
+    final shown = total.round();
+    final status = progress >= 0.7
+        ? 'Optimal'
+        : progress >= 0.4
+            ? 'Good'
+            : 'Keep building';
+    return (value: '$shown/7 days · $status', progress: progress);
+  }
+
+  // ── Build ────────────────────────────────────────────────────────────────
 
   @override
   Widget build(BuildContext context) {
-    final clamped = progress.clamp(0.0, 1.0);
+    final goals = _meetDailyGoals();
+    final frequency = _trainingFrequency();
+    final volume = _trainingVolume();
+    final recovery = _recoveryTime();
+
+    final rows = [
+      (name: 'Meet Daily Goals', value: goals.value, progress: goals.progress),
+      (
+        name: 'Training Frequency',
+        value: frequency.value,
+        progress: frequency.progress
+      ),
+      (name: 'Training Volume', value: volume.value, progress: volume.progress),
+      (
+        name: 'Recovery Time',
+        value: recovery.value,
+        progress: recovery.progress
+      ),
+    ];
+
     return GradientCard(
       gradient: AppColors.cardGradient,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
-            children: [
-              Container(
-                padding: const EdgeInsets.all(8),
-                decoration: BoxDecoration(
-                  gradient: AppColors.warmGradient,
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                child: Icon(icon, size: 18, color: AppColors.textOnYellow),
+          for (var i = 0; i < rows.length; i++) ...[
+            _ContributorRow(
+              name: rows[i].name,
+              value: rows[i].value,
+              progress: rows[i].progress,
+            ),
+            if (i < rows.length - 1)
+              const Divider(
+                height: 18,
+                thickness: 0.5,
+                color: AppColors.surfaceLight,
               ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      title,
-                      style: const TextStyle(
-                        fontSize: 15,
-                        fontWeight: FontWeight.w600,
-                        color: AppColors.textPrimary,
-                      ),
-                    ),
-                    const SizedBox(height: 2),
-                    Text(
-                      description,
-                      style: const TextStyle(
-                        fontSize: 12,
-                        color: AppColors.textSecondary,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 14),
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.end,
-            children: [
-              Text(
-                metricValue,
-                style: const TextStyle(
-                  fontSize: 32,
-                  fontWeight: FontWeight.bold,
-                  color: AppColors.textPrimary,
-                  height: 1.0,
-                ),
-              ),
-              const SizedBox(width: 6),
-              Padding(
-                padding: const EdgeInsets.only(bottom: 4),
-                child: Text(
-                  metricSuffix,
-                  style: const TextStyle(
-                    fontSize: 13,
-                    color: AppColors.textSecondary,
-                  ),
-                ),
-              ),
-            ],
-          ),
-          if (extraBelowMetric != null) ...[
-            const SizedBox(height: 10),
-            extraBelowMetric!,
           ],
-          const SizedBox(height: 12),
-          ClipRRect(
-            borderRadius: BorderRadius.circular(6),
-            child: LinearProgressIndicator(
-              value: clamped,
-              minHeight: 8,
-              backgroundColor: AppColors.surfaceLight,
-              valueColor: const AlwaysStoppedAnimation<Color>(
-                AppColors.primaryLemonDark,
-              ),
-            ),
-          ),
-          const SizedBox(height: 10),
-          Text(
-            message,
-            style: const TextStyle(
-              fontSize: 12,
-              color: AppColors.textSecondary,
-              fontStyle: FontStyle.italic,
-            ),
-          ),
         ],
       ),
     );
   }
 }
 
-class _MeetDailyGoalsCard extends StatelessWidget {
-  final _DayData day;
-  final ActivityGoalType goalType;
+/// One contributor inside [_ContributorsCard]: bold name on the left, value on
+/// the right, gold progress bar tight beneath.
+class _ContributorRow extends StatelessWidget {
+  final String name;
+  final String value;
+  final double progress;
 
-  const _MeetDailyGoalsCard({required this.day, required this.goalType});
-
-  @override
-  Widget build(BuildContext context) {
-    final met = day.goalMet(goalType);
-    final progress = day.goalProgress(goalType);
-
-    final metricValue = goalType == ActivityGoalType.steps
-        ? _ActivityHistoryScreenState._fmtSteps(day.steps)
-        : '${day.activeMinutes}';
-    final metricSuffix = goalType == ActivityGoalType.steps
-        ? '/ ${_ActivityHistoryScreenState._fmtSteps(day.goalSteps)} steps'
-        : '/ ${day.goalMinutes} min';
-
-    final secondaryLine = goalType == ActivityGoalType.steps
-        ? '${day.activeMinutes} min active today'
-        : '${_ActivityHistoryScreenState._fmtSteps(day.steps)} steps today';
-
-    final message = met
-        ? 'Goal hit — beautiful work today.'
-        : 'You\'re on the way — every step counts.';
-
-    return _ContributorCard(
-      icon: Icons.flag_outlined,
-      title: 'Meet Daily Goals',
-      description: 'Today\'s active time and step count vs. your daily target.',
-      metricValue: metricValue,
-      metricSuffix: metricSuffix,
-      progress: progress,
-      message: message,
-      extraBelowMetric: Text(
-        secondaryLine,
-        style: const TextStyle(
-          fontSize: 13,
-          color: AppColors.textSecondary,
-          fontWeight: FontWeight.w500,
-        ),
-      ),
-    );
-  }
-}
-
-class _TrainingFrequencyCard extends StatelessWidget {
-  final List<_DayData> week;
-
-  const _TrainingFrequencyCard({required this.week});
+  const _ContributorRow({
+    required this.name,
+    required this.value,
+    required this.progress,
+  });
 
   @override
   Widget build(BuildContext context) {
-    // Approximation: a "session" is any day with ≥30 active minutes. We don't
-    // yet have per-session HR/intensity scoring on this screen, so the day-level
-    // active-minute total is the most honest signal we can show.
-    final sessions = week
-        .where((d) => d.activeMinutes >= _kSessionMinutesThreshold)
-        .length;
-    final progress = sessions / _kWeeklyFrequencyTarget;
-
-    final message = sessions >= _kWeeklyFrequencyTarget
-        ? 'Strong rhythm this week — keep it going.'
-        : sessions == 0
-            ? 'A short walk or stretch today is a great place to begin.'
-            : 'Nicely on track — one more session to round out the week.';
-
-    return _ContributorCard(
-      icon: Icons.fitness_center,
-      title: 'Training Frequency',
-      description:
-          'Medium-to-high effort sessions you\'ve completed in the past 7 days.',
-      metricValue: '$sessions',
-      metricSuffix: '/ $_kWeeklyFrequencyTarget sessions',
-      progress: progress,
-      message: message,
-    );
-  }
-}
-
-class _TrainingVolumeCard extends StatelessWidget {
-  final List<_DayData> week;
-
-  const _TrainingVolumeCard({required this.week});
-
-  @override
-  Widget build(BuildContext context) {
-    final volume = week.fold<int>(0, (sum, d) => sum + d.activeMinutes);
-    final progress = volume / _kWeeklyVolumeTarget;
-
-    // Past ~150% of the target is a gentle nudge to make space for recovery —
-    // never framed as a warning per the tone rules.
-    final message = volume >= (_kWeeklyVolumeTarget * 1.5)
-        ? 'Lots of movement this week — be sure to make time for recovery too.'
-        : volume >= _kWeeklyVolumeTarget
-            ? 'Great weekly volume — your habit is taking shape.'
-            : volume == 0
-                ? 'Building a steady weekly rhythm starts with one easy day.'
-                : 'You\'re building a sustainable habit — keep stacking minutes.';
-
-    return _ContributorCard(
-      icon: Icons.timer_outlined,
-      title: 'Training Volume',
-      description: 'Total active minutes you\'ve built up over the past 7 days.',
-      metricValue: '$volume',
-      metricSuffix: '/ $_kWeeklyVolumeTarget min',
-      progress: progress,
-      message: message,
-    );
-  }
-}
-
-class _RecoveryTimeCard extends StatelessWidget {
-  final List<_DayData> week;
-  final RestDaySettings? restDays;
-
-  const _RecoveryTimeCard({required this.week, required this.restDays});
-
-  bool _isRecoveryDay(_DayData day) {
-    if (restDays?.isRestDay(day.date) ?? false) return true;
-    // Light-movement days also count toward recovery — never as a "missed" day.
-    return day.activeMinutes < _kSessionMinutesThreshold;
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    // Build oldest-to-newest so the icon row reads like a calendar (Mon → Sun
-    // for that user's week). _weekData is stored newest-first.
-    final ordered = week.reversed.toList();
-    final recoveryDays = ordered.where(_isRecoveryDay).length;
-
-    // Soft target — at least one recovery day per week is healthy. We always
-    // show the bar at full when there's any recovery, since the spec forbids
-    // negative framing for multiple rest days.
-    final progress = recoveryDays > 0 ? 1.0 : 0.0;
-
-    final message = recoveryDays >= 2
-        ? 'Plenty of recovery — your body will thank you.'
-        : recoveryDays == 1
-            ? 'A solid balance of training and recovery this week.'
-            : 'Recovery is part of progress — schedule a gentle day soon.';
-
-    return _ContributorCard(
-      icon: Icons.self_improvement,
-      title: 'Recovery Time',
-      description: 'Recovery and low-intensity days — always essential.',
-      metricValue: '$recoveryDays',
-      metricSuffix: 'recovery day${recoveryDays == 1 ? '' : 's'} this week',
-      progress: progress,
-      message: message,
-      extraBelowMetric: _DayDotsRow(
-        days: ordered.map((d) => _DayDot(
-              date: d.date,
-              isRecovery: _isRecoveryDay(d),
-            )).toList(),
-      ),
-    );
-  }
-}
-
-class _DayDot {
-  final DateTime date;
-  final bool isRecovery;
-  const _DayDot({required this.date, required this.isRecovery});
-}
-
-/// 7-day icon row — one icon per day. Recovery days render the gentle leaf
-/// glyph, active days render a small flame. Both look intentional and equally
-/// valued (no red, no warnings).
-class _DayDotsRow extends StatelessWidget {
-  final List<_DayDot> days;
-
-  const _DayDotsRow({required this.days});
-
-  static const _weekdayLabels = ['M', 'T', 'W', 'T', 'F', 'S', 'S'];
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-      children: days.map((d) {
-        final label = _weekdayLabels[(d.date.weekday - 1).clamp(0, 6)];
-        return Column(
+    final clamped = progress.clamp(0.0, 1.0);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.center,
           children: [
-            Container(
-              width: 30,
-              height: 30,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                gradient: d.isRecovery
-                    ? AppColors.mintGradient
-                    : AppColors.warmGradient,
-              ),
-              alignment: Alignment.center,
-              child: Icon(
-                d.isRecovery ? Icons.spa_outlined : Icons.local_fire_department,
-                size: 16,
-                color: AppColors.textOnYellow,
+            Expanded(
+              child: Text(
+                name,
+                style: const TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w700,
+                  color: AppColors.textPrimary,
+                ),
               ),
             ),
-            const SizedBox(height: 4),
+            const SizedBox(width: 12),
             Text(
-              label,
+              value,
               style: const TextStyle(
-                fontSize: 10,
-                color: AppColors.textLight,
+                fontSize: 13,
                 fontWeight: FontWeight.w500,
+                color: AppColors.textSecondary,
               ),
             ),
           ],
-        );
-      }).toList(),
+        ),
+        const SizedBox(height: 8),
+        ClipRRect(
+          borderRadius: BorderRadius.circular(4),
+          child: LinearProgressIndicator(
+            value: clamped,
+            minHeight: 5,
+            backgroundColor: AppColors.surfaceLight,
+            valueColor: const AlwaysStoppedAnimation<Color>(
+              AppColors.primaryLemonDark,
+            ),
+          ),
+        ),
+      ],
     );
   }
 }

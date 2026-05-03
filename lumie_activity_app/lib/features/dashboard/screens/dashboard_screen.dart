@@ -68,6 +68,47 @@ class _DashboardScreenState extends State<DashboardScreen>
         .clamp(0, 100);
   }
 
+  /// Same goal-progress formula as [_activityScore] but applied to a previous
+  /// day's [DailyStepData] (which already carries that day's own goal).
+  int _scoreForDay(DailyStepData day) {
+    if (day.effectiveGoal <= 0) return 0;
+    return ((day.effectiveCurrent / day.effectiveGoal) * 100)
+        .round()
+        .clamp(0, 100);
+  }
+
+  /// Activity score shown to the user — never starts at 0 in the morning.
+  ///
+  /// Opens the day at yesterday's activity score, lightly penalised by last
+  /// night's sleep quality (poor sleep ⇒ recovery was incomplete). Once
+  /// today's actual progress surpasses that carry-forward baseline, today's
+  /// real value takes over so the score keeps updating in real time as the
+  /// day goes on.
+  int _carriedForwardActivityScore(
+    ActivityGoalProvider goalProv,
+    TodayStepsProvider stepsProv,
+    SleepProvider sleep,
+  ) {
+    final today = _activityScore(goalProv, stepsProv);
+
+    final y = stepsProv.yesterday;
+    if (y == null) return today;
+    int carry = _scoreForDay(y);
+
+    // Sleep penalty: incomplete recovery shaves a few points off the
+    // carried-forward baseline.
+    if (sleep.latestSleep != null) {
+      final s = sleep.sleepScore;
+      if (s < 50) {
+        carry = (carry - 15).clamp(0, 100);
+      } else if (s < 70) {
+        carry = (carry - 5).clamp(0, 100);
+      }
+    }
+
+    return today > carry ? today : carry;
+  }
+
   @override
   void initState() {
     super.initState();
@@ -153,7 +194,7 @@ class _DashboardScreenState extends State<DashboardScreen>
     ActivityGoalProvider goalProv,
     TodayStepsProvider stepsProv,
   ) {
-    final activity = _activityScore(goalProv, stepsProv);
+    final activity = _carriedForwardActivityScore(goalProv, stepsProv, sleep);
     return SkyMood.fromScores(
       now: DateTime.now(),
       sleepScore: sleep.latestSleep != null ? sleep.sleepScore : null,
@@ -287,7 +328,11 @@ class _DashboardScreenState extends State<DashboardScreen>
           ),
           _ScoreData(
             label: 'Activity',
-            score: _activityScore(goalProv, context.watch<TodayStepsProvider>()),
+            score: _carriedForwardActivityScore(
+              goalProv,
+              context.watch<TodayStepsProvider>(),
+              sleep,
+            ),
             icon: Icons.directions_run,
             onTap: () => Navigator.push(
               context,
@@ -589,6 +634,13 @@ class _DashboardScreenState extends State<DashboardScreen>
     );
   }
 
+  String _greetingForTime(DateTime now) {
+    final hour = now.hour;
+    if (hour < 12) return 'Good Morning';
+    if (hour < 17) return 'Good Afternoon';
+    return 'Good Evening';
+  }
+
   Widget _buildAppBar() {
     return SliverAppBar(
       expandedHeight: 60,
@@ -606,9 +658,9 @@ class _DashboardScreenState extends State<DashboardScreen>
         crossAxisAlignment: CrossAxisAlignment.start,
         mainAxisSize: MainAxisSize.min,
         children: [
-          const Text(
-            'Good Morning',
-            style: TextStyle(
+          Text(
+            _greetingForTime(DateTime.now()),
+            style: const TextStyle(
               fontSize: 20,
               fontWeight: FontWeight.bold,
               color: AppColors.textPrimary,
