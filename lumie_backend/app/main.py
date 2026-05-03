@@ -21,6 +21,7 @@ from .api.admin_task_routes import router as admin_task_router
 from .api.analysis_routes import router as analysis_router
 from .api.dayprint_routes import router as dayprint_router
 from .api.checkin_routes import router as checkin_router
+from .api.advisor_proactive_checklist_routes import router as proactive_checklist_router
 from .api.chat_history_routes import router as chat_history_router
 from .api.sleep_routes import router as sleep_router
 from .api.advisor_v2_routes import router as advisor_v2_router
@@ -140,6 +141,7 @@ app.include_router(admin_task_router, prefix="/api/v1")
 app.include_router(analysis_router, prefix="/api/v1")
 app.include_router(dayprint_router, prefix="/api/v1")
 app.include_router(checkin_router, prefix="/api/v1")
+app.include_router(proactive_checklist_router, prefix="/api/v1")
 app.include_router(chat_history_router, prefix="/api/v1")
 app.include_router(sleep_router, prefix="/api/v1")
 app.include_router(advisor_v2_router, prefix="/api/v2")

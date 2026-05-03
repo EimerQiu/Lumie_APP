@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import '../../../core/services/advisor_capability_service.dart';
-import '../../../core/services/advisor_skill_service.dart';
+import '../../../core/services/advisor_proactive_checklist_service.dart';
 import 'advisor_skill_list_screen.dart';
 
 /// Settings screen for Advisor capabilities and skills.
@@ -15,8 +15,11 @@ class AdvisorSettingsScreen extends StatefulWidget {
 
 class _AdvisorSettingsScreenState extends State<AdvisorSettingsScreen> {
   final _capService = AdvisorCapabilityService();
+  final _checklistService = AdvisorProactiveChecklistService();
   List<AdvisorCapability> _capabilities = [];
+  List<ProactiveChecklistItem> _checklistItems = [];
   bool _loading = true;
+  bool _checklistLoading = false;
   String? _error;
 
   @override
@@ -32,8 +35,10 @@ class _AdvisorSettingsScreenState extends State<AdvisorSettingsScreen> {
     });
     try {
       final caps = await _capService.getCapabilities();
+      final checklist = await _checklistService.getChecklist();
       setState(() {
         _capabilities = caps;
+        _checklistItems = checklist.manualItems;
         _loading = false;
       });
     } catch (e) {
@@ -42,6 +47,135 @@ class _AdvisorSettingsScreenState extends State<AdvisorSettingsScreen> {
         _loading = false;
       });
     }
+  }
+
+  Future<void> _reloadChecklist() async {
+    setState(() {
+      _checklistLoading = true;
+    });
+    try {
+      final checklist = await _checklistService.getChecklist();
+      setState(() {
+        _checklistItems = checklist.manualItems;
+      });
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to load checklist: $e')),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _checklistLoading = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _addChecklistItem() async {
+    final text = await _showChecklistInputDialog(title: 'Add Important Item');
+    if (text == null) return;
+    try {
+      final updated = await _checklistService.addItem(text);
+      setState(() {
+        _checklistItems = updated.manualItems;
+      });
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Failed to add item: $e')));
+      }
+    }
+  }
+
+  Future<void> _editChecklistItem(ProactiveChecklistItem item) async {
+    final text = await _showChecklistInputDialog(
+      title: 'Edit Important Item',
+      initialValue: item.text,
+    );
+    if (text == null) return;
+    try {
+      final updated = await _checklistService.updateItem(item.itemId, text);
+      setState(() {
+        _checklistItems = updated.manualItems;
+      });
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Failed to update item: $e')));
+      }
+    }
+  }
+
+  Future<void> _deleteChecklistItem(ProactiveChecklistItem item) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Delete Item'),
+        content: Text('Remove "${item.text}" from important checklist?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+
+    try {
+      final updated = await _checklistService.deleteItem(item.itemId);
+      setState(() {
+        _checklistItems = updated.manualItems;
+      });
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Failed to delete item: $e')));
+      }
+    }
+  }
+
+  Future<String?> _showChecklistInputDialog({
+    required String title,
+    String initialValue = '',
+  }) async {
+    final controller = TextEditingController(text: initialValue);
+    final result = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(title),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          maxLength: 240,
+          decoration: const InputDecoration(
+            hintText: 'e.g. Morning medicine before school',
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, controller.text.trim()),
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+    final cleaned = (result ?? '').trim();
+    if (cleaned.isEmpty) return null;
+    return cleaned;
   }
 
   Future<void> _toggleCapability(AdvisorCapability cap) async {
@@ -99,6 +233,77 @@ class _AdvisorSettingsScreenState extends State<AdvisorSettingsScreen> {
                       capability: cap,
                       onToggle: () => _toggleCapability(cap),
                     ),
+                  ),
+                  const SizedBox(height: 32),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          'Important Checklist',
+                          style: theme.textTheme.titleLarge,
+                        ),
+                      ),
+                      IconButton(
+                        onPressed: _checklistLoading ? null : _reloadChecklist,
+                        icon: _checklistLoading
+                            ? const SizedBox(
+                                height: 18,
+                                width: 18,
+                                child: CircularProgressIndicator(strokeWidth: 2),
+                              )
+                            : const Icon(Icons.refresh),
+                        tooltip: 'Refresh checklist',
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    'These items are user-defined priorities used by proactive mode.',
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      color: theme.colorScheme.onSurface.withOpacity(0.6),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  ..._checklistItems.map(
+                    (item) => Card(
+                      margin: const EdgeInsets.only(bottom: 8),
+                      child: ListTile(
+                        title: Text(item.text),
+                        trailing: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            IconButton(
+                              icon: const Icon(Icons.edit_outlined),
+                              tooltip: 'Edit',
+                              onPressed: () => _editChecklistItem(item),
+                            ),
+                            IconButton(
+                              icon: const Icon(Icons.delete_outline),
+                              tooltip: 'Delete',
+                              onPressed: () => _deleteChecklistItem(item),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                  if (_checklistItems.isEmpty)
+                    Card(
+                      child: ListTile(
+                        title: Text(
+                          'No important items yet',
+                          style: theme.textTheme.bodyMedium,
+                        ),
+                        subtitle: const Text(
+                          'Add what matters most so proactive check-ins stay focused.',
+                        ),
+                      ),
+                    ),
+                  const SizedBox(height: 8),
+                  FilledButton.icon(
+                    onPressed: _addChecklistItem,
+                    icon: const Icon(Icons.add),
+                    label: const Text('Add Important Item'),
                   ),
                   const SizedBox(height: 32),
                   Text('Skills', style: theme.textTheme.titleLarge),

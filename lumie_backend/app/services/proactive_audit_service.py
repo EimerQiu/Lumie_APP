@@ -23,6 +23,7 @@ async def save_round_record(
     user_id: str,
     created_at: datetime,
     skill_data: list[ProactiveSkillData],
+    checklist: dict | None = None,
 ) -> None:
     """Persist information round — snapshot of all skill data fetched in one round."""
     try:
@@ -32,6 +33,8 @@ async def save_round_record(
             "created_at": format_utc_datetime(created_at),
             "skill_data": [s.model_dump() for s in skill_data],
         }
+        if checklist is not None:
+            round_doc["checklist"] = checklist
         await db.proactive_information_rounds.insert_one(round_doc)
         logger.info("Proactive round: round_id=%s user=%s skills=%d", round_id, user_id, len(skill_data))
     except Exception as e:

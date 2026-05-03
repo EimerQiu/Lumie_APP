@@ -128,6 +128,7 @@ async def create_indexes():
 
     await db.db.proactive_decisions.create_index([("run_id", 1)])
     await db.db.proactive_decisions.create_index([("user_id", 1), ("decided_at", -1)])
+    await db.db.proactive_checklists.create_index("user_id", unique=True)
 
     # Workout: exercises collection
     await db.db.exercises.create_index("exercise_id", unique=True)
