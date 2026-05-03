@@ -28,6 +28,7 @@ from . import skill_credential_service
 from . import execution_service
 from . import advisor_cross_message_service
 from . import chat_history_service
+from . import notification_service
 from .llm_client import chat_completion
 from .skill_registry_service import skill_registry, SkillIndexItem
 
@@ -1293,6 +1294,16 @@ async def _process_incoming_cross_request(message_doc: dict) -> None:
 
     await advisor_cross_message_service.mark_processed(message_doc["message_id"])
 
+    # Queue push notification to alert the receiving user
+    notification_body = (
+        question[:100] + "…" if len(question) > 100 else question
+    )
+    await notification_service.queue_important_insight_notification(
+        user_id=approver_user_id,
+        summary=notification_body,
+        category="other",
+    )
+
 
 async def _resume_cross_advisor_after_user_reply(
     *,
@@ -1736,6 +1747,16 @@ async def _process_incoming_cross_health_concern(message_doc: dict, requester_ct
     )
 
     await advisor_cross_message_service.mark_processed(message_doc["message_id"])
+
+    # Queue push notification to alert the receiving user
+    notification_body = (
+        question[:100] + "…" if len(question) > 100 else question
+    )
+    await notification_service.queue_important_insight_notification(
+        user_id=receiver_user_id,
+        summary=notification_body,
+        category="health_concern",
+    )
 
 
 async def _resume_target_user_ambiguity(

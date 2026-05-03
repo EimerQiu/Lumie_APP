@@ -1,9 +1,12 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:timezone/data/latest.dart' as tz;
 import 'core/theme/app_theme.dart';
 import 'core/theme/app_colors.dart';
+import 'core/services/advisor_notification_service.dart';
+import 'core/services/chat_history_service.dart';
 import 'features/auth/providers/auth_provider.dart';
 import 'features/ring/providers/ring_provider.dart';
 import 'features/ring/screens/ring_ownership_screen.dart';
@@ -332,6 +335,10 @@ class _MainNavigationScreenState extends State<MainNavigationScreen>
   int _currentIndex = 0;
   AuthProvider? _authProvider;
 
+  SessionSummary? _pendingBannerSession;
+  bool _bannerVisible = false;
+  Timer? _bannerDismissTimer;
+
   void _handlePushPayload(Map<String, dynamic> data) {
     final navigateTo = data['navigate_to'] as String?;
     final type = data['type'] as String?;
@@ -391,12 +398,19 @@ class _MainNavigationScreenState extends State<MainNavigationScreen>
     // Listen for notification taps to deep-link to the right screen
     PushNotificationService().setOnNotificationTap(_handlePushPayload);
     PushNotificationService().setOnNotificationReceived(_handlePushPayload);
+
+    // Start foreground advisor message polling
+    AdvisorNotificationService().start();
+    AdvisorNotificationService().unreadSessions.addListener(_onNewAdvisorMessages);
   }
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _authProvider?.removeListener(_onAuthChanged);
+    _bannerDismissTimer?.cancel();
+    AdvisorNotificationService().stop();
+    AdvisorNotificationService().unreadSessions.removeListener(_onNewAdvisorMessages);
     super.dispose();
   }
 
@@ -419,6 +433,38 @@ class _MainNavigationScreenState extends State<MainNavigationScreen>
     context.read<TasksProvider>().setUserTier(tier);
   }
 
+  /// Listener for new advisor messages. Shows the banner.
+  void _onNewAdvisorMessages() {
+    final unread = AdvisorNotificationService().unreadSessions.value;
+    if (unread.isNotEmpty) {
+      final latest = unread.last;
+      _showNotificationBanner(latest);
+    }
+  }
+
+  /// Display the notification banner for a new advisor message.
+  void _showNotificationBanner(SessionSummary session) {
+    _bannerDismissTimer?.cancel();
+    setState(() {
+      _pendingBannerSession = session;
+      _bannerVisible = true;
+    });
+    // Auto-dismiss after 4 seconds
+    _bannerDismissTimer = Timer(const Duration(seconds: 4), () {
+      if (mounted) {
+        setState(() => _bannerVisible = false);
+      }
+    });
+  }
+
+  /// Handle banner tap: navigate to advisor and open the session.
+  Future<void> _onBannerTap(SessionSummary session) async {
+    _bannerDismissTimer?.cancel();
+    setState(() => _bannerVisible = false);
+    setState(() => _currentIndex = 1); // Switch to Advisor tab
+    AdvisorNotificationService().requestNavigateTo(session);
+  }
+
   @override
   Widget build(BuildContext context) {
     final screens = [
@@ -428,9 +474,19 @@ class _MainNavigationScreenState extends State<MainNavigationScreen>
       const SettingsScreen(), // Me
     ];
 
-    return Scaffold(
-      body: IndexedStack(index: _currentIndex, children: screens),
-      bottomNavigationBar: _buildBottomNavBar(),
+    return Stack(
+      children: [
+        Scaffold(
+          body: IndexedStack(index: _currentIndex, children: screens),
+          bottomNavigationBar: _buildBottomNavBar(),
+        ),
+        if (_bannerVisible && _pendingBannerSession != null)
+          _AdvisorNotificationBanner(
+            session: _pendingBannerSession!,
+            onTap: () => _onBannerTap(_pendingBannerSession!),
+            onDismiss: () => setState(() => _bannerVisible = false),
+          ),
+      ],
     );
   }
 
@@ -764,6 +820,183 @@ class _NavBarItem extends StatelessWidget {
               ),
             ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+/// In-app notification banner for new advisor messages.
+class _AdvisorNotificationBanner extends StatefulWidget {
+  final SessionSummary session;
+  final VoidCallback onTap;
+  final VoidCallback onDismiss;
+
+  const _AdvisorNotificationBanner({
+    required this.session,
+    required this.onTap,
+    required this.onDismiss,
+  });
+
+  @override
+  State<_AdvisorNotificationBanner> createState() => _AdvisorNotificationBannerState();
+}
+
+class _AdvisorNotificationBannerState extends State<_AdvisorNotificationBanner>
+    with SingleTickerProviderStateMixin {
+  late AnimationController _animController;
+  late Animation<Offset> _slideAnimation;
+
+  @override
+  void initState() {
+    super.initState();
+    _animController = AnimationController(
+      duration: const Duration(milliseconds: 300),
+      vsync: this,
+    );
+    _slideAnimation = Tween<Offset>(
+      begin: const Offset(0, -1),
+      end: Offset.zero,
+    ).animate(CurvedAnimation(parent: _animController, curve: Curves.easeOut));
+    _animController.forward();
+  }
+
+  @override
+  void dispose() {
+    _animController.dispose();
+    super.dispose();
+  }
+
+  String _getSessionTitle(SessionSummary session) {
+    if (session.isCollabThread) {
+      return 'Message from advisor';
+    }
+    return 'Advisor';
+  }
+
+  /// Strip markdown formatting and HTML tags from preview text.
+  String _cleanPreview(String preview) {
+    var cleaned = preview
+        .replaceAll('**', '')  // bold
+        .replaceAll('__', '')  // alt bold
+        .replaceAll('*', '')   // italic
+        .replaceAll('_', '')   // alt italic
+        .replaceAll('`', '')   // code
+        .replaceAll('~~', '')  // strikethrough
+        .replaceAll(RegExp(r'<[^>]*>'), ''); // HTML tags
+
+    // Decode HTML entities if present
+    cleaned = cleaned
+        .replaceAll('&quot;', '"')
+        .replaceAll('&apos;', "'")
+        .replaceAll('&amp;', '&')
+        .replaceAll('&lt;', '<')
+        .replaceAll('&gt;', '>');
+
+    return cleaned;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final title = _getSessionTitle(widget.session);
+    final preview = () {
+      final cleaned = _cleanPreview(widget.session.preview);
+      return cleaned.length > 80 ? '${cleaned.substring(0, 80)}…' : cleaned;
+    }();
+    final semanticLabel = '$title: $preview';
+
+    return SlideTransition(
+      position: _slideAnimation,
+      child: SafeArea(
+        bottom: false,
+        child: Semantics(
+          button: true,
+          enabled: true,
+          onTap: widget.onTap,
+          label: semanticLabel,
+          child: GestureDetector(
+            onTap: widget.onTap,
+            child: Container(
+              margin: const EdgeInsets.all(12),
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: AppColors.primaryLemonDark.withValues(alpha: 0.95),
+                borderRadius: BorderRadius.circular(12),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.15),
+                    blurRadius: 8,
+                    offset: const Offset(0, 2),
+                  ),
+                ],
+              ),
+              child: DefaultTextStyle.merge(
+                style: const TextStyle(
+                  decoration: TextDecoration.none,
+                  decorationColor: Colors.transparent,
+                ),
+                child: Row(
+                  children: [
+                    const SizedBox(width: 4),
+                    ExcludeSemantics(
+                      child: const Icon(
+                        Icons.notifications_active,
+                        color: Color(0xFF78350F),
+                        size: 20,
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          ExcludeSemantics(
+                            child: Text(
+                              title,
+                              style: const TextStyle(
+                                fontSize: 13,
+                                fontWeight: FontWeight.w600,
+                                color: Color(0xFF78350F),
+                                decoration: TextDecoration.none,
+                                decorationColor: Colors.transparent,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(height: 2),
+                          ExcludeSemantics(
+                            child: Text(
+                              preview,
+                              style: const TextStyle(
+                                fontSize: 12,
+                                color: Color(0xFF78350F),
+                                decoration: TextDecoration.none,
+                                decorationColor: Colors.transparent,
+                              ),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    ExcludeSemantics(
+                      child: GestureDetector(
+                        onTap: widget.onDismiss,
+                        child: Icon(
+                          Icons.close,
+                          size: 18,
+                          color: Color(0xFF78350F).withValues(alpha: 0.6),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 4),
+                  ],
+                ),
+              ),
+            ),
+          ),
         ),
       ),
     );

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:provider/provider.dart';
@@ -7,6 +8,7 @@ import 'package:uuid/uuid.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/services/advisor_v2_service.dart';
 import '../../../core/services/checkin_service.dart';
+import '../../../core/services/advisor_notification_service.dart';
 import 'advisor_settings_screen.dart';
 import '../../../core/services/chat_history_service.dart';
 import '../../../shared/models/analysis_models.dart';
@@ -55,6 +57,44 @@ class _AdvisorScreenState extends State<AdvisorScreen>
           ),
         ),
         actions: [
+          ValueListenableBuilder<List<SessionSummary>>(
+            valueListenable: AdvisorNotificationService().unreadSessions,
+            builder: (_, sessions, _) {
+              final count = sessions.length;
+              return Stack(
+                alignment: Alignment.topRight,
+                children: [
+                  IconButton(
+                    icon: Icon(
+                      count > 0 ? Icons.notifications_active : Icons.notifications_outlined,
+                      color: count > 0 ? AppColors.primaryLemonDark : AppColors.textSecondary,
+                    ),
+                    tooltip: 'New messages',
+                    onPressed: () => _showUnreadPanel(context, sessions),
+                  ),
+                  if (count > 0)
+                    Positioned(
+                      top: 8, right: 8,
+                      child: Container(
+                        padding: const EdgeInsets.all(3),
+                        decoration: const BoxDecoration(
+                          color: AppColors.error,
+                          shape: BoxShape.circle,
+                        ),
+                        child: Text(
+                          count > 9 ? '9+' : '$count',
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 9,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                    ),
+                ],
+              );
+            },
+          ),
           IconButton(
             icon: const Icon(
               Icons.settings_outlined,
@@ -94,6 +134,80 @@ class _AdvisorScreenState extends State<AdvisorScreen>
       ),
     );
   }
+
+  void _showUnreadPanel(BuildContext context, List<SessionSummary> sessions) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) => Container(
+        decoration: const BoxDecoration(
+          color: AppColors.backgroundWhite,
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              margin: const EdgeInsets.only(top: 8, bottom: 16),
+              width: 40,
+              height: 4,
+              decoration: BoxDecoration(
+                color: AppColors.surfaceLight,
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: Text(
+                'New Messages',
+                style: TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                  color: AppColors.textPrimary,
+                ),
+              ),
+            ),
+            const SizedBox(height: 12),
+            ListView.builder(
+              shrinkWrap: true,
+              itemCount: sessions.length,
+              itemBuilder: (_, i) {
+                final session = sessions[i];
+                return ListTile(
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                  title: Text(
+                    session.isCollabThread ? 'Collab Message' : 'Advisor',
+                    style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                      color: AppColors.textPrimary,
+                    ),
+                  ),
+                  subtitle: Text(
+                    session.preview.length > 60
+                        ? '${session.preview.substring(0, 60)}…'
+                        : session.preview,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: AppColors.textSecondary,
+                    ),
+                  ),
+                  onTap: () {
+                    Navigator.pop(ctx);
+                    AdvisorNotificationService().requestNavigateTo(session);
+                  },
+                );
+              },
+            ),
+            const SizedBox(height: 12),
+          ],
+        ),
+      ),
+    );
+  }
 }
 
 // ── Chat Tab ─────────────────────────────────────────────────────────────────
@@ -125,6 +239,9 @@ class _ChatTabState extends State<_ChatTab> {
   /// Tracks the currently polling job so the user can cancel it.
   String? _pendingJobId;
 
+  /// Subscription to navigation requests from the notification service.
+  StreamSubscription<SessionSummary>? _navSubscription;
+
   static const _sessionIdKey = 'advisor_active_session_id';
   static const _lastActiveKey = 'advisor_last_active_at';
   static const _sessionTimeoutMinutes = 2;
@@ -133,6 +250,8 @@ class _ChatTabState extends State<_ChatTab> {
   void initState() {
     super.initState();
     _initSession();
+    // Listen for navigation requests from the notification service
+    _navSubscription = AdvisorNotificationService().navigationRequests.listen(_onNavigateTo);
   }
 
   @override
@@ -140,6 +259,7 @@ class _ChatTabState extends State<_ChatTab> {
     _input.dispose();
     _scroll.dispose();
     _inputFocusNode.dispose();
+    _navSubscription?.cancel();
     super.dispose();
   }
 
@@ -210,6 +330,7 @@ class _ChatTabState extends State<_ChatTab> {
     if (_sessionId != 'proactive') {
       await _saveActiveSession();
     }
+    AdvisorNotificationService().setActiveSession(_sessionId);
   }
 
   Future<void> _saveActiveSession() async {
@@ -247,6 +368,39 @@ class _ChatTabState extends State<_ChatTab> {
       _isReadonlySession = false;
     });
     _saveActiveSession();
+    AdvisorNotificationService().setActiveSession(_sessionId);
+  }
+
+  /// Handle navigation request from the notification service.
+  Future<void> _onNavigateTo(SessionSummary session) async {
+    if (!mounted) return;
+    final messages = await _historyService.fetchSessionMessages(session.sessionId);
+    if (!mounted) return;
+
+    setState(() {
+      _sessionId = session.sessionId;
+      _items.clear();
+      _isReadonlySession = session.readonly;
+      for (final m in messages) {
+        _items.add(
+          _ChatItem.message(
+            _Message(
+              text: m.content,
+              isUser: m.isUser,
+              isProactive: session.sessionId == 'proactive',
+              senderLabel: m.metadata['sender_label'] as String?,
+              createdAt: m.createdAt,
+            ),
+          ),
+        );
+      }
+    });
+
+    if (session.sessionId != 'proactive' && !session.readonly) {
+      await _saveActiveSession();
+    }
+    AdvisorNotificationService().setActiveSession(session.sessionId);
+    _scrollToBottom();
   }
 
   void _showHistoryPanel() {
@@ -279,6 +433,8 @@ class _ChatTabState extends State<_ChatTab> {
           if (sessionId != 'proactive' && !readonly) {
             _saveActiveSession();
           }
+          AdvisorNotificationService().markSessionRead(sessionId);
+          AdvisorNotificationService().setActiveSession(sessionId);
           _scrollToBottom();
         },
       ),
