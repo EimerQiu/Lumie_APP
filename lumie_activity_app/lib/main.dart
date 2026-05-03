@@ -41,6 +41,11 @@ import 'features/heart_rate/providers/heart_rate_provider.dart';
 import 'features/heart_rate/screens/heart_rate_screen.dart';
 import 'features/tasks/providers/tasks_provider.dart';
 import 'features/tasks/providers/admin_tasks_provider.dart';
+import 'features/meals/providers/meal_provider.dart';
+import 'features/meals/screens/meal_log_screen.dart';
+import 'features/meals/screens/meal_detail_screen.dart';
+import 'features/meals/screens/meals_home_screen.dart';
+import 'shared/models/meal_models.dart';
 import 'features/tasks/screens/tasks_list_screen.dart';
 import 'features/tasks/screens/create_task_screen.dart';
 import 'features/tasks/screens/templates_list_screen.dart';
@@ -100,6 +105,7 @@ class LumieActivityApp extends StatelessWidget {
         ChangeNotifierProvider(create: (_) => TeamsProvider()),
         ChangeNotifierProvider(create: (_) => TasksProvider()),
         ChangeNotifierProvider(create: (_) => AdminTasksProvider()),
+        ChangeNotifierProvider(create: (_) => MealProvider()),
         ChangeNotifierProvider(create: (_) => RingProvider()..init()),
         ChangeNotifierProxyProvider<RingProvider, HeartRateProvider>(
           create: (_) => HeartRateProvider(),
@@ -147,6 +153,8 @@ class LumieActivityApp extends StatelessWidget {
           '/heart-rate': (context) => const HeartRateScreen(),
           '/workout/exercises': (context) => const ExerciseLibraryScreen(),
           '/workout/split-builder': (context) => const SplitBuilderScreen(),
+          '/meals': (context) => const MealsHomeScreen(),
+          '/meals/log': (context) => const MealLogScreen(),
         },
         onGenerateRoute: (settings) {
           // Handle routes with arguments
@@ -201,6 +209,19 @@ class LumieActivityApp extends StatelessWidget {
             return MaterialPageRoute(
               builder: (context) => EditTaskScreen(args: arg),
             );
+          } else if (settings.name == '/meals/detail') {
+            final arg = settings.arguments;
+            if (arg is Meal) {
+              return MaterialPageRoute(
+                builder: (context) =>
+                    MealDetailScreen(mealId: arg.mealId, initialMeal: arg),
+              );
+            } else if (arg is String) {
+              return MaterialPageRoute(
+                builder: (context) => MealDetailScreen(mealId: arg),
+              );
+            }
+            return null;
           } else if (settings.name?.startsWith('/invite/') == true) {
             // Handle invitation link: /invite/{token}
             final token = settings.name!.substring('/invite/'.length);
@@ -1520,6 +1541,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
               context.read<TodayStepsProvider>().clearOnLogout();
               context.read<TasksProvider>().reset();
               context.read<TeamsProvider>().reset();
+              context.read<MealProvider>().clearOnLogout();
               context.read<AuthProvider>().logout();
             },
             style: TextButton.styleFrom(foregroundColor: AppColors.error),

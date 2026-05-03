@@ -56,6 +56,47 @@ async def log_task_completed(user_id: str, task_name: str, task_type: str) -> No
         logger.warning(f"Dayprint log_task_completed failed for {user_id}: {e}")
 
 
+async def log_meal_logged(
+    user_id: str,
+    meal_id: str,
+    food_preview: str,
+    *,
+    image_url: Optional[str] = None,
+    visibility: str = "private",
+    team_id: Optional[str] = None,
+) -> None:
+    """Append a meal_logged event to today's dayprint.
+
+    Fired once per meal at creation time (manual save via POST /meals or
+    initial bridge from a Nutrition task). Subsequent edits and bridge
+    re-syncs do NOT re-emit this event — the dayprint logs the moment the
+    meal entered the user's day, not every change.
+    """
+    try:
+        db = get_database()
+        date = _today_utc_str()
+        await _upsert_dayprint(db, user_id, date)
+
+        event = {
+            "event_id": str(uuid.uuid4()),
+            "type": "meal_logged",
+            "timestamp": format_utc_datetime(datetime.now(timezone.utc)),
+            "data": {
+                "meal_id": meal_id,
+                "food_preview": food_preview,
+                "image_url": image_url,
+                "visibility": visibility,
+                "team_id": team_id,
+            },
+        }
+        await db.dayprints.update_one(
+            {"user_id": user_id, "date": date},
+            {"$push": {"events": event}},
+        )
+    except Exception as e:
+        logger.warning(f"Dayprint log_meal_logged failed for {user_id}: {e}")
+
+
 async def log_advisor_chat(
     user_id: str,
     user_name: str,

@@ -184,6 +184,7 @@ class FeedItemType(str, Enum):
     TASK_WITH_PHOTO = "task_with_photo"
     TASK_TEXT = "task_text"
     SLEEP_SCORE = "sleep_score"
+    MEAL = "meal"
 
 
 class FeedAttachment(BaseModel):
@@ -206,6 +207,10 @@ class TeamFeedItem(BaseModel):
     # Sleep-specific fields
     sleep_score: Optional[int] = None
     sleep_hours: Optional[float] = None
+    # Meal-specific fields (type='meal')
+    meal_id: Optional[str] = None
+    food_preview: Optional[str] = None  # e.g. "Salmon · Broccoli · +1"
+    macro_ratio: Optional[dict] = None  # {protein,carbs,fat,fiber: 'low'|'moderate'|'high'}
 
 
 class TeamFeedResponse(BaseModel):

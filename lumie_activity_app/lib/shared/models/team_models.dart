@@ -270,7 +270,8 @@ class TeamMembersResponse {
 enum TeamFeedItemType {
   taskWithPhoto,
   taskText,
-  sleepScore;
+  sleepScore,
+  meal;
 
   static TeamFeedItemType fromString(String value) {
     switch (value) {
@@ -278,6 +279,8 @@ enum TeamFeedItemType {
         return TeamFeedItemType.taskWithPhoto;
       case 'sleep_score':
         return TeamFeedItemType.sleepScore;
+      case 'meal':
+        return TeamFeedItemType.meal;
       default:
         return TeamFeedItemType.taskText;
     }
@@ -311,6 +314,10 @@ class TeamFeedItem {
   // Sleep fields
   final int? sleepScore;
   final double? sleepHours;
+  // Meal fields (type=meal)
+  final String? mealId;
+  final String? foodPreview;
+  final Map<String, dynamic>? macroRatio;
 
   const TeamFeedItem({
     required this.itemId,
@@ -323,6 +330,9 @@ class TeamFeedItem {
     this.attachments,
     this.sleepScore,
     this.sleepHours,
+    this.mealId,
+    this.foodPreview,
+    this.macroRatio,
   });
 
   factory TeamFeedItem.fromJson(Map<String, dynamic> json) {
@@ -339,6 +349,9 @@ class TeamFeedItem {
           .toList(),
       sleepScore: json['sleep_score'] as int?,
       sleepHours: (json['sleep_hours'] as num?)?.toDouble(),
+      mealId: json['meal_id'] as String?,
+      foodPreview: json['food_preview'] as String?,
+      macroRatio: (json['macro_ratio'] as Map?)?.cast<String, dynamic>(),
     );
   }
 }

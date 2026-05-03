@@ -754,6 +754,14 @@ class _DashboardScreenState extends State<DashboardScreen>
                 Navigator.push(context, MaterialPageRoute(builder: (_) => const SleepScreen()));
               },
             ),
+            _DrawerItem(
+              icon: Icons.restaurant_menu_outlined,
+              label: 'Meals',
+              onTap: () {
+                Navigator.pop(context);
+                Navigator.pushNamed(context, '/meals');
+              },
+            ),
             const Divider(indent: 24, endIndent: 24),
             _DrawerItem(
               icon: Icons.event_busy_outlined,

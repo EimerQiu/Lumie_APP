@@ -3,6 +3,7 @@ import '../../../core/services/auth_service.dart';
 import '../../../core/services/profile_service.dart';
 import '../../../core/services/team_service.dart';
 import '../../../core/services/task_service.dart';
+import '../../../core/services/meal_service.dart';
 import '../../../core/services/push_notification_service.dart';
 import '../../../core/services/chat_history_service.dart';
 import '../../../shared/models/user_models.dart';
@@ -23,6 +24,7 @@ class AuthProvider extends ChangeNotifier {
   final ProfileService _profileService = ProfileService();
   final TeamService _teamService = TeamService();
   final TaskService _taskService = TaskService();
+  final MealService _mealService = MealService();
   final PushNotificationService _pushService = PushNotificationService();
 
   AuthState _state = AuthState.initial;
@@ -58,6 +60,7 @@ class AuthProvider extends ChangeNotifier {
     if (token != null) {
       _teamService.setToken(token);
       _taskService.setToken(token);
+      _mealService.setToken(token);
       _pushService.init(token);
     }
   }
@@ -314,6 +317,7 @@ class AuthProvider extends ChangeNotifier {
     await ChatHistoryService().clearCache();
     _teamService.clearToken();
     _taskService.clearToken();
+    _mealService.clearToken();
     _user = null;
     _profile = null;
     _state = AuthState.unauthenticated;

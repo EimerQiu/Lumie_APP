@@ -32,6 +32,7 @@ from .api.temperature_routes import router as temperature_router
 from .api.spo2_routes import router as spo2_router
 from .api.ring_command_routes import router as ring_command_router
 from .api.workout_routes import router as workout_router
+from .api.meal_routes import router as meal_router
 
 # Configure logging
 logging.basicConfig(
@@ -151,6 +152,7 @@ app.include_router(temperature_router, prefix="/api/v1")
 app.include_router(spo2_router, prefix="/api/v1")
 app.include_router(ring_command_router, prefix="/api/v1")
 app.include_router(workout_router, prefix="/api/v1")
+app.include_router(meal_router, prefix="/api/v1")
 
 
 @app.get("/")

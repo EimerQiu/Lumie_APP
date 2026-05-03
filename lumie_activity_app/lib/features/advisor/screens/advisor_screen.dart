@@ -19,7 +19,13 @@ import '../widgets/dayprint_tab.dart';
 import '../../tasks/screens/tasks_list_screen.dart';
 
 class AdvisorScreen extends StatefulWidget {
-  const AdvisorScreen({super.key});
+  /// When provided, the screen starts a fresh chat session and auto-sends this
+  /// text as the user's first message. Used by the Meals feature's "Dive in
+  /// with Advisor" button to seed the conversation with meal context so the
+  /// user doesn't have to re-type anything.
+  final String? initialMessage;
+
+  const AdvisorScreen({super.key, this.initialMessage});
 
   @override
   State<AdvisorScreen> createState() => _AdvisorScreenState();
@@ -131,7 +137,11 @@ class _AdvisorScreenState extends State<AdvisorScreen>
       ),
       body: TabBarView(
         controller: _tabController,
-        children: const [_ChatTab(), _AdviceTab(), DayprintTab()],
+        children: [
+          _ChatTab(initialMessage: widget.initialMessage),
+          const _AdviceTab(),
+          const DayprintTab(),
+        ],
       ),
     );
   }
@@ -214,7 +224,11 @@ class _AdvisorScreenState extends State<AdvisorScreen>
 // ── Chat Tab ─────────────────────────────────────────────────────────────────
 
 class _ChatTab extends StatefulWidget {
-  const _ChatTab();
+  /// Optional seed message — when provided, the chat starts in a fresh session
+  /// and auto-sends this text as the user's first message on first frame.
+  final String? initialMessage;
+
+  const _ChatTab({this.initialMessage});
 
   @override
   State<_ChatTab> createState() => _ChatTabState();
@@ -250,9 +264,25 @@ class _ChatTabState extends State<_ChatTab> {
   @override
   void initState() {
     super.initState();
-    _initSession();
     // Listen for navigation requests from the notification service
     _navSubscription = AdvisorNotificationService().navigationRequests.listen(_onNavigateTo);
+
+    final seed = widget.initialMessage?.trim();
+    if (seed != null && seed.isNotEmpty) {
+      // "Dive in" entry — start a fresh, focused session and auto-send the
+      // seed message so the user lands in an already-flowing conversation.
+      _sessionId = const Uuid().v4();
+      _isLoading = false;
+      _saveActiveSession();
+      AdvisorNotificationService().setActiveSession(_sessionId);
+      WidgetsBinding.instance.addPostFrameCallback((_) async {
+        if (!mounted) return;
+        _input.text = seed;
+        await _send();
+      });
+    } else {
+      _initSession();
+    }
   }
 
   @override

@@ -1361,6 +1361,52 @@ class TeamService:
                     "sleep_hours": sleep_hours,
                 })
 
+        # --- 3. Team-shared meals ---
+        # Meals where visibility='team' and team_id matches, created in window.
+        meal_filter: dict = {
+            "team_id": team_id,
+            "visibility": "team",
+            "created_at": {"$gte": cutoff},
+        }
+        if before_dt:
+            meal_filter["created_at"]["$lt"] = before_dt
+
+        meals_cursor = db.meals.find(meal_filter).sort("created_at", -1).limit(limit * 3)
+        meals_docs = await meals_cursor.to_list(length=None)
+
+        for meal in meals_docs:
+            created_at = meal.get("created_at")
+            if not isinstance(created_at, datetime):
+                continue
+
+            images = meal.get("images") or []
+            attachments = [
+                {"url": img["url"], "thumbnail_url": img.get("thumbnail_url")}
+                for img in images
+                if isinstance(img, dict) and img.get("url")
+            ]
+            food_items = meal.get("food_items") or []
+            names = [
+                fi.get("name") for fi in food_items
+                if isinstance(fi, dict) and fi.get("name")
+            ]
+            preview = " · ".join(names[:3]) if names else "Meal"
+            if len(names) > 3:
+                preview += f" · +{len(names) - 3}"
+
+            uid = meal["user_id"]
+            feed_items.append({
+                "item_id": meal["meal_id"],
+                "type": "meal",
+                "member_user_id": uid,
+                "member_name": name_map.get(uid, "Unknown"),
+                "timestamp": format_utc_datetime(created_at),
+                "meal_id": meal["meal_id"],
+                "food_preview": preview,
+                "macro_ratio": meal.get("macro_ratio"),
+                "attachments": attachments or None,
+            })
+
         # --- Sort and paginate ---
         def _ts(item: dict) -> datetime:
             try:

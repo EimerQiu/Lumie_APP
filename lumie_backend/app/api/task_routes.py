@@ -6,17 +6,40 @@ from fastapi import APIRouter, Body, Depends, Query, status, File, UploadFile
 from typing import Optional
 
 import asyncio
+import logging
 
+from ..core.database import get_database
 from ..services.auth_service import get_current_user_id
 from ..services.task_service import task_service
+from ..services.meal_service import meal_service
 from ..services.ai_tips_service import get_ai_tips
 from ..services.dayprint_service import log_task_completed
 from ..models.task import (
     TaskCreate, TaskUpdate, TaskResponse, TaskListResponse,
+    TaskType,
     TemplateCreate, TemplateUpdate, TemplateResponse, TemplateListResponse,
     BatchGenerateRequest, BatchGenerateResponse,
     AiTipsRequest, AiTipsResponse,
 )
+
+logger = logging.getLogger(__name__)
+
+
+async def _bridge_nutrition_task_to_meal(task_id: str) -> None:
+    """Fire-and-forget: when a Nutrition task is completed, mirror it as a Meal record.
+
+    PRD Phase-1 backward compatibility (§9): Nutrition Task continues to work as
+    today; a structured Meal is created in parallel so the meal feed/history
+    surfaces it. Best-effort — failures are logged but do not affect task completion.
+    """
+    try:
+        db = get_database()
+        task = await db.tasks.find_one({"task_id": task_id})
+        if not task or task.get("task_type") != TaskType.NUTRITION.value:
+            return
+        await meal_service.create_meal_from_nutrition_task(task)
+    except Exception as exc:
+        logger.warning("Nutrition→Meal bridge failed for task %s: %s", task_id, exc)
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
 
@@ -135,7 +158,12 @@ async def create_task(
     - Returns 403 with subscription error if date range exceeded
     - For team tasks: set team_id and user_id (must be team admin)
     """
-    return await task_service.create_task(user_id, data)
+    result = await task_service.create_task(user_id, data)
+    # Auto-sync Nutrition tasks into the Meal feature so the user sees them
+    # without re-entering. Bridge is fire-and-forget; helper checks task_type.
+    if result.task_type == TaskType.NUTRITION:
+        asyncio.create_task(_bridge_nutrition_task_to_meal(result.task_id))
+    return result
 
 
 @router.get("", response_model=TaskListResponse)
@@ -166,7 +194,12 @@ async def update_task(
     - Only the task owner or creator can edit
     - Datetime fields are in the user's local timezone; include `timezone` for correct conversion
     """
-    return await task_service.update_task(task_id, user_id, data)
+    result = await task_service.update_task(task_id, user_id, data)
+    # Sync into Meals on every edit (note, team move, type change to Nutrition).
+    # Bridge helper re-fetches the task and skips non-Nutrition types.
+    if result.task_type == TaskType.NUTRITION:
+        asyncio.create_task(_bridge_nutrition_task_to_meal(task_id))
+    return result
 
 
 @router.post("/{task_id}/complete", response_model=TaskResponse)
@@ -182,6 +215,8 @@ async def complete_task(
     """
     result = await task_service.complete_task(task_id, user_id)
     asyncio.create_task(log_task_completed(user_id, result.task_name, result.task_type))
+    if result.task_type == TaskType.NUTRITION:
+        asyncio.create_task(_bridge_nutrition_task_to_meal(task_id))
     return result
 
 
@@ -198,6 +233,9 @@ async def upload_task_attachments(
     - Max 99 files per request and per task total
     """
     saved = await task_service.upload_task_attachments(task_id, user_id, files)
+    # Refresh the linked Meal's image set if this task is a Nutrition task.
+    # Helper re-fetches the task and silently no-ops for non-Nutrition types.
+    asyncio.create_task(_bridge_nutrition_task_to_meal(task_id))
     return {"uploaded": saved, "count": len(saved)}
 
 
@@ -254,7 +292,12 @@ async def update_note(
     user_id: str = Depends(get_current_user_id),
 ):
     """Save a user note on a task."""
-    return await task_service.update_note(task_id, user_id, note)
+    result = await task_service.update_note(task_id, user_id, note)
+    # Note is the primary signal for the bridge's text→meal LLM call. Re-sync
+    # so the meal's food_items reflect the latest note.
+    if result.task_type == TaskType.NUTRITION:
+        asyncio.create_task(_bridge_nutrition_task_to_meal(task_id))
+    return result
 
 
 @router.delete("/{task_id}")

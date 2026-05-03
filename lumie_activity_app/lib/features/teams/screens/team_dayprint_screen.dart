@@ -122,7 +122,7 @@ class _TeamDayprintScreenState extends State<TeamDayprintScreen> {
               Text('No activity yet', style: Theme.of(context).textTheme.titleMedium),
               const SizedBox(height: 8),
               Text(
-                'Completed tasks and sleep scores will appear here.',
+                'Completed tasks, sleep scores, and meals will appear here.',
                 textAlign: TextAlign.center,
                 style: TextStyle(color: Colors.grey[500], fontSize: 13),
               ),
@@ -238,25 +238,36 @@ class _FeedCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final isTask = item.type == TeamFeedItemType.taskWithPhoto ||
         item.type == TeamFeedItemType.taskText;
+    final isMeal = item.type == TeamFeedItemType.meal;
 
     final card = switch (item.type) {
       TeamFeedItemType.taskWithPhoto => _ImageFeedCard(item: item),
       TeamFeedItemType.taskText => _TextFeedCard(item: item),
       TeamFeedItemType.sleepScore => _SleepFeedCard(item: item),
+      TeamFeedItemType.meal => _MealFeedCard(item: item),
     };
+
+    Widget body = card;
+    if (isTask) {
+      body = GestureDetector(
+        onTap: () =>
+            _openTaskDetail(context, item.itemId, onRefresh: onRefresh),
+        child: card,
+      );
+    } else if (isMeal && item.mealId != null) {
+      body = GestureDetector(
+        onTap: () => Navigator.pushNamed(
+          context,
+          '/meals/detail',
+          arguments: item.mealId,
+        ),
+        child: card,
+      );
+    }
 
     return Padding(
       padding: const EdgeInsets.only(bottom: 8),
-      child: isTask
-          ? GestureDetector(
-              onTap: () => _openTaskDetail(
-                context,
-                item.itemId,
-                onRefresh: onRefresh,
-              ),
-              child: card,
-            )
-          : card,
+      child: body,
     );
   }
 }
@@ -432,6 +443,125 @@ class _TextFeedCard extends StatelessWidget {
                 style: const TextStyle(color: Colors.white54, fontSize: 10),
               ),
             ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ─── Meal feed card ───────────────────────────────────────────────────────────
+
+class _MealFeedCard extends StatelessWidget {
+  final TeamFeedItem item;
+
+  const _MealFeedCard({required this.item});
+
+  @override
+  Widget build(BuildContext context) {
+    final attachments = item.attachments ?? [];
+    final hasImage = attachments.isNotEmpty;
+    final foodPreview = item.foodPreview ?? 'Meal';
+
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(12),
+      child: Stack(
+        children: [
+          // Photo (or warm placeholder if missing)
+          AspectRatio(
+            aspectRatio: 3 / 4,
+            child: hasImage
+                ? _NetworkImage(
+                    url: attachments.first.url,
+                    thumbnailUrl: attachments.first.thumbnailUrl,
+                  )
+                : Container(
+                    decoration: const BoxDecoration(
+                      gradient: LinearGradient(
+                        begin: Alignment.topLeft,
+                        end: Alignment.bottomRight,
+                        colors: [Color(0xFFFEF3C7), Color(0xFFFDE68A)],
+                      ),
+                    ),
+                    alignment: Alignment.center,
+                    child: const Icon(
+                      Icons.restaurant_menu,
+                      color: Color(0xFFD97706),
+                      size: 36,
+                    ),
+                  ),
+          ),
+
+          // Bottom overlay: food preview + member + timestamp
+          Positioned(
+            left: 0,
+            right: 0,
+            bottom: 0,
+            child: Container(
+              decoration: const BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  colors: [Colors.transparent, Colors.black54],
+                ),
+              ),
+              padding: const EdgeInsets.fromLTRB(10, 24, 10, 10),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    foodPreview,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.w600,
+                      fontSize: 13,
+                      height: 1.3,
+                    ),
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  const SizedBox(height: 4),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          item.memberName,
+                          style: const TextStyle(
+                              color: Colors.white70, fontSize: 11),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                      Text(
+                        _relativeTime(item.timestamp),
+                        style: const TextStyle(
+                            color: Colors.white54, fontSize: 10),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+
+          // Top-left "Meal" badge so the card type is recognisable at a glance.
+          Positioned(
+            top: 8,
+            left: 8,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+              decoration: BoxDecoration(
+                color: const Color(0xFFD97706),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: const Text(
+                'Meal',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 10,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
           ),
         ],
       ),

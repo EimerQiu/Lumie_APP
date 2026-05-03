@@ -2,6 +2,7 @@
 
 import 'dart:convert';
 import 'dart:io';
+import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:dio/dio.dart';
 import '../constants/api_constants.dart';
@@ -229,19 +230,43 @@ class TaskService {
       );
     }
 
+    debugPrint(
+      '[NutritionAnalyze] POST ${ApiConstants.baseUrl}/tasks/nutrition/analyze-images '
+      'with ${multipartFiles.length} file(s)',
+    );
+
     try {
       final response = await _dio.post(
         '${ApiConstants.baseUrl}/tasks/nutrition/analyze-images',
         data: FormData.fromMap({'files': multipartFiles}),
         options: Options(headers: {'Authorization': 'Bearer $_token'}),
       );
+      debugPrint(
+        '[NutritionAnalyze] response status=${response.statusCode} '
+        'body_type=${response.data.runtimeType}',
+      );
       final data = response.data;
       if (data is Map<String, dynamic> && data['summary'] is String) {
-        return data['summary'] as String;
+        final summary = data['summary'] as String;
+        debugPrint(
+          '[NutritionAnalyze] OK: summary length=${summary.length}',
+        );
+        return summary;
       }
+      debugPrint(
+        '[NutritionAnalyze] FAILED: invalid response shape: '
+        '${data.runtimeType} keys='
+        '${data is Map ? data.keys.toList() : '(not a map)'}',
+      );
       throw Exception('Invalid nutrition analysis response');
     } on DioException catch (e) {
       final data = e.response?.data;
+      debugPrint(
+        '[NutritionAnalyze] DioException: status=${e.response?.statusCode} '
+        'type=${e.type} detail='
+        '${data is Map<String, dynamic> ? data['detail'] : '(no detail)'} '
+        'url=${e.requestOptions.uri}',
+      );
       if (data is Map<String, dynamic> && data['detail'] != null) {
         throw Exception(data['detail'].toString());
       }
