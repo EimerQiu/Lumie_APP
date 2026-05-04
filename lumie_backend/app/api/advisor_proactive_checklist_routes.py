@@ -68,12 +68,17 @@ def _normalize_manual_items(raw_items: list) -> list[dict]:
             if dedupe_key in seen:
                 continue
             seen.add(dedupe_key)
-            normalized.append({
+            normalized_item = {
                 "item_id": str(raw.get("item_id") or uuid.uuid4()),
                 "text": text,
                 "created_at": str(raw.get("created_at") or now_str),
                 "updated_at": str(raw.get("updated_at") or now_str),
-            })
+            }
+            # Preserve proactive execution metadata when present.
+            for k in ("status", "last_run_at", "last_result", "retry_count"):
+                if k in raw:
+                    normalized_item[k] = raw.get(k)
+            normalized.append(normalized_item)
     return normalized[:20]
 
 

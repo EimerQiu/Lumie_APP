@@ -345,23 +345,38 @@ def _find_skill_by_domain(skill_data_list: list[ProactiveSkillData], domain: str
     return None
 
 
-async def _read_manual_checklist_items(db, user_id: str, profile: dict) -> list[str]:
+def _normalize_manual_items(raw_items: list) -> list[dict]:
+    """Normalize manual checklist entries to dict records."""
+    out: list[dict] = []
+    for item in raw_items or []:
+        if isinstance(item, str):
+            text = item.strip()
+            if not text:
+                continue
+            out.append({"item_id": str(uuid.uuid4()), "text": text, "status": "pending"})
+        elif isinstance(item, dict):
+            text = str(item.get("text", "")).strip()
+            if not text:
+                continue
+            out.append({
+                "item_id": str(item.get("item_id") or uuid.uuid4()),
+                "text": text,
+                "status": str(item.get("status") or "pending"),
+                "last_run_at": item.get("last_run_at"),
+                "last_result": item.get("last_result"),
+                "retry_count": int(item.get("retry_count") or 0),
+            })
+    return out[:20]
+
+
+async def _read_manual_checklist_items(db, user_id: str, profile: dict) -> list[dict]:
     """Read user-defined proactive priorities for checklist item #1."""
-    items: list[str] = []
+    items: list[dict] = []
 
     checklist_doc = await db.proactive_checklists.find_one({"user_id": user_id}, {"_id": 0})
     if checklist_doc:
-        raw_items = checklist_doc.get("manual_items")
-        if isinstance(raw_items, list):
-            for item in raw_items:
-                if isinstance(item, str):
-                    t = item.strip()
-                    if t:
-                        items.append(t)
-                elif isinstance(item, dict):
-                    t = str(item.get("text", "")).strip()
-                    if t:
-                        items.append(t)
+        raw_items = checklist_doc.get("manual_items") if isinstance(checklist_doc.get("manual_items"), list) else []
+        items = _normalize_manual_items(raw_items)
 
     # Backward-compatible fallback in profile for local testing/gradual rollout
     profile_items = profile.get("proactive_manual_items")
@@ -369,16 +384,17 @@ async def _read_manual_checklist_items(db, user_id: str, profile: dict) -> list[
         for item in profile_items:
             if isinstance(item, str):
                 t = item.strip()
-                if t and t not in items:
-                    items.append(t)
+                if t and not any((x.get("text") == t) for x in items):
+                    items.append({"item_id": str(uuid.uuid4()), "text": t, "status": "pending"})
 
     return items[:20]
 
 
 def _build_checklist(
-    manual_items: list[str],
+    manual_items: list[dict],
     today_dayprint: dict | None,
     selected_skills: list[SkillIndexItem],
+    manual_instruction_results: list[dict] | None = None,
 ) -> dict:
     """Build normalized proactive checklist payload for this run."""
     return {
@@ -397,7 +413,166 @@ def _build_checklist(
             }
             for s in selected_skills
         ],
+        "manual_instruction_results": manual_instruction_results or [],
     }
+
+
+def _tokenize_for_match(text: str) -> set[str]:
+    base = _canonicalize(text)
+    return {t for t in base.split(" ") if len(t) >= 4}
+
+
+def _build_preserve_clause(summary: str) -> str:
+    """Turn checklist execution summary into compact sentence for final nudge."""
+    s = (summary or "").strip()
+    if not s:
+        return ""
+    # Keep first sentence only, avoid oversized message.
+    first = s.split(". ")[0].strip()
+    if len(first) > 96:
+        first = first[:96].rstrip() + "..."
+    return first
+
+
+def _ensure_checklist_preserved_in_message(
+    message: str | None,
+    manual_instruction_results: list[dict],
+) -> str | None:
+    """Enforce preserving must_preserve checklist instructions in final nudge."""
+    if not message:
+        return message
+    out = message
+    out_tokens = _tokenize_for_match(out)
+    for r in manual_instruction_results:
+        if not bool(r.get("must_preserve")):
+            continue
+        if (r.get("status") or "") != "success":
+            continue
+        src_summary = (r.get("summary") or "").strip()
+        if not src_summary:
+            continue
+        src_tokens = _tokenize_for_match(src_summary)
+        # Preserve if at least one meaningful token overlaps.
+        preserved = bool(out_tokens.intersection(src_tokens))
+        if preserved:
+            continue
+        clause = _build_preserve_clause(src_summary)
+        if not clause:
+            continue
+        # Append concise actionable clause.
+        if len(out) + len(clause) + 2 <= 240:
+            out = f"{out} {clause}"
+        else:
+            # Replace tail to keep reminder present in capped length.
+            room = max(0, 240 - len(out) - 5)
+            out = f"{out[:room].rstrip()} ... {clause[:80]}"
+        out_tokens = _tokenize_for_match(out)
+    return out
+
+
+async def _wait_for_execution_job_terminal(
+    db,
+    job_id: str,
+    timeout_seconds: int = 180,
+) -> dict:
+    """Poll one execution job until terminal state or timeout."""
+    deadline = datetime.now(timezone.utc) + timedelta(seconds=timeout_seconds)
+    while datetime.now(timezone.utc) < deadline:
+        job = await db.execution_jobs.find_one({"job_id": job_id}, {"_id": 0})
+        if not job:
+            return {"status": "failed", "error": "job_not_found"}
+        status = job.get("status")
+        if status in {"success", "failed", "cancelled"}:
+            return job
+        await asyncio.sleep(2)
+    return {"status": "timeout", "error": f"job_timeout_after_{timeout_seconds}s"}
+
+
+async def _execute_manual_checklist_instructions(
+    db,
+    user_id: str,
+    manual_items: list[dict],
+) -> tuple[list[dict], list[dict]]:
+    """Execute each manual checklist item through advisor orchestrator flow."""
+    from . import advisor_orchestrator
+
+    now_str = format_utc_datetime(datetime.now(timezone.utc))
+    updated_items: list[dict] = []
+    instruction_results: list[dict] = []
+
+    for item in manual_items:
+        item_id = str(item.get("item_id") or uuid.uuid4())
+        text = str(item.get("text", "")).strip()
+        if not text:
+            continue
+
+        logger.info("Proactive[%s]: executing manual checklist item %s", user_id, item_id)
+        result_doc = {
+            "item_id": item_id,
+            "text": text,
+            "started_at": now_str,
+            "path": "advisor_chat_equivalent",
+            "result_type": None,
+            "status": "pending",
+            "summary": "",
+            "job_id": None,
+            "priority": item.get("priority") or "high",
+            "must_preserve": bool(item.get("must_preserve", True)),
+            "nudge_directive": item.get("nudge_directive") or "force_include",
+        }
+
+        try:
+            result = await advisor_orchestrator.handle_chat(
+                user_id=user_id,
+                message=text,
+                history=[],
+                session_id="proactive",
+            )
+            result_doc["result_type"] = result.get("type")
+            result_doc["summary"] = (result.get("reply") or "")[:240]
+
+            if result.get("type") == "execution" and result.get("job_id"):
+                job_id = result.get("job_id")
+                result_doc["job_id"] = job_id
+                job = await _wait_for_execution_job_terminal(db, job_id, timeout_seconds=180)
+                result_doc["status"] = job.get("status", "failed")
+                if job.get("status") == "success":
+                    result_doc["summary"] = ((job.get("result") or {}).get("summary") or result_doc["summary"])[:240]
+                else:
+                    result_doc["summary"] = (job.get("error") or result_doc["summary"] or "execution_failed")[:240]
+            else:
+                # direct/guidance is still a completed instruction-handling turn
+                result_doc["status"] = "success" if result.get("type") in {"direct", "guidance"} else "failed"
+        except Exception as e:
+            result_doc["status"] = "failed"
+            result_doc["summary"] = f"instruction_error: {str(e)[:180]}"
+
+        result_doc["finished_at"] = format_utc_datetime(datetime.now(timezone.utc))
+        instruction_results.append(result_doc)
+
+        next_item = {
+            **item,
+            "item_id": item_id,
+            "text": text,
+            "status": "done" if result_doc["status"] == "success" else "failed",
+            "last_run_at": result_doc["finished_at"],
+            "last_result": result_doc["summary"],
+            "retry_count": int(item.get("retry_count") or 0) + (0 if result_doc["status"] == "success" else 1),
+            "priority": result_doc.get("priority", "high"),
+            "must_preserve": result_doc.get("must_preserve", True),
+            "nudge_directive": result_doc.get("nudge_directive", "force_include"),
+        }
+        updated_items.append(next_item)
+
+        logger.info(
+            "Proactive[%s]: manual checklist item %s finished status=%s type=%s",
+            user_id,
+            item_id,
+            result_doc["status"],
+            result_doc.get("result_type"),
+        )
+
+    return updated_items, instruction_results
 
 
 # ── LLM decision prompt ────────────────────────────────────────────────────
@@ -457,6 +632,8 @@ def _build_decision_prompt(
         "7. Send nudges regularly (not just emergencies) to build supportive, ongoing connection.\n"
         "8. Compare recent nudge evidence to current data. Only nudge if significant change detected.\n"
         "9. Prefer personalized, grounded insights over vague ones. Include specific numbers (temperature, duration, percentage).\n\n"
+        "10. CHECKLIST PRIORITY RULE: Any manual_instruction_results item with "
+        "must_preserve=true and status=success must be reflected in the final message.\n\n"
         f"RECENT NUDGE HISTORY (last 6 hours):\n{last_nudge_str}\n\n"
         "Respond with valid JSON only — no markdown, no explanation:\n"
         '{"should_nudge": true|false, "message": "<friendly check-in message ≤120 chars, or null>", '
@@ -543,6 +720,13 @@ async def run_proactive_check(user_id: str) -> dict:
 
     now_local = datetime.now(local_tz)
     local_time_str = now_local.strftime("%A, %B %d, %I:%M %p")
+    logger.info(
+        "Proactive[%s]: profile loaded role=%s tz=%s icd10=%s",
+        user_id,
+        role,
+        user_timezone,
+        icd10 or "none",
+    )
 
     # ── 2. Enabled capabilities ─────────────────────────────────────────────
     enabled_cap_ids = await get_user_enabled_capability_ids(user_id)
@@ -558,6 +742,7 @@ async def run_proactive_check(user_id: str) -> dict:
 
     # ── 2.5 Build proactive checklist context ─────────────────────────────
     manual_items = await _read_manual_checklist_items(db, user_id, profile)
+    logger.info("Proactive[%s]: manual checklist items=%d", user_id, len(manual_items))
 
     today_str = now_local.date().isoformat()
     today_dayprint = await db.dayprints.find_one(
@@ -579,10 +764,41 @@ async def run_proactive_check(user_id: str) -> dict:
         [(s.skill_id, s.proactive_domain, s.proactive_priority) for s in selected_skills],
     )
 
-    proactive_checklist = _build_checklist(
+    manual_items_updated, manual_instruction_results = await _execute_manual_checklist_instructions(
+        db=db,
+        user_id=user_id,
         manual_items=manual_items,
+    )
+    if manual_items_updated:
+        await db.proactive_checklists.update_one(
+            {"user_id": user_id},
+            {
+                "$set": {
+                    "user_id": user_id,
+                    "manual_items": manual_items_updated,
+                    "updated_at": format_utc_datetime(now_utc),
+                }
+            },
+            upsert=True,
+        )
+        logger.info(
+            "Proactive[%s]: manual checklist execution complete items=%d",
+            user_id,
+            len(manual_instruction_results),
+        )
+
+    proactive_checklist = _build_checklist(
+        manual_items=manual_items_updated or manual_items,
         today_dayprint=today_dayprint,
         selected_skills=selected_skills,
+        manual_instruction_results=manual_instruction_results,
+    )
+    logger.info(
+        "Proactive[%s]: checklist built manual=%d dayprint=%s enabled_skills=%d",
+        user_id,
+        len(proactive_checklist.get("manual_items") or []),
+        "yes" if proactive_checklist.get("today_dayprint") else "no",
+        len(proactive_checklist.get("enabled_skills") or []),
     )
 
     # Build user context for execution
@@ -609,6 +825,7 @@ async def run_proactive_check(user_id: str) -> dict:
         return {"nudged": False, "message": None, "reason": "all_skills_failed"}
 
     # ── 3.5. Save information round for this proactive run ─────────────────
+    logger.info("Proactive[%s]: saving information round round_id=%s", user_id, round_id)
     await audit.save_round_record(
         db,
         round_id,
@@ -720,9 +937,28 @@ async def run_proactive_check(user_id: str) -> dict:
         await audit.save_run_record(db, run_id, user_id, now_utc, skill_data, error_decision, None, round_id)
         return {"nudged": False, "message": None, "reason": f"llm_error: {e}"}
 
+    manual_results = proactive_checklist.get("manual_instruction_results") if proactive_checklist else []
     should_nudge: bool = bool(result.get("should_nudge", False))
     message: str | None = result.get("message") or None
+    message = _ensure_checklist_preserved_in_message(message, manual_results)
     reason: str = result.get("reason", "")
+
+    must_preserve_success = [
+        r for r in manual_results
+        if bool(r.get("must_preserve")) and (r.get("status") == "success")
+    ]
+    if not should_nudge and must_preserve_success:
+        should_nudge = True
+        if not message:
+            message = _build_preserve_clause(must_preserve_success[0].get("summary") or "")
+        reason = f"checklist_must_preserve_override:{must_preserve_success[0].get('item_id')}"
+    logger.info(
+        "Proactive[%s]: decision parsed should_nudge=%s domain=%s confidence=%s",
+        user_id,
+        should_nudge,
+        result.get("primary_domain"),
+        result.get("confidence", 0.0),
+    )
 
     # ── 6. Time-based dedupe (6-hour cooldown per domain) ────────────────
     local_date_key = now_local.date().isoformat()
