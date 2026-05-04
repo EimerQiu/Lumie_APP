@@ -391,10 +391,110 @@ class MealService:
             nutrition_level=(
                 NutritionLevel(parsed["nutrition_level"])
                 if parsed.get("nutrition_level")
-                else self._derive_nutrition_level(parsed["macro_ratio"])
+                else self._derive_nutrition_level(
+                    parsed["macro_ratio"],
+                    processing_level=parsed.get("processing_level"),
+                    added_sugar=parsed.get("added_sugar"),
+                )
             ),
             advisor_insight=parsed.get("advisor_insight") or None,
+            # Default to MODERATE on missing — neutral baseline that doesn't
+            # bias the user's perception of their meal.
+            processing_level=MacroLevel(
+                parsed.get("processing_level") or MacroLevel.MODERATE.value
+            ),
+            added_sugar=MacroLevel(
+                parsed.get("added_sugar") or MacroLevel.LOW.value
+            ),
         )
+
+    async def restructure_food_list(
+        self,
+        user_id: str,
+        food_items: List[FoodItem],
+    ) -> dict:
+        """Re-run the structuring layer against a user-edited food list with
+        portion weights, without re-running vision. Used by the Log screen
+        Re-analyze button: the meal isn't yet confirmed, so we don't update
+        any DB row — we just hand back the refreshed analysis fields. The
+        Detail screen flows through update_meal instead since the meal is
+        already persisted there.
+        """
+        if not food_items:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="At least one food item is required",
+            )
+
+        items_dump = [fi.model_dump() for fi in food_items]
+        has_portion_signal = any(
+            int(fi.get("portion_weight", 1) or 1) != 1
+            for fi in items_dump
+        )
+        if has_portion_signal:
+            synthetic_text = ", ".join(
+                f"{str(fi.get('name', '')).strip()} (portion {int(fi.get('portion_weight', 1) or 1)})"
+                for fi in items_dump
+                if fi.get("name")
+            )
+        else:
+            synthetic_text = ", ".join(
+                str(fi.get("name", "")).strip()
+                for fi in items_dump
+                if fi.get("name")
+            )
+        if not synthetic_text:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="No food items provided",
+            )
+
+        try:
+            parsed = await self._structure_text_to_meal(
+                synthetic_text, user_id=user_id,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Restructure failed user_id=%s text=%r exc=%s",
+                user_id, synthetic_text[:120], exc,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="Failed to re-analyze meal",
+            )
+
+        if not parsed.get("food_items"):
+            # Structuring returned nothing parseable — preserve the user's
+            # foods so they don't lose their edits, and fall back to the
+            # deterministic level derivation.
+            parsed = {
+                "food_items": items_dump,
+                "macro_ratio": parsed.get("macro_ratio") or {
+                    "protein": "moderate",
+                    "carbs": "moderate",
+                    "fat": "moderate",
+                    "fiber": "low",
+                },
+                "meal_name": parsed.get("meal_name"),
+                "nutrition_level": parsed.get("nutrition_level"),
+                "advisor_insight": parsed.get("advisor_insight"),
+                "processing_level": parsed.get("processing_level"),
+                "added_sugar": parsed.get("added_sugar"),
+            }
+
+        # Always preserve the user's typed names + portion weights — the LLM
+        # may have re-cased or re-ordered, but the user's deliberate edits win.
+        out_items = []
+        for i, fi in enumerate(items_dump):
+            llm_item = parsed["food_items"][i] if i < len(parsed["food_items"]) else {}
+            out_items.append({
+                "name": fi.get("name", ""),
+                "portion_weight": int(fi.get("portion_weight", 1) or 1),
+                "macro_ratio": llm_item.get("macro_ratio") if isinstance(llm_item, dict) else None,
+            })
+        parsed["food_items"] = out_items
+
+        return parsed
 
     def _parse_analysis_json(self, raw_text: str) -> dict:
         """Tolerant JSON extraction. Returns
@@ -430,7 +530,29 @@ class MealService:
             name = str(it.get("name", "")).strip()
             if not name:
                 continue
-            food_items.append({"name": name[:200], "macro_ratio": coerce_ratio(it.get("macro_ratio"))})
+            raw_weight = it.get("portion_weight")
+            if isinstance(raw_weight, bool):
+                weight = 1
+            elif isinstance(raw_weight, int):
+                weight = raw_weight
+            elif isinstance(raw_weight, float):
+                weight = int(round(raw_weight))
+            elif isinstance(raw_weight, str):
+                try:
+                    weight = int(float(raw_weight))
+                except Exception:
+                    weight = 1
+            else:
+                weight = 1
+            if weight < 1:
+                weight = 1
+            if weight > 20:
+                weight = 20
+            food_items.append({
+                "name": name[:200],
+                "macro_ratio": coerce_ratio(it.get("macro_ratio")),
+                "portion_weight": weight,
+            })
 
         meal_ratio = coerce_ratio(data.get("macro_ratio") if isinstance(data, dict) else None)
 
@@ -443,12 +565,21 @@ class MealService:
         insight_raw = data.get("advisor_insight") if isinstance(data, dict) else None
         advisor_insight = str(insight_raw).strip()[:600] if isinstance(insight_raw, str) else ""
 
+        # Slice 7A: processing_level + added_sugar (low/moderate/high). Coerce
+        # the same way as macros so a partial LLM response can't break the flow.
+        proc_raw = data.get("processing_level") if isinstance(data, dict) else None
+        processing_level = proc_raw if proc_raw in valid_levels else None
+        sugar_raw = data.get("added_sugar") if isinstance(data, dict) else None
+        added_sugar = sugar_raw if sugar_raw in valid_levels else None
+
         return {
             "food_items": food_items,
             "macro_ratio": meal_ratio,
             "meal_name": meal_name,
             "nutrition_level": nutrition_level,
             "advisor_insight": advisor_insight,
+            "processing_level": processing_level,
+            "added_sugar": added_sugar,
         }
 
     # ============ CRUD ============
@@ -468,7 +599,22 @@ class MealService:
 
         level_raw = doc.get("nutrition_level")
         if level_raw not in {l.value for l in NutritionLevel}:
-            level_raw = self._derive_nutrition_level(macro_ratio_raw).value
+            level_raw = self._derive_nutrition_level(
+                macro_ratio_raw,
+                processing_level=doc.get("processing_level"),
+                added_sugar=doc.get("added_sugar"),
+            ).value
+
+        # Slice 7A: legacy meals lacking processing_level / added_sugar default
+        # to MODERATE / LOW respectively (neutral baseline that doesn't bias
+        # the user's perception).
+        valid_macro_levels = {lvl.value for lvl in MacroLevel}
+        proc_raw = doc.get("processing_level")
+        if proc_raw not in valid_macro_levels:
+            proc_raw = MacroLevel.MODERATE.value
+        sugar_raw = doc.get("added_sugar")
+        if sugar_raw not in valid_macro_levels:
+            sugar_raw = MacroLevel.LOW.value
 
         return MealResponse(
             meal_id=doc["meal_id"],
@@ -486,6 +632,8 @@ class MealService:
             meal_time=meal_time_raw,
             nutrition_level=NutritionLevel(level_raw),
             advisor_insight=doc.get("advisor_insight"),
+            processing_level=MacroLevel(proc_raw),
+            added_sugar=MacroLevel(sugar_raw),
             created_at=format_utc_datetime(doc["created_at"]),
             updated_at=format_utc_datetime(doc["updated_at"]),
         )
@@ -550,6 +698,53 @@ class MealService:
         return images
 
     @staticmethod
+    def _food_lists_equal_with_portions(a: list, b: list) -> bool:
+        """Positional comparison including portion_weight.
+
+        Returns True only when name AND portion_weight are identical
+        position-by-position. Any rename, deletion, addition, reorder, OR
+        portion-bar adjustment makes the lists unequal — which triggers
+        re-analysis on any single user-visible change to the food list
+        (including pure portion edits with no rename).
+        """
+        a = a or []
+        b = b or []
+        if len(a) != len(b):
+            return False
+        for ai, bi in zip(a, b):
+            ai_name = (ai.get("name") or "").strip() if isinstance(ai, dict) else ""
+            bi_name = (bi.get("name") or "").strip() if isinstance(bi, dict) else ""
+            if ai_name != bi_name:
+                return False
+            ai_w = ai.get("portion_weight", 1) if isinstance(ai, dict) else 1
+            bi_w = bi.get("portion_weight", 1) if isinstance(bi, dict) else 1
+            if int(ai_w or 1) != int(bi_w or 1):
+                return False
+        return True
+
+    @staticmethod
+    def _food_lists_equal(a: list, b: list) -> bool:
+        """Positional, trim-only name comparison.
+
+        Returns True ONLY when the two lists are identical position-by-position
+        after stripping surrounding whitespace. ANY single rename, deletion,
+        addition, or reorder makes the lists unequal — which triggers
+        re-analysis on the smallest possible edit. Mirrors the frontend's
+        `_hasFoodEdits` so the user's "Re-analyze" button and the backend's
+        re-structuring decision can never disagree.
+        """
+        a = a or []
+        b = b or []
+        if len(a) != len(b):
+            return False
+        for ai, bi in zip(a, b):
+            ai_name = (ai.get("name") or "").strip() if isinstance(ai, dict) else ""
+            bi_name = (bi.get("name") or "").strip() if isinstance(bi, dict) else ""
+            if ai_name != bi_name:
+                return False
+        return True
+
+    @staticmethod
     def _food_preview(food_items: list) -> str:
         """Short '·'-joined preview used in dayprint events and team feed cards."""
         names = [
@@ -593,30 +788,59 @@ class MealService:
         return MealType.SNACK
 
     @staticmethod
-    def _derive_nutrition_level(macro_ratio: dict) -> NutritionLevel:
-        """Deterministic fallback when the LLM didn't return a nutrition_level.
+    def _derive_nutrition_level(
+        macro_ratio: dict,
+        processing_level: Optional[str] = None,
+        added_sugar: Optional[str] = None,
+    ) -> NutritionLevel:
+        """Deterministic nutrition-level fallback when the LLM didn't return one.
 
-        Score the four macros (low=1, moderate=2, high=3) and bucket the sum.
-        Fiber is weighted slightly to reward variety (Nutritious requires good fiber).
-        Used for legacy meals on read-time and as a safety net on the LLM path.
+        Calibrated to be PERMISSIVE per the grading philosophy: a meal does not
+        need to be perfect to be Nutritious. Default upward — assign Nutritious
+        to any meal that is reasonably balanced and minimally processed; reserve
+        Limited for meals that are genuinely ultra-processed AND high in added
+        sugar.
+
+        Tier rules:
+          • Limited: high processing AND high added sugar (e.g. white bread
+            with sugary peanut butter, fast food with sweetened soda)
+          • Fair: ultra-processed alone, OR moderate processing combined with
+            high added sugar (e.g. natural nut butter on white bread, fast food
+            burger that isn't sugar-heavy)
+          • Nutritious: minimally processed AND ≥3 of the four macros at
+            moderate-or-above (e.g. salmon + greens + rice; whole-wheat toast
+            with natural nut butter; eggs with vegetables)
+          • Good: minimally processed but fewer macros at moderate-or-above
+            (e.g. fruit, plain crackers, a handful of nuts as a snack)
+
+        When `processing_level` / `added_sugar` are unknown, we lean upward
+        (treat them as not-high) so legacy meals don't get unfairly penalised.
         """
         weights = {"low": 1, "moderate": 2, "high": 3}
         if not isinstance(macro_ratio, dict):
-            return NutritionLevel.FAIR
-        protein = weights.get(macro_ratio.get("protein"), 2)
-        carbs = weights.get(macro_ratio.get("carbs"), 2)
-        fat = weights.get(macro_ratio.get("fat"), 2)
-        fiber = weights.get(macro_ratio.get("fiber"), 1)
-        # Sum 4..12, with fiber-bonus when fiber is high (small extra so a meal
-        # without fiber rarely scores Nutritious).
-        score = protein + carbs + fat + fiber + (1 if fiber == 3 else 0)
-        if score <= 5:
-            return NutritionLevel.LIMITED
-        if score <= 7:
-            return NutritionLevel.FAIR
-        if score <= 9:
             return NutritionLevel.GOOD
-        return NutritionLevel.NUTRITIOUS
+
+        macros_at_moderate_or_above = sum(
+            1
+            for k in ("protein", "carbs", "fat", "fiber")
+            if weights.get(macro_ratio.get(k), 2) >= 2
+        )
+
+        high_proc = processing_level == "high"
+        mod_proc = processing_level == "moderate"
+        high_sugar = added_sugar == "high"
+
+        # Hard floor: ultra-processed AND sugar-heavy.
+        if high_proc and high_sugar:
+            return NutritionLevel.LIMITED
+        # Either ultra-processed alone, or moderately processed with high sugar.
+        if high_proc or (mod_proc and high_sugar):
+            return NutritionLevel.FAIR
+
+        # Minimally processed (low / unknown) — default upward.
+        if macros_at_moderate_or_above >= 3:
+            return NutritionLevel.NUTRITIOUS
+        return NutritionLevel.GOOD
 
     @staticmethod
     def _nutrition_level_score(level: Optional[str]) -> Optional[int]:
@@ -714,12 +938,31 @@ class MealService:
 
         meal_time_value = data.meal_time or format_utc_datetime(now)
 
+        advisor_insight_value = (data.advisor_insight or "").strip() or None
+
+        # Slice 7A: processing_level + added_sugar pass through from analyze;
+        # default moderate / low respectively when caller didn't provide.
+        # Derived BEFORE nutrition_level so the recalibrated fallback can use
+        # them (a meal that's high-processing + high-sugar floors to Limited).
+        processing_level_value = (
+            data.processing_level.value
+            if data.processing_level is not None
+            else MacroLevel.MODERATE.value
+        )
+        added_sugar_value = (
+            data.added_sugar.value
+            if data.added_sugar is not None
+            else MacroLevel.LOW.value
+        )
+
         if data.nutrition_level is not None:
             nutrition_level_value = data.nutrition_level.value
         else:
-            nutrition_level_value = self._derive_nutrition_level(macro_ratio_dump).value
-
-        advisor_insight_value = (data.advisor_insight or "").strip() or None
+            nutrition_level_value = self._derive_nutrition_level(
+                macro_ratio_dump,
+                processing_level=processing_level_value,
+                added_sugar=added_sugar_value,
+            ).value
 
         doc = {
             "meal_id": data.meal_id,
@@ -736,6 +979,8 @@ class MealService:
             "meal_time": meal_time_value,
             "nutrition_level": nutrition_level_value,
             "advisor_insight": advisor_insight_value,
+            "processing_level": processing_level_value,
+            "added_sugar": added_sugar_value,
             "created_at": now,
             "updated_at": now,
         }
@@ -806,6 +1051,76 @@ class MealService:
             updates["nutrition_level"] = data.nutrition_level.value
         if data.advisor_insight is not None:
             updates["advisor_insight"] = data.advisor_insight
+        if data.processing_level is not None:
+            updates["processing_level"] = data.processing_level.value
+        if data.added_sugar is not None:
+            updates["added_sugar"] = data.added_sugar.value
+
+        # Slice 7A §7: when food_items changed, re-run the structuring layer
+        # against the new list so all six macro rows + nutrition_level +
+        # meal_name + advisor_insight refresh to reflect the corrected foods.
+        # A whole-food correction in place of a processed equivalent will
+        # therefore produce a meaningfully different nutrition_level.
+        # Caller-provided values still win — re-analysis only fills fields
+        # the caller didn't explicitly override.
+        if data.food_items is not None:
+            existing_foods = doc.get("food_items", [])
+            new_foods_dump = updates["food_items"]
+            if not self._food_lists_equal_with_portions(existing_foods, new_foods_dump):
+                # Include explicit portion hints when ANY item has a non-default
+                # portion weight, so the structuring LLM knows to weight the
+                # macros accordingly. Format: "name (portion N), name2 (portion M)".
+                has_portion_signal = any(
+                    int(fi.get("portion_weight", 1) or 1) != 1
+                    for fi in new_foods_dump
+                )
+                if has_portion_signal:
+                    synthetic_text = ", ".join(
+                        f"{str(fi.get('name', '')).strip()} (portion {int(fi.get('portion_weight', 1) or 1)})"
+                        for fi in new_foods_dump
+                        if fi.get("name")
+                    )
+                else:
+                    synthetic_text = ", ".join(
+                        str(fi.get("name", "")).strip()
+                        for fi in new_foods_dump
+                        if fi.get("name")
+                    )
+                if synthetic_text:
+                    logger.info(
+                        "Update re-analysing meal_id=%s with new foods text=%r",
+                        meal_id, synthetic_text[:120],
+                    )
+                    try:
+                        re_parsed = await self._structure_text_to_meal(
+                            synthetic_text, user_id=user_id,
+                        )
+                        if data.macro_ratio is None and re_parsed.get("macro_ratio"):
+                            updates["macro_ratio"] = re_parsed["macro_ratio"]
+                        if data.nutrition_level is None and re_parsed.get("nutrition_level"):
+                            updates["nutrition_level"] = re_parsed["nutrition_level"]
+                        if data.meal_name is None and re_parsed.get("meal_name"):
+                            updates["meal_name"] = re_parsed["meal_name"]
+                        if data.advisor_insight is None and re_parsed.get("advisor_insight"):
+                            updates["advisor_insight"] = re_parsed["advisor_insight"]
+                        if data.processing_level is None and re_parsed.get("processing_level"):
+                            updates["processing_level"] = re_parsed["processing_level"]
+                        if data.added_sugar is None and re_parsed.get("added_sugar"):
+                            updates["added_sugar"] = re_parsed["added_sugar"]
+                        logger.info(
+                            "Update re-analysed meal_id=%s "
+                            "nutrition_level=%s meal_name='%s'",
+                            meal_id,
+                            re_parsed.get("nutrition_level"),
+                            (re_parsed.get("meal_name") or "")[:40],
+                        )
+                    except Exception as exc:
+                        logger.warning(
+                            "Re-analysis on update failed for meal_id=%s: %s",
+                            meal_id, exc,
+                        )
+                        # Fall through — the food edit still saves; we just
+                        # skip the structured refresh.
 
         # Visibility / team transitions
         new_visibility = data.visibility.value if data.visibility is not None else doc.get("visibility")
@@ -991,9 +1306,14 @@ class MealService:
             level_value = doc.get("nutrition_level")
             score = self._nutrition_level_score(level_value)
             if score is None:
-                # Legacy meal — derive on the fly so it still contributes.
+                # Legacy meal — derive on the fly using the recalibrated rules
+                # (processing + added sugar are read off the doc when present).
                 score = self._nutrition_level_score(
-                    self._derive_nutrition_level(doc.get("macro_ratio", {})).value
+                    self._derive_nutrition_level(
+                        doc.get("macro_ratio", {}),
+                        processing_level=doc.get("processing_level"),
+                        added_sugar=doc.get("added_sugar"),
+                    ).value
                 ) or 2
             buckets.setdefault(local_date, []).append(score)
 
@@ -1175,9 +1495,17 @@ class MealService:
         now = datetime.utcnow()
 
         # v2 fields — prefer LLM output, fall back to deterministic helpers.
+        # processing_level / added_sugar are computed first so the
+        # recalibrated nutrition_level fallback can read them.
         meal_name = (structured.get("meal_name") or "").strip() or self._derive_meal_name_from_items(structured["food_items"])
-        nutrition_level_value = structured.get("nutrition_level") or self._derive_nutrition_level(structured["macro_ratio"]).value
         advisor_insight_value = (structured.get("advisor_insight") or "").strip() or None
+        processing_level_value = structured.get("processing_level") or MacroLevel.MODERATE.value
+        added_sugar_value = structured.get("added_sugar") or MacroLevel.LOW.value
+        nutrition_level_value = structured.get("nutrition_level") or self._derive_nutrition_level(
+            structured["macro_ratio"],
+            processing_level=processing_level_value,
+            added_sugar=added_sugar_value,
+        ).value
 
         # meal_type / meal_time anchor on the user's local time, derived from
         # the task's open_datetime (when they planned to eat) if available,
@@ -1205,6 +1533,8 @@ class MealService:
                     "meal_name": meal_name,
                     "nutrition_level": nutrition_level_value,
                     "advisor_insight": advisor_insight_value,
+                    "processing_level": processing_level_value,
+                    "added_sugar": added_sugar_value,
                     "bridge_note_hash": note_hash,
                     "updated_at": now,
                 }},
@@ -1233,6 +1563,8 @@ class MealService:
             "meal_time": meal_time_value,
             "nutrition_level": nutrition_level_value,
             "advisor_insight": advisor_insight_value,
+            "processing_level": processing_level_value,
+            "added_sugar": added_sugar_value,
             "created_at": now,
             "updated_at": now,
         }
@@ -1260,6 +1592,58 @@ class MealService:
             )
         return meal_id
 
+    async def _build_history_context(self, user_id: str) -> Optional[str]:
+        """Compact 14-day-history summary, injected into the structuring prompt
+        so the LLM can shape advisor_insight tone and gently context-shift
+        nutrition_level (Slice 7A §6 + §8). Returns None when the user has no
+        recent meals — caller falls back to single-meal analysis.
+        """
+        try:
+            db = get_database()
+            cutoff = datetime.utcnow() - timedelta(days=14)
+            cursor = db.meals.find(
+                {"user_id": user_id, "created_at": {"$gte": cutoff}},
+                {
+                    "_id": 0,
+                    "nutrition_level": 1,
+                    "processing_level": 1,
+                    "added_sugar": 1,
+                },
+            )
+            docs = await cursor.to_list(length=None)
+            if not docs:
+                return None
+
+            counts = {"Limited": 0, "Fair": 0, "Good": 0, "Nutritious": 0}
+            high_processing = 0
+            high_sugar = 0
+            for doc in docs:
+                lvl = doc.get("nutrition_level")
+                if lvl in counts:
+                    counts[lvl] += 1
+                if doc.get("processing_level") == "high":
+                    high_processing += 1
+                if doc.get("added_sugar") == "high":
+                    high_sugar += 1
+
+            return (
+                "USER'S LAST 14 DAYS — use this to shape advisor_insight tone "
+                "and to slightly context-shift this meal's nutrition_level "
+                "(a one-off treat in a balanced history should NOT be Limited):\n"
+                f"  Total meals logged: {len(docs)}\n"
+                f"  Nutritious: {counts['Nutritious']}, "
+                f"Good: {counts['Good']}, "
+                f"Fair: {counts['Fair']}, "
+                f"Limited: {counts['Limited']}\n"
+                f"  Meals with high processing level: {high_processing}\n"
+                f"  Meals with high added sugar: {high_sugar}"
+            )
+        except Exception as exc:
+            logger.warning(
+                "Failed to build 14-day history for %s: %s", user_id, exc,
+            )
+            return None
+
     async def _structure_text_to_meal(
         self,
         text: str,
@@ -1282,6 +1666,7 @@ class MealService:
             user_id, len(text or ""), (text or "")[:120],
         )
         correction_hint = ""
+        history_block = ""
         if user_id:
             try:
                 correction_hint = await self._load_correction_hints(user_id)
@@ -1291,21 +1676,108 @@ class MealService:
             except Exception as exc:
                 logger.warning("Failed to load correction hints for %s: %s", user_id, exc)
                 correction_hint = ""
+            history_context = await self._build_history_context(user_id)
+            if history_context:
+                history_block = f"\n\n{history_context}\n"
+                logger.info(
+                    "Structure 14-day history injected len=%d",
+                    len(history_context),
+                )
 
         system = (
             "You convert a short food description into structured meal data. "
             f"{_MACRO_CALIBRATION} "
-            "Also produce three meal-level fields: "
+            "Produce these meal-level fields: "
             "meal_name (3–6 word descriptive title, no diet language), "
             "nutrition_level (one of 'Limited' | 'Fair' | 'Good' | 'Nutritious'), "
+            "processing_level (low | moderate | high — low=whole foods like raw "
+            "vegetables, plain meat, eggs; moderate=lightly cooked or seasoned; "
+            "high=packaged, fast food, or ultra-processed items), "
+            "added_sugar (low | moderate | high — low=no added sugar (natural "
+            "sugar in fruit does NOT count); moderate=lightly sweetened; "
+            "high=heavily sweetened like desserts, sodas, candy), "
             "advisor_insight (1–2 short sentences, curious/observational tone, "
             "never judgmental, never numeric). "
-            "Output strict JSON only matching this schema: "
-            '{"food_items":[{"name":"string","macro_ratio":{"protein":"low|moderate|high",'
+            "\n\nADVISOR TONE RULES:\n"
+            "- One-off treat in an otherwise balanced 2-week history: warm, "
+            "permissive, celebratory. Example: \"A sweet treat every now and "
+            "then is completely fine — you've been nourishing yourself really "
+            "well\".\n"
+            "- Occasional processed meal in a good history: light and gentle. "
+            "Example: \"A little convenience food here and there is part of "
+            "real life — aim to balance it out with some whole foods when you "
+            "can\".\n"
+            "- Frequent processed or high-added-sugar meals over the past 14 "
+            "days: warm but direct. Example: \"You've been reaching for "
+            "processed foods quite a bit lately — your body would really "
+            "benefit from some more whole, nourishing meals this week\".\n"
+            "- Consistently nutritious history: celebrate it. Example: "
+            "\"You've been fuelling yourself really well — keep it up\".\n"
+            "- Few or no recent meals: analyse this single meal only, no "
+            "historical framing.\n"
+            "\nNUTRITION LEVEL GRADING — be PERMISSIVE, not punishing.\n"
+            "A meal does NOT need to be perfect to be Nutritious. Default "
+            "UPWARD: any meal that is reasonably balanced AND minimally "
+            "processed should be scored Nutritious. Reserve lower scores for "
+            "meals that are genuinely imbalanced or heavily processed — not "
+            "for meals that are simply imperfect.\n"
+            "\n"
+            "  • NUTRITIOUS: balanced whole-food meals (protein + vegetables "
+            "+ whole grain or complex carb); natural nut butters with NO "
+            "added sugar on whole-wheat / wholegrain bread; any meal that is "
+            "minimally processed with reasonable macro balance. The "
+            "following examples MUST score Nutritious: salmon with cabbage "
+            "and jasmine rice; whole-wheat toast with natural peanut butter "
+            "or almond butter; eggs with vegetables; oats with fruit; Greek "
+            "yogurt bowl with whole ingredients.\n"
+            "  • GOOD: mostly whole-food but slightly less balanced — e.g. "
+            "missing a vegetable component, or using a refined grain "
+            "alongside otherwise healthy ingredients. A light snack that is "
+            "NOT ultra-processed (fruit, a handful of nuts, plain crackers).\n"
+            "  • FAIR: meals with some processed elements but not "
+            "predominantly ultra-processed. Natural nut butter on WHITE "
+            "bread (whole-food spread, less-optimal base). A snack that is "
+            "moderately processed but occasional.\n"
+            "  • LIMITED: ONLY for meals that are genuinely ultra-processed "
+            "AND high in added sugar, OR heavily refined with very little "
+            "nutritional value. White bread with sugary peanut butter. Fast "
+            "food / highly processed snacks AS A REGULAR HABIT (this means "
+            "the user's 14-day history shows a consistent pattern). NEVER "
+            "assign Limited to a single snack or treat unless the 14-day "
+            "history clearly supports it.\n"
+            "\nA single indulgent meal in an otherwise nutritious 14-day "
+            "history must NOT be scored Limited — context-shift upward.\n"
+            "\nFORBIDDEN WORDS — never use any form of: bad, unhealthy, "
+            "wrong, junk, guilty, cheat, failure, warning, avoid, restrict, "
+            "or anything that could trigger food anxiety. Tone is always a "
+            "supportive, knowledgeable friend.\n"
+            "\nPORTION WEIGHTS — for each food item output a "
+            "`portion_weight` integer (1, 2, 3, …) reflecting that item's "
+            "relative share of the plate. Larger portion → larger integer. "
+            "If the input text already contains explicit portion hints in "
+            "the form 'name (portion N)', RESPECT those exactly — they are "
+            "the user's deliberate adjustments. If no portion hints are "
+            "present, estimate the portions from the text (e.g. \"a "
+            "generous serving of rice\" → 3, \"a small side of cabbage\" → "
+            "1). Single-item meals always get portion_weight 1.\n"
+            "\nPORTION-AWARE MACRO WEIGHTING — the meal-level `macro_ratio` "
+            "and `nutrition_level` MUST be weighted by each item's "
+            "portion_weight. A small whole-food side does NOT pull a "
+            "processed dominant item up; a dominant whole-food item DOES "
+            "pull the meal up even if there's a small processed side. The "
+            "advisor_insight should acknowledge this when relevant: if a "
+            "whole-food item dominates, highlight that positively; if a "
+            "less nutritious item dominates after user adjustment, gently "
+            "note the balance and suggest keeping whole-food portions "
+            "generous — never judgmental, never use forbidden words."
+            f"{history_block}"
+            "\nOutput strict JSON only matching this schema: "
+            '{"food_items":[{"name":"string","portion_weight":1,"macro_ratio":{"protein":"low|moderate|high",'
             '"carbs":"low|moderate|high","fat":"low|moderate|high","fiber":"low|moderate|high"}}],'
             '"macro_ratio":{"protein":"low|moderate|high","carbs":"low|moderate|high",'
             '"fat":"low|moderate|high","fiber":"low|moderate|high"},'
             '"meal_name":"string","nutrition_level":"Limited|Fair|Good|Nutritious",'
+            '"processing_level":"low|moderate|high","added_sugar":"low|moderate|high",'
             '"advisor_insight":"string"}. '
             "Never include numbers, calories, or kcal in the output."
             f"{correction_hint}"

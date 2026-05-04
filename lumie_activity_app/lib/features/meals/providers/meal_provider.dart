@@ -81,6 +81,26 @@ class MealProvider extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Re-run the structuring layer against the user's edited foods + portion
+  /// weights for the current draft, without uploading the photo again. The
+  /// existing draft's meal_id and images are preserved.
+  Future<MealAnalyzeResult> reanalyzeDraft({
+    required List<FoodItem> foodItems,
+  }) async {
+    final draft = _draft;
+    if (draft == null) {
+      throw Exception('No draft to re-analyze. Call analyzeImages first.');
+    }
+    final updated = await _service.restructureFoodList(
+      draftMealId: draft.mealId,
+      draftImages: draft.images,
+      foodItems: foodItems,
+    );
+    _draft = updated;
+    notifyListeners();
+    return updated;
+  }
+
   /// Confirm the current draft (or arbitrary edits to it) by creating a meal.
   /// Returns the persisted Meal and prepends it to [myMeals].
   ///
@@ -99,6 +119,8 @@ class MealProvider extends ChangeNotifier {
     DateTime? mealTime,
     NutritionLevel? nutritionLevel,
     String? advisorInsight,
+    MacroLevel? processingLevel,
+    MacroLevel? addedSugar,
     String? timezone,
   }) async {
     final draft = _draft;
@@ -117,6 +139,8 @@ class MealProvider extends ChangeNotifier {
       mealTime: mealTime,
       nutritionLevel: nutritionLevel ?? draft.nutritionLevel,
       advisorInsight: advisorInsight ?? draft.advisorInsight,
+      processingLevel: processingLevel ?? draft.processingLevel,
+      addedSugar: addedSugar ?? draft.addedSugar,
       timezone: timezone,
     );
     _myMeals.insert(0, meal);
@@ -200,6 +224,8 @@ class MealProvider extends ChangeNotifier {
     DateTime? mealTime,
     NutritionLevel? nutritionLevel,
     String? advisorInsight,
+    MacroLevel? processingLevel,
+    MacroLevel? addedSugar,
   }) async {
     final updated = await _service.updateMeal(
       mealId: mealId,
@@ -214,12 +240,16 @@ class MealProvider extends ChangeNotifier {
       mealTime: mealTime,
       nutritionLevel: nutritionLevel,
       advisorInsight: advisorInsight,
+      processingLevel: processingLevel,
+      addedSugar: addedSugar,
     );
     _replaceLocal(updated);
-    // If macros / nutrition level changed, the trend may shift — invalidate.
-    if (macroRatio != null || nutritionLevel != null) {
-      _trend = null;
-    }
+    // ANY edit can shift a daily trend point: food edits trigger backend
+    // re-analysis (which re-derives nutrition_level), meal_time changes move
+    // a meal to a different day, and direct level/macro tweaks obviously
+    // matter. Invalidate unconditionally so the home chart never shows a
+    // stale daily average. The cost is one cheap GET on next visit.
+    _trend = null;
     notifyListeners();
     return updated;
   }
@@ -245,6 +275,8 @@ class MealProvider extends ChangeNotifier {
     await _service.deleteMeal(mealId);
     _myMeals.removeWhere((m) => m.mealId == mealId);
     _teamMeals.removeWhere((m) => m.mealId == mealId);
+    // Removing a meal changes the affected day's average — invalidate trend.
+    _trend = null;
     notifyListeners();
   }
 

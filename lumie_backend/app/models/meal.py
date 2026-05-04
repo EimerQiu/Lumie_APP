@@ -51,6 +51,11 @@ class MacroRatio(BaseModel):
 class FoodItem(BaseModel):
     name: str = Field(..., min_length=1, max_length=200)
     macro_ratio: Optional[MacroRatio] = None
+    # Relative portion weight as estimated visually from the photo. Higher
+    # number = larger share of the plate. Always relative — no grams, no
+    # calories. Used to weight each item's macro contribution in the
+    # structuring prompt and to render the user-draggable portion bar.
+    portion_weight: int = Field(1, ge=1, le=20)
 
 
 # ============ Analyze (multipart upload result) ============
@@ -65,6 +70,8 @@ class MealAnalyzeResponse(BaseModel):
     meal_name: Optional[str] = Field(None, description="3–6 word descriptive name generated from food items")
     nutrition_level: Optional[NutritionLevel] = Field(None, description="Overall meal-quality tier")
     advisor_insight: Optional[str] = Field(None, description="Short, curiosity-driven Advisor paragraph (1–2 sentences)")
+    processing_level: Optional[MacroLevel] = Field(None, description="How processed the foods are (low=whole, high=ultra-processed)")
+    added_sugar: Optional[MacroLevel] = Field(None, description="Added-sugar load (low=none, high=heavily sweetened); natural fruit sugar does NOT count")
 
 
 # ============ Create / Update / Read ============
@@ -84,6 +91,8 @@ class MealCreate(BaseModel):
     meal_time: Optional[str] = Field(None, description="ISO datetime of when meal was eaten; defaults to now (UTC)")
     nutrition_level: Optional[NutritionLevel] = Field(None, description="Overall meal tier; server derives from macro_ratio if absent")
     advisor_insight: Optional[str] = Field(None, description="Short Advisor paragraph; server uses analyze-time output if absent")
+    processing_level: Optional[MacroLevel] = Field(None, description="Processing tier (low/moderate/high)")
+    added_sugar: Optional[MacroLevel] = Field(None, description="Added-sugar tier (low/moderate/high)")
     timezone: Optional[str] = Field(None, description="Caller's IANA timezone for meal_type derivation (e.g. America/Los_Angeles)")
 
 
@@ -99,6 +108,8 @@ class MealUpdate(BaseModel):
     meal_time: Optional[str] = Field(None, description="ISO datetime of when meal was eaten")
     nutrition_level: Optional[NutritionLevel] = None
     advisor_insight: Optional[str] = None
+    processing_level: Optional[MacroLevel] = None
+    added_sugar: Optional[MacroLevel] = None
 
 
 class MealResponse(BaseModel):
@@ -117,6 +128,8 @@ class MealResponse(BaseModel):
     meal_time: Optional[str] = None
     nutrition_level: Optional[NutritionLevel] = None
     advisor_insight: Optional[str] = None
+    processing_level: Optional[MacroLevel] = None
+    added_sugar: Optional[MacroLevel] = None
     created_at: str
     updated_at: str
 
@@ -155,3 +168,24 @@ class MealCorrectionResponse(BaseModel):
     meal_id: str
     user_id: str
     created_at: str
+
+
+# ============ Re-structure (pre-confirm draft re-analysis) ============
+
+class MealRestructureRequest(BaseModel):
+    """Re-run the structuring layer against a user-edited food list (with
+    portion weights) without re-uploading the photo. Used by the Log screen's
+    in-place Re-analyze button — the meal hasn't been confirmed yet, so we
+    don't have a DB record to PUT against."""
+    food_items: List[FoodItem] = Field(..., min_length=1)
+
+
+class MealRestructureResponse(BaseModel):
+    """Same shape as MealAnalyzeResponse minus the persisted-image bits."""
+    food_items: List[FoodItem]
+    macro_ratio: MacroRatio
+    meal_name: Optional[str] = None
+    nutrition_level: Optional[NutritionLevel] = None
+    advisor_insight: Optional[str] = None
+    processing_level: Optional[MacroLevel] = None
+    added_sugar: Optional[MacroLevel] = None

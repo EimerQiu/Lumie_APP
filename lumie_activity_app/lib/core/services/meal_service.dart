@@ -305,6 +305,8 @@ class MealService {
     DateTime? mealTime,
     NutritionLevel? nutritionLevel,
     String? advisorInsight,
+    MacroLevel? processingLevel,
+    MacroLevel? addedSugar,
     String? timezone,
   }) async {
     if (_token == null) throw Exception('Not authenticated');
@@ -321,6 +323,8 @@ class MealService {
       if (mealTime != null) 'meal_time': mealTime.toUtc().toIso8601String(),
       if (nutritionLevel != null) 'nutrition_level': nutritionLevel.apiValue,
       if (advisorInsight != null) 'advisor_insight': advisorInsight,
+      if (processingLevel != null) 'processing_level': processingLevel.apiValue,
+      if (addedSugar != null) 'added_sugar': addedSugar.apiValue,
       if (timezone != null) 'timezone': timezone,
     };
 
@@ -334,6 +338,48 @@ class MealService {
       return Meal.fromJson(json.decode(response.body));
     }
     _handleError(response, 'create meal');
+  }
+
+  /// Re-run structuring against a user-edited food list (with portion
+  /// weights) without re-running vision. Used by the Log screen Re-analyze
+  /// button before the meal is confirmed. Returns the same shape as
+  /// `analyzeMealImages` minus the persisted-image metadata; the caller
+  /// re-uses the existing draft's meal_id and images.
+  Future<MealAnalyzeResult> restructureFoodList({
+    required String draftMealId,
+    required List<MealAttachment> draftImages,
+    required List<FoodItem> foodItems,
+  }) async {
+    if (_token == null) throw Exception('Not authenticated');
+    final body = {
+      'food_items': foodItems.map((f) => f.toJson()).toList(),
+    };
+    final response = await http.post(
+      Uri.parse('${ApiConstants.baseUrl}/meals/restructure'),
+      headers: _headers,
+      body: json.encode(body),
+    );
+    if (response.statusCode == 200) {
+      final raw = json.decode(response.body) as Map<String, dynamic>;
+      // The backend returns analysis-only fields; merge in the existing
+      // draft's meal_id and images so the on-screen draft stays consistent.
+      raw['meal_id'] = draftMealId;
+      raw['images'] = draftImages
+          .map((a) => {
+                'attachment_id': a.attachmentId,
+                'filename': a.filename,
+                'content_type': a.contentType,
+                'size_bytes': a.sizeBytes,
+                'path': a.path,
+                'url': a.url,
+                'thumbnail_path': a.thumbnailPath,
+                'thumbnail_url': a.thumbnailUrl,
+                'uploaded_at': a.uploadedAt,
+              })
+          .toList();
+      return MealAnalyzeResult.fromJson(raw);
+    }
+    _handleError(response, 're-analyze meal');
   }
 
   Future<Meal> getMeal(String mealId) async {
@@ -364,6 +410,8 @@ class MealService {
     DateTime? mealTime,
     NutritionLevel? nutritionLevel,
     String? advisorInsight,
+    MacroLevel? processingLevel,
+    MacroLevel? addedSugar,
   }) async {
     if (_token == null) throw Exception('Not authenticated');
     final body = <String, dynamic>{};
@@ -379,6 +427,8 @@ class MealService {
     if (mealTime != null) body['meal_time'] = mealTime.toUtc().toIso8601String();
     if (nutritionLevel != null) body['nutrition_level'] = nutritionLevel.apiValue;
     if (advisorInsight != null) body['advisor_insight'] = advisorInsight;
+    if (processingLevel != null) body['processing_level'] = processingLevel.apiValue;
+    if (addedSugar != null) body['added_sugar'] = addedSugar.apiValue;
 
     final response = await http.put(
       Uri.parse('${ApiConstants.baseUrl}/meals/$mealId'),

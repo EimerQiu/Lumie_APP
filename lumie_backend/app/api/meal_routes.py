@@ -17,6 +17,8 @@ from typing import Optional
 from fastapi import APIRouter, Depends, File, Form, Query, UploadFile, status
 
 from ..models.meal import (
+    MacroLevel,
+    MacroRatio,
     MealAnalyzeResponse,
     MealCreate,
     MealUpdate,
@@ -24,7 +26,11 @@ from ..models.meal import (
     MealListResponse,
     MealCorrectionCreate,
     MealCorrectionResponse,
+    MealRestructureRequest,
+    MealRestructureResponse,
     MealTrendResponse,
+    NutritionLevel,
+    FoodItem,
 )
 from ..services.auth_service import get_current_user_id
 from ..services.meal_service import meal_service
@@ -55,6 +61,34 @@ async def analyze_meal_images(
     """
     return await meal_service.analyze_uploads(
         user_id, files, summary_text=summary_text,
+    )
+
+
+@router.post("/restructure", response_model=MealRestructureResponse)
+async def restructure_meal_draft(
+    data: MealRestructureRequest,
+    user_id: str = Depends(get_current_user_id),
+):
+    """
+    Re-run structuring against a user-edited food list (with portion weights)
+    without re-running vision or persisting the meal. Powers the Log screen's
+    in-place Re-analyze button, where the meal hasn't been confirmed yet so
+    PUT /meals/{id} isn't applicable.
+    """
+    parsed = await meal_service.restructure_food_list(user_id, data.food_items)
+    macro_dump = parsed.get("macro_ratio") or {}
+    food_dumps = parsed.get("food_items") or []
+    return MealRestructureResponse(
+        food_items=[FoodItem(**fi) for fi in food_dumps],
+        macro_ratio=MacroRatio(**macro_dump),
+        meal_name=parsed.get("meal_name") or None,
+        nutrition_level=NutritionLevel(parsed["nutrition_level"])
+            if parsed.get("nutrition_level") else None,
+        advisor_insight=parsed.get("advisor_insight") or None,
+        processing_level=MacroLevel(parsed["processing_level"])
+            if parsed.get("processing_level") else None,
+        added_sugar=MacroLevel(parsed["added_sugar"])
+            if parsed.get("added_sugar") else None,
     )
 
 

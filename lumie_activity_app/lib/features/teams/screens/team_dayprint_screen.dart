@@ -61,12 +61,40 @@ class _TeamDayprintScreenState extends State<TeamDayprintScreen> {
       if (!loadMore) _error = null;
     });
 
+    debugPrint(
+      '[TeamFeed] GET teams/${widget.teamId}/feed loadMore=$loadMore '
+      'before=$_nextBefore',
+    );
     try {
       final response = await teamService.getTeamFeed(
         widget.teamId,
         limit: 20,
         before: loadMore ? _nextBefore : null,
       );
+
+      // Count items per type so we can see at a glance whether meal items
+      // are arriving from the server and being parsed by TeamFeedItem.fromJson.
+      final breakdown = <String, int>{};
+      for (final item in response.items) {
+        final key = item.type.name;
+        breakdown[key] = (breakdown[key] ?? 0) + 1;
+      }
+      debugPrint(
+        '[TeamFeed] response items=${response.items.length} '
+        'has_more=${response.hasMore} breakdown=$breakdown',
+      );
+      // Dump the meal items specifically so we can verify shape per-item.
+      for (final item in response.items.where(
+        (i) => i.type == TeamFeedItemType.meal,
+      )) {
+        debugPrint(
+          '[TeamFeed]   meal: id=${item.mealId} '
+          'member=${item.memberName} (${item.memberUserId}) '
+          'preview="${item.foodPreview}" '
+          'attachments=${item.attachments?.length ?? 0} '
+          'macro_keys=${item.macroRatio?.keys.toList()}',
+        );
+      }
 
       if (mounted) {
         setState(() {
@@ -80,7 +108,8 @@ class _TeamDayprintScreenState extends State<TeamDayprintScreen> {
           _isLoading = false;
         });
       }
-    } catch (e) {
+    } catch (e, st) {
+      debugPrint('[TeamFeed] FAILED: $e\n$st');
       if (mounted) {
         setState(() {
           _isLoading = false;

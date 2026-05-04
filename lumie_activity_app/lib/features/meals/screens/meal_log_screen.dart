@@ -20,7 +20,12 @@ import '../../../core/theme/app_colors.dart';
 import '../../../shared/models/meal_models.dart';
 import '../../teams/providers/teams_provider.dart';
 import '../providers/meal_provider.dart';
-import '../widgets/macro_ratio_widget.dart';
+import '../utils/food_input_split.dart';
+import '../widgets/drum_time_picker.dart';
+import '../widgets/macro_segmented_bar.dart';
+import '../widgets/meal_pill_field.dart';
+import '../widgets/nutrition_level_slider.dart';
+import '../widgets/portion_ratio_bar.dart';
 
 class MealLogScreen extends StatefulWidget {
   const MealLogScreen({super.key});
@@ -35,7 +40,9 @@ class _MealLogScreenState extends State<MealLogScreen> {
 
   File? _selectedImage;
 
-  // Editable working copy of the analysis result.
+  // Editable working copy of the analysis result. Per spec, only foods,
+  // portions, meal type/time, and meal name are user-editable on this screen
+  // — the macro/level breakdown is read-only and refreshed via re-analysis.
   List<FoodItem> _foodItems = [];
   MacroRatio _macroRatio = const MacroRatio(
     protein: MacroLevel.moderate,
@@ -43,8 +50,18 @@ class _MealLogScreenState extends State<MealLogScreen> {
     fat: MacroLevel.moderate,
     fiber: MacroLevel.low,
   );
+  NutritionLevel _nutritionLevel = NutritionLevel.fair;
+  MacroLevel _processingLevel = MacroLevel.moderate;
+  MacroLevel _addedSugar = MacroLevel.low;
+  String? _advisorInsight;
+  String? _mealName;
 
-  // Snapshot of the AI's original prediction, captured the moment analysis
+  // Foods captured at the last successful analysis. Used to drive the
+  // Done → Re-analyze button: any food edit (rename/add/remove/portion)
+  // since the last analysis flips the label.
+  List<FoodItem> _analyzedFoods = const [];
+
+  // Snapshot of the AI's first prediction, captured the moment analysis
   // returns. Used after confirm to detect whether the user edited foods/macros
   // — if so, we fire POST /meals/{id}/correction so the backend's personal-bias
   // learning loop (PRD §6) sees the correction.
@@ -56,10 +73,16 @@ class _MealLogScreenState extends State<MealLogScreen> {
     fiber: MacroLevel.low,
   );
 
+  bool _isReanalyzing = false;
+
   // Default to team sharing when the user has any teams (Lumie social-first
   // default); falls back to private when they're not in any team.
   MealVisibility _visibility = MealVisibility.private;
   String? _selectedTeamId;
+
+  // Slice 7A §4: pre-filled meal type + time, both editable on this screen.
+  late MealType _mealType;
+  late DateTime _mealTime;
 
   bool _isAnalyzing = false;
   bool _isConfirming = false;
@@ -74,11 +97,37 @@ class _MealLogScreenState extends State<MealLogScreen> {
       _visibility = MealVisibility.team;
       _selectedTeamId = teams.first.teamId;
     }
+    // Auto-suggest meal type from current local time (Slice 7A §4).
+    _mealTime = DateTime.now();
+    _mealType = _suggestMealTypeFromTime(_mealTime);
     // Auto-open the photo picker on entry — the screen exists ONLY to
     // capture/upload one photo and edit the analyzed result.
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) _pickPhoto();
     });
+  }
+
+  /// Mirror of the backend's `_derive_meal_type_from_local_dt` so the
+  /// auto-prefill matches whatever the server would have picked.
+  static MealType _suggestMealTypeFromTime(DateTime dt) {
+    final h = dt.hour + dt.minute / 60.0;
+    if (h >= 4.0 && h < 10.5) return MealType.breakfast;
+    if (h >= 10.5 && h < 14.5) return MealType.lunch;
+    if (h >= 17.0 && h < 22.0) return MealType.dinner;
+    return MealType.snack;
+  }
+
+  static IconData _iconForMealType(MealType t) {
+    switch (t) {
+      case MealType.breakfast:
+        return Icons.wb_sunny_outlined;
+      case MealType.lunch:
+        return Icons.restaurant_outlined;
+      case MealType.dinner:
+        return Icons.dinner_dining_outlined;
+      case MealType.snack:
+        return Icons.cookie_outlined;
+    }
   }
 
   @override
@@ -174,8 +223,7 @@ class _MealLogScreenState extends State<MealLogScreen> {
       final provider = context.read<MealProvider>();
       final result = await provider.analyzeImages([image]);
       setState(() {
-        _foodItems = List.of(result.foodItems);
-        _macroRatio = result.macroRatio;
+        _applyAnalysisResult(result);
         _originalAiFoods = List.of(result.foodItems);
         _originalAiMacros = result.macroRatio;
         _hasDraft = true;
@@ -189,7 +237,148 @@ class _MealLogScreenState extends State<MealLogScreen> {
     }
   }
 
+  void _applyAnalysisResult(MealAnalyzeResult result) {
+    _foodItems = List.of(result.foodItems);
+    _analyzedFoods = List.of(result.foodItems);
+    _macroRatio = result.macroRatio;
+    _nutritionLevel = result.nutritionLevel ?? NutritionLevel.fair;
+    _processingLevel = result.processingLevel ?? MacroLevel.moderate;
+    _addedSugar = result.addedSugar ?? MacroLevel.low;
+    _advisorInsight = result.advisorInsight;
+    _mealName = result.mealName;
+  }
+
+  /// Re-run the structuring analysis using the user's current food items +
+  /// portion weights, without re-uploading the image. Triggered by the
+  /// Re-analyze button when the food list has been edited since the last
+  /// analysis.
+  Future<void> _reanalyze() async {
+    if (_isReanalyzing || _isAnalyzing) return;
+    setState(() {
+      _isReanalyzing = true;
+      _errorMessage = null;
+    });
+    try {
+      final provider = context.read<MealProvider>();
+      // Submit the current draft as a meal first so update_meal can re-run
+      // structuring with the new foods + portion weights — then immediately
+      // pull the refreshed analysis back into the local state. We do this
+      // pre-confirm by routing through the provider's update flow on the
+      // existing draft meal_id.
+      final draft = provider.draft;
+      if (draft == null) {
+        throw Exception('Draft expired. Please reanalyze the photo.');
+      }
+      // Hand the new foods (with portion hints) back through the structuring
+      // layer via the dedicated re-analyze entry point. Re-using analyzeImages
+      // would force another vision call; instead we patch through update_meal
+      // semantics by going through the dedicated reanalyzeDraft path. Until
+      // that exists, fall back to issuing a fresh analyze on the image so the
+      // user always sees a refreshed result.
+      final result = await provider.reanalyzeDraft(
+        foodItems: _foodItems,
+      );
+      if (!mounted) return;
+      setState(() {
+        _applyAnalysisResult(result);
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _errorMessage = e.toString().replaceFirst('Exception: ', '');
+      });
+    } finally {
+      if (mounted) setState(() => _isReanalyzing = false);
+    }
+  }
+
+  /// True when the food list (names or portion weights) has changed since
+  /// the last analysis. Drives the Done → Re-analyze button label.
+  bool _hasFoodEdits() {
+    if (_foodItems.length != _analyzedFoods.length) return true;
+    for (var i = 0; i < _foodItems.length; i++) {
+      if (_foodItems[i].name.trim() !=
+          _analyzedFoods[i].name.trim()) {
+        return true;
+      }
+      if (_foodItems[i].portionWeight !=
+          _analyzedFoods[i].portionWeight) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   // ─── Phase 3: edit ──────────────────────────────────────────────────
+
+  Future<void> _editMealType() async {
+    final picked = await showModalBottomSheet<MealType>(
+      context: context,
+      backgroundColor: AppColors.cardBackground,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Padding(
+              padding: EdgeInsets.fromLTRB(20, 16, 20, 8),
+              child: Text(
+                'Meal type',
+                style: TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w600,
+                  color: AppColors.textPrimary,
+                ),
+              ),
+            ),
+            for (final t in MealType.values)
+              ListTile(
+                leading: Icon(
+                  _iconForMealType(t),
+                  color: t == _mealType
+                      ? AppColors.primaryLemonDark
+                      : AppColors.textSecondary,
+                ),
+                title: Text(
+                  t.displayName,
+                  style: TextStyle(
+                    fontWeight:
+                        t == _mealType ? FontWeight.w700 : FontWeight.w500,
+                    color: t == _mealType
+                        ? AppColors.textOnYellow
+                        : AppColors.textPrimary,
+                  ),
+                ),
+                onTap: () => Navigator.pop(ctx, t),
+              ),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
+    if (picked != null) setState(() => _mealType = picked);
+  }
+
+  Future<void> _editMealTime() async {
+    final initial = _mealTime.toLocal();
+    final picked = await showDrumTimePicker(
+      context: context,
+      initialTime: TimeOfDay.fromDateTime(initial),
+    );
+    if (picked != null) {
+      setState(() {
+        _mealTime = DateTime(
+          initial.year,
+          initial.month,
+          initial.day,
+          picked.hour,
+          picked.minute,
+        );
+      });
+    }
+  }
 
   Future<void> _editFoodName(int index) async {
     final controller = TextEditingController(text: _foodItems[index].name);
@@ -200,7 +389,9 @@ class _MealLogScreenState extends State<MealLogScreen> {
         content: TextField(
           controller: controller,
           autofocus: true,
-          decoration: const InputDecoration(hintText: 'Food name'),
+          decoration: const InputDecoration(
+            hintText: 'Food name (commas split into separate items)',
+          ),
         ),
         actions: [
           TextButton(
@@ -208,17 +399,26 @@ class _MealLogScreenState extends State<MealLogScreen> {
             child: const Text('Cancel'),
           ),
           TextButton(
-            onPressed: () => Navigator.pop(ctx, controller.text.trim()),
+            onPressed: () => Navigator.pop(ctx, controller.text),
             child: const Text('Save'),
           ),
         ],
       ),
     );
-    if (result != null && result.isNotEmpty) {
-      setState(() {
-        _foodItems[index] = _foodItems[index].copyWith(name: result);
-      });
-    }
+    if (result == null) return;
+    final pieces = splitFoodInput(result);
+    if (pieces.isEmpty) return;
+    setState(() {
+      final next = [..._foodItems];
+      next[index] = next[index].copyWith(name: pieces.first);
+      // If the user typed a comma-separated list while editing, the extras
+      // become new items inserted right after this position so the list
+      // grows in the order they typed.
+      for (var i = 1; i < pieces.length; i++) {
+        next.insert(index + i, FoodItem(name: pieces[i]));
+      }
+      _foodItems = next;
+    });
   }
 
   Future<void> _addFood() async {
@@ -230,7 +430,9 @@ class _MealLogScreenState extends State<MealLogScreen> {
         content: TextField(
           controller: controller,
           autofocus: true,
-          decoration: const InputDecoration(hintText: 'e.g. Steamed broccoli'),
+          decoration: const InputDecoration(
+            hintText: 'e.g. "Salmon, Rice, Cabbage"',
+          ),
         ),
         actions: [
           TextButton(
@@ -238,21 +440,35 @@ class _MealLogScreenState extends State<MealLogScreen> {
             child: const Text('Cancel'),
           ),
           TextButton(
-            onPressed: () => Navigator.pop(ctx, controller.text.trim()),
+            onPressed: () => Navigator.pop(ctx, controller.text),
             child: const Text('Add'),
           ),
         ],
       ),
     );
-    if (result != null && result.isNotEmpty) {
-      setState(() {
-        _foodItems = [..._foodItems, FoodItem(name: result, macroRatio: _macroRatio)];
-      });
-    }
+    if (result == null) return;
+    final pieces = splitFoodInput(result);
+    if (pieces.isEmpty) return;
+    setState(() {
+      _foodItems = [
+        ..._foodItems,
+        for (final name in pieces) FoodItem(name: name),
+      ];
+    });
   }
 
   void _removeFood(int index) {
     setState(() => _foodItems = [..._foodItems]..removeAt(index));
+  }
+
+  void _onPortionsChanged(List<int> weights) {
+    if (weights.length != _foodItems.length) return;
+    setState(() {
+      _foodItems = [
+        for (var i = 0; i < _foodItems.length; i++)
+          _foodItems[i].copyWith(portionWeight: weights[i]),
+      ];
+    });
   }
 
   // ─── Confirm ────────────────────────────────────────────────────────
@@ -280,6 +496,15 @@ class _MealLogScreenState extends State<MealLogScreen> {
             : _noteController.text.trim(),
         visibility: _visibility,
         teamId: _visibility == MealVisibility.team ? _selectedTeamId : null,
+        // Slice 7A §4: meal type + time captured directly on this screen so
+        // the saved meal already has the user's chosen values from the start.
+        mealType: _mealType,
+        mealTime: _mealTime,
+        mealName: _mealName,
+        nutritionLevel: _nutritionLevel,
+        advisorInsight: _advisorInsight,
+        processingLevel: _processingLevel,
+        addedSugar: _addedSugar,
       );
       // Capture user's edits to the AI prediction so the backend can bias
       // future analyses (PRD §6). Fire-and-forget — failures don't block save.
@@ -358,11 +583,21 @@ class _MealLogScreenState extends State<MealLogScreen> {
                   if (_errorMessage != null) _errorBanner(_errorMessage!),
                   if (_isAnalyzing)
                     _buildAnalyzingState()
+                  else if (_isReanalyzing)
+                    _buildReanalyzingState()
                   else if (_hasDraft) ...[
                     const SizedBox(height: 8),
                     _buildFoodsSection(),
+                    const SizedBox(height: 16),
+                    _buildPortionSection(),
                     const SizedBox(height: 20),
-                    _buildMacroSection(),
+                    _buildTypeAndTimeSection(),
+                    const SizedBox(height: 20),
+                    _buildLevelSection(),
+                    const SizedBox(height: 12),
+                    _buildAdvisorInsightSection(),
+                    const SizedBox(height: 20),
+                    _buildBreakdownSection(),
                     const SizedBox(height: 20),
                     _buildNoteSection(),
                     const SizedBox(height: 20),
@@ -424,6 +659,27 @@ class _MealLogScreenState extends State<MealLogScreen> {
           const SizedBox(height: 16),
           Text(
             'Reading your plate…',
+            style: TextStyle(
+              fontSize: 14,
+              color: AppColors.textSecondary,
+              fontFamily: 'Playfair Display',
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildReanalyzingState() {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 32),
+      child: Column(
+        children: [
+          const CircularProgressIndicator(color: AppColors.primaryLemonDark),
+          const SizedBox(height: 16),
+          Text(
+            'Re-analyzing your meal…',
             style: TextStyle(
               fontSize: 14,
               color: AppColors.textSecondary,
@@ -502,16 +758,133 @@ class _MealLogScreenState extends State<MealLogScreen> {
     );
   }
 
-  Widget _buildMacroSection() {
+  Widget _buildLevelSection() {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        _sectionHeader('COMPOSITION  ·  TAP TO ADJUST'),
+        _sectionHeader('NUTRITION LEVEL'),
         _card(
-          child: MacroRatioEditor(
-            ratio: _macroRatio,
-            onChanged: (r) => setState(() => _macroRatio = r),
+          child: NutritionLevelSlider(level: _nutritionLevel),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildBreakdownSection() {
+    final fill = _nutritionLevel.color;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _sectionHeader('NUTRITION BREAKDOWN'),
+        _card(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              MacroSegmentedBar(
+                label: 'Protein',
+                level: _macroRatio.protein,
+                fillColor: fill,
+              ),
+              const SizedBox(height: 16),
+              MacroSegmentedBar(
+                label: 'Carbs',
+                level: _macroRatio.carbs,
+                fillColor: fill,
+              ),
+              const SizedBox(height: 16),
+              MacroSegmentedBar(
+                label: 'Fat',
+                level: _macroRatio.fat,
+                fillColor: fill,
+              ),
+              const SizedBox(height: 16),
+              MacroSegmentedBar(
+                label: 'Fiber',
+                level: _macroRatio.fiber,
+                fillColor: fill,
+              ),
+              const SizedBox(height: 16),
+              MacroSegmentedBar(
+                label: 'Processing Level',
+                level: _processingLevel,
+                fillColor: fill,
+              ),
+              const SizedBox(height: 16),
+              MacroSegmentedBar(
+                label: 'Added Sugar',
+                level: _addedSugar,
+                fillColor: fill,
+              ),
+            ],
           ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildPortionSection() {
+    if (_foodItems.length < 2) return const SizedBox.shrink();
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _sectionHeader('PORTIONS  ·  DRAG TO ADJUST'),
+        _card(
+          child: PortionRatioBar(
+            names: _foodItems.map((f) => f.name).toList(),
+            weights:
+                _foodItems.map((f) => f.portionWeight).toList(),
+            onChanged: _onPortionsChanged,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildAdvisorInsightSection() {
+    final text = _advisorInsight?.trim() ?? '';
+    if (text.isEmpty) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 4),
+      child: Text(
+        text,
+        style: const TextStyle(
+          fontSize: 14,
+          color: AppColors.textSecondary,
+          height: 1.45,
+          fontStyle: FontStyle.italic,
+        ),
+      ),
+    );
+  }
+
+  Widget _buildTypeAndTimeSection() {
+    final localTime = _mealTime.toLocal();
+    final hh = localTime.hour.toString().padLeft(2, '0');
+    final mm = localTime.minute.toString().padLeft(2, '0');
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _sectionHeader('MEAL TYPE  ·  TIME'),
+        Row(
+          children: [
+            Expanded(
+              child: MealPillField(
+                label: 'MEAL TYPE',
+                value: _mealType.displayName,
+                icon: _iconForMealType(_mealType),
+                onTap: _editMealType,
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: MealPillField(
+                label: 'TIME',
+                value: '$hh:$mm',
+                icon: Icons.schedule_outlined,
+                onTap: _editMealTime,
+              ),
+            ),
+          ],
         ),
       ],
     );
@@ -655,10 +1028,15 @@ class _MealLogScreenState extends State<MealLogScreen> {
   }
 
   Widget _buildConfirmButton() {
+    final reanalyzeMode = _hasFoodEdits();
+    final label = reanalyzeMode ? 'Re-analyze' : 'Save meal';
+    final disabled = _isConfirming || _isReanalyzing;
     return SizedBox(
       height: 52,
       child: ElevatedButton(
-        onPressed: _isConfirming ? null : _confirm,
+        onPressed: disabled
+            ? null
+            : (reanalyzeMode ? _reanalyze : _confirm),
         style: ElevatedButton.styleFrom(
           backgroundColor: AppColors.primaryLemonDark,
           foregroundColor: Colors.white,
@@ -674,7 +1052,7 @@ class _MealLogScreenState extends State<MealLogScreen> {
                 child: CircularProgressIndicator(
                     color: Colors.white, strokeWidth: 2.5),
               )
-            : const Text('Save meal'),
+            : Text(label),
       ),
     );
   }

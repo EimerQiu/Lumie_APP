@@ -101,12 +101,33 @@ class MealRowItem extends StatelessWidget {
                             ),
                           ),
                           const SizedBox(height: 4),
-                          Text(
-                            _mealTypeAndTime,
-                            style: const TextStyle(
-                              fontSize: 12,
-                              color: AppColors.textSecondary,
-                            ),
+                          Row(
+                            children: [
+                              Expanded(
+                                child: Text(
+                                  _mealTypeAndTime,
+                                  style: const TextStyle(
+                                    fontSize: 12,
+                                    color: AppColors.textSecondary,
+                                  ),
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                              // Slice 7A §3: nutrition-level label coloured per
+                              // the warm palette. Helps the row scan at a glance.
+                              if (meal.nutritionLevel != null)
+                                Padding(
+                                  padding: const EdgeInsets.only(left: 8),
+                                  child: Text(
+                                    meal.nutritionLevel!.displayName,
+                                    style: TextStyle(
+                                      fontSize: 12,
+                                      fontWeight: FontWeight.w700,
+                                      color: meal.nutritionLevel!.color,
+                                    ),
+                                  ),
+                                ),
+                            ],
                           ),
                         ],
                       ),

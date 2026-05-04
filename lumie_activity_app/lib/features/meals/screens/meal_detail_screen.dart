@@ -26,19 +26,19 @@ import '../../advisor/screens/advisor_screen.dart';
 import '../../auth/providers/auth_provider.dart';
 import '../../teams/providers/teams_provider.dart';
 import '../providers/meal_provider.dart';
+import '../utils/food_input_split.dart';
+import '../widgets/drum_time_picker.dart';
 import '../widgets/macro_segmented_bar.dart';
 import '../widgets/meal_card.dart' show mealImageUrl;
+import '../widgets/meal_pill_field.dart';
 import '../widgets/nutrition_level_slider.dart';
+import '../widgets/portion_ratio_bar.dart';
 
 class MealDetailScreen extends StatefulWidget {
   final String mealId;
   final Meal? initialMeal;
 
-  const MealDetailScreen({
-    super.key,
-    required this.mealId,
-    this.initialMeal,
-  });
+  const MealDetailScreen({super.key, required this.mealId, this.initialMeal});
 
   @override
   State<MealDetailScreen> createState() => _MealDetailScreenState();
@@ -58,6 +58,8 @@ class _MealDetailScreenState extends State<MealDetailScreen> {
   String? _mealName;
   MealType? _mealType;
   DateTime? _mealTime;
+  late MacroLevel _processingLevel;
+  late MacroLevel _addedSugar;
 
   // Snapshot for correction-tracking
   late List<FoodItem> _originalFoods;
@@ -90,6 +92,10 @@ class _MealDetailScreenState extends State<MealDetailScreen> {
     _mealName = m?.mealName ?? m?.displayName;
     _mealType = m?.mealType;
     _mealTime = m?.mealTime ?? m?.createdAt;
+    // Slice 7C: processing_level / added_sugar with neutral baselines for
+    // legacy meals that pre-date the fields.
+    _processingLevel = m?.processingLevel ?? MacroLevel.moderate;
+    _addedSugar = m?.addedSugar ?? MacroLevel.low;
   }
 
   Future<void> _load() async {
@@ -98,8 +104,9 @@ class _MealDetailScreenState extends State<MealDetailScreen> {
       _error = null;
     });
     try {
-      final fresh =
-          await context.read<MealProvider>().reloadMeal(widget.mealId);
+      final fresh = await context.read<MealProvider>().reloadMeal(
+        widget.mealId,
+      );
       setState(() => _meal = fresh);
       _resetFromMeal();
     } catch (e) {
@@ -128,6 +135,9 @@ class _MealDetailScreenState extends State<MealDetailScreen> {
     if (_mealTime != (m.mealTime ?? m.createdAt)) return true;
     if (!_macroRatiosEqual(_macroRatio, m.macroRatio)) return true;
     if (!_foodItemsEqual(_foodItems, m.foodItems)) return true;
+    if (_processingLevel != (m.processingLevel ?? MacroLevel.moderate))
+      return true;
+    if (_addedSugar != (m.addedSugar ?? MacroLevel.low)) return true;
     return false;
   }
 
@@ -136,9 +146,37 @@ class _MealDetailScreenState extends State<MealDetailScreen> {
     return !_foodNameSetsEqual(_originalFoods, _foodItems);
   }
 
+  /// Whether the user has edited any food item since the last load / re-analyze.
+  /// When true, the bottom button flips from "Done" to "Re-analyze".
+  ///
+  /// Positional + trim-only comparison so the smallest possible edit flips
+  /// the button: a single rename, deletion, addition, or reorder all count.
+  /// Trim is applied so trailing whitespace from a dialog field doesn't trick
+  /// the user into thinking they edited when they didn't, but case differences
+  /// still count (a deliberate retype is a real edit).
+  bool _hasFoodEdits() {
+    final m = _meal;
+    if (m == null) return false;
+    if (_foodItems.length != m.foodItems.length) return true;
+    for (var i = 0; i < _foodItems.length; i++) {
+      if (_foodItems[i].name.trim() != m.foodItems[i].name.trim()) {
+        return true;
+      }
+      // Portion-bar drags also flip Done → Re-analyze, so the backend
+      // re-runs structuring with the new portion weights and refreshes the
+      // macro/level fields accordingly.
+      if (_foodItems[i].portionWeight != m.foodItems[i].portionWeight) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   Future<void> _onDone() async {
     if (!_isOwner || _saving) return;
-    if (!_isDirty()) {
+    final reanalyzeMode = _hasFoodEdits();
+
+    if (!reanalyzeMode && !_isDirty()) {
       Navigator.of(context).pop(false);
       return;
     }
@@ -149,16 +187,26 @@ class _MealDetailScreenState extends State<MealDetailScreen> {
     setState(() => _saving = true);
     try {
       final provider = context.read<MealProvider>();
+
+      // In re-analyze mode we deliberately do NOT send macro_ratio /
+      // processing_level / added_sugar / nutrition_level / advisor_insight —
+      // the backend's update_meal will detect the food_items change, run
+      // _structure_text_to_meal against the new list, and re-derive every
+      // one of those fields from the corrected foods.
       final updated = await provider.updateMeal(
         mealId: widget.mealId,
         foodItems: _foodItems,
-        macroRatio: _macroRatio,
-        mealName: _mealName?.trim().isNotEmpty == true ? _mealName!.trim() : null,
+        macroRatio: reanalyzeMode ? null : _macroRatio,
+        mealName: _mealName?.trim().isNotEmpty == true
+            ? _mealName!.trim()
+            : null,
         mealType: _mealType,
         mealTime: _mealTime,
         visibility: _visibility,
         sendTeamId: true,
         teamId: _visibility == MealVisibility.team ? _selectedTeamId : null,
+        processingLevel: reanalyzeMode ? null : _processingLevel,
+        addedSugar: reanalyzeMode ? null : _addedSugar,
       );
       if (_foodWasCorrected()) {
         unawaited(
@@ -171,8 +219,21 @@ class _MealDetailScreenState extends State<MealDetailScreen> {
           ),
         );
       }
+
       if (!mounted) return;
-      Navigator.of(context).pop(true);
+      if (reanalyzeMode) {
+        // Stay on the screen and refresh local state from the re-analysed
+        // meal so the macro bars, level slider, advisor insight, and tier
+        // colour all update in place. The button flips back to "Done"
+        // automatically because _foodNameSetsEqual(_foodItems, _meal.foodItems)
+        // is now true.
+        setState(() {
+          _meal = updated;
+        });
+        _resetFromMeal();
+      } else {
+        Navigator.of(context).pop(true);
+      }
     } catch (e) {
       _snack(e.toString().replaceFirst('Exception: ', ''));
     } finally {
@@ -312,18 +373,9 @@ class _MealDetailScreenState extends State<MealDetailScreen> {
   Future<void> _editMealTime() async {
     if (!_isOwner) return;
     final initial = (_mealTime ?? DateTime.now()).toLocal();
-    final picked = await showTimePicker(
+    final picked = await showDrumTimePicker(
       context: context,
       initialTime: TimeOfDay.fromDateTime(initial),
-      builder: (ctx, child) => Theme(
-        data: Theme.of(ctx).copyWith(
-          colorScheme: Theme.of(ctx).colorScheme.copyWith(
-                primary: AppColors.primaryLemonDark,
-                onPrimary: Colors.white,
-              ),
-        ),
-        child: child ?? const SizedBox.shrink(),
-      ),
     );
     if (picked != null) {
       setState(() {
@@ -345,24 +397,36 @@ class _MealDetailScreenState extends State<MealDetailScreen> {
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('Edit food'),
-        content: TextField(controller: controller, autofocus: true),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          decoration: const InputDecoration(
+            hintText: 'Food name (commas split into separate items)',
+          ),
+        ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx),
             child: const Text('Cancel'),
           ),
           TextButton(
-            onPressed: () => Navigator.pop(ctx, controller.text.trim()),
+            onPressed: () => Navigator.pop(ctx, controller.text),
             child: const Text('Save'),
           ),
         ],
       ),
     );
-    if (result != null && result.isNotEmpty) {
-      setState(() {
-        _foodItems[index] = _foodItems[index].copyWith(name: result);
-      });
-    }
+    if (result == null) return;
+    final pieces = splitFoodInput(result);
+    if (pieces.isEmpty) return;
+    setState(() {
+      final next = [..._foodItems];
+      next[index] = next[index].copyWith(name: pieces.first);
+      for (var i = 1; i < pieces.length; i++) {
+        next.insert(index + i, FoodItem(name: pieces[i]));
+      }
+      _foodItems = next;
+    });
   }
 
   Future<void> _addFood() async {
@@ -375,7 +439,9 @@ class _MealDetailScreenState extends State<MealDetailScreen> {
         content: TextField(
           controller: controller,
           autofocus: true,
-          decoration: const InputDecoration(hintText: 'e.g. Greek yoghurt'),
+          decoration: const InputDecoration(
+            hintText: 'e.g. "Greek yoghurt, Berries, Granola"',
+          ),
         ),
         actions: [
           TextButton(
@@ -383,20 +449,21 @@ class _MealDetailScreenState extends State<MealDetailScreen> {
             child: const Text('Cancel'),
           ),
           TextButton(
-            onPressed: () => Navigator.pop(ctx, controller.text.trim()),
+            onPressed: () => Navigator.pop(ctx, controller.text),
             child: const Text('Add'),
           ),
         ],
       ),
     );
-    if (result != null && result.isNotEmpty) {
-      setState(() {
-        _foodItems = [
-          ..._foodItems,
-          FoodItem(name: result, macroRatio: _macroRatio),
-        ];
-      });
-    }
+    if (result == null) return;
+    final pieces = splitFoodInput(result);
+    if (pieces.isEmpty) return;
+    setState(() {
+      _foodItems = [
+        ..._foodItems,
+        for (final name in pieces) FoodItem(name: name),
+      ];
+    });
   }
 
   void _removeFood(int index) {
@@ -404,14 +471,23 @@ class _MealDetailScreenState extends State<MealDetailScreen> {
     setState(() => _foodItems = [..._foodItems]..removeAt(index));
   }
 
+  void _onPortionsChanged(List<int> weights) {
+    if (!_isOwner) return;
+    if (weights.length != _foodItems.length) return;
+    setState(() {
+      _foodItems = [
+        for (var i = 0; i < _foodItems.length; i++)
+          _foodItems[i].copyWith(portionWeight: weights[i]),
+      ];
+    });
+  }
+
   void _openDiveInWithAdvisor() {
     final meal = _meal;
     if (meal == null) return;
     final seed = _buildAdvisorSeed(meal);
     Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (_) => AdvisorScreen(initialMessage: seed),
-      ),
+      MaterialPageRoute(builder: (_) => AdvisorScreen(initialMessage: seed)),
     );
   }
 
@@ -428,8 +504,7 @@ class _MealDetailScreenState extends State<MealDetailScreen> {
     final time = (_mealTime ?? meal.mealTime ?? meal.createdAt).toLocal();
     final hh = time.hour.toString().padLeft(2, '0');
     final mm = time.minute.toString().padLeft(2, '0');
-    final whenLine =
-        type != null ? '$type at $hh:$mm' : 'Eaten at $hh:$mm';
+    final whenLine = type != null ? '$type at $hh:$mm' : 'Eaten at $hh:$mm';
 
     final foods = _foodItems.isNotEmpty ? _foodItems : meal.foodItems;
     final foodList = foods.isEmpty
@@ -437,8 +512,7 @@ class _MealDetailScreenState extends State<MealDetailScreen> {
         : foods.map((f) => '• ${f.name}').join('\n');
 
     final macros = _macroRatio;
-    final levelLabel =
-        meal.nutritionLevel?.displayName ?? 'unrated';
+    final levelLabel = meal.nutritionLevel?.displayName ?? 'unrated';
 
     final buffer = StringBuffer()
       ..writeln("Hi! I just logged a meal — let's dive in.")
@@ -449,7 +523,7 @@ class _MealDetailScreenState extends State<MealDetailScreen> {
       ..writeln('What I had:')
       ..writeln(foodList)
       ..writeln()
-      ..writeln('Composition:')
+      ..writeln('Nutrition Breakdown:')
       ..writeln('• Protein — ${macros.protein.displayName}')
       ..writeln('• Carbs — ${macros.carbs.displayName}')
       ..writeln('• Fat — ${macros.fat.displayName}')
@@ -495,8 +569,11 @@ class _MealDetailScreenState extends State<MealDetailScreen> {
                   value: 'delete',
                   child: Row(
                     children: [
-                      Icon(Icons.delete_outline,
-                          size: 18, color: AppColors.error),
+                      Icon(
+                        Icons.delete_outline,
+                        size: 18,
+                        color: AppColors.error,
+                      ),
                       SizedBox(width: 8),
                       Text('Delete', style: TextStyle(color: AppColors.error)),
                     ],
@@ -548,10 +625,11 @@ class _MealDetailScreenState extends State<MealDetailScreen> {
         const SizedBox(height: 20),
         _buildSectionHeader('MEAL ITEMS'),
         _buildItemsCard(),
-        if (_isOwner) ...[
-          const SizedBox(height: 24),
-          _buildDoneButton(),
+        if (_foodItems.length > 1) ...[
+          const SizedBox(height: 16),
+          _buildPortionBarSection(),
         ],
+        if (_isOwner) ...[const SizedBox(height: 24), _buildDoneButton()],
         const SizedBox(height: 32),
         _buildSectionHeader('NUTRITION BREAKDOWN'),
         _buildBreakdownCard(),
@@ -578,8 +656,11 @@ class _MealDetailScreenState extends State<MealDetailScreen> {
               borderRadius: BorderRadius.circular(20),
             ),
             alignment: Alignment.center,
-            child: const Icon(Icons.restaurant,
-                color: AppColors.primaryLemonDark, size: 48),
+            child: const Icon(
+              Icons.restaurant,
+              color: AppColors.primaryLemonDark,
+              size: 48,
+            ),
           ),
         ),
       );
@@ -611,8 +692,11 @@ class _MealDetailScreenState extends State<MealDetailScreen> {
                 errorBuilder: (_, _, _) => Container(
                   color: AppColors.primaryLemonLight,
                   alignment: Alignment.center,
-                  child: const Icon(Icons.broken_image_outlined,
-                      color: AppColors.primaryLemonDark, size: 32),
+                  child: const Icon(
+                    Icons.broken_image_outlined,
+                    color: AppColors.primaryLemonDark,
+                    size: 32,
+                  ),
                 ),
               );
             },
@@ -655,8 +739,11 @@ class _MealDetailScreenState extends State<MealDetailScreen> {
                   ),
                   if (_isOwner) ...[
                     const SizedBox(width: 8),
-                    const Icon(Icons.edit_outlined,
-                        size: 18, color: AppColors.textLight),
+                    const Icon(
+                      Icons.edit_outlined,
+                      size: 18,
+                      color: AppColors.textLight,
+                    ),
                   ],
                 ],
               ),
@@ -728,7 +815,10 @@ class _MealDetailScreenState extends State<MealDetailScreen> {
           ),
           style: OutlinedButton.styleFrom(
             foregroundColor: AppColors.accentOrange,
-            side: const BorderSide(color: AppColors.primaryLemonDark, width: 1.4),
+            side: const BorderSide(
+              color: AppColors.primaryLemonDark,
+              width: 1.4,
+            ),
             backgroundColor: AppColors.primaryLemonLight,
             shape: RoundedRectangleBorder(
               borderRadius: BorderRadius.circular(14),
@@ -752,7 +842,7 @@ class _MealDetailScreenState extends State<MealDetailScreen> {
       child: Row(
         children: [
           Expanded(
-            child: _PillField(
+            child: MealPillField(
               label: 'MEAL TYPE',
               value: type.displayName,
               icon: _iconForMealType(type),
@@ -762,7 +852,7 @@ class _MealDetailScreenState extends State<MealDetailScreen> {
           ),
           const SizedBox(width: 12),
           Expanded(
-            child: _PillField(
+            child: MealPillField(
               label: 'TIME',
               value: '$hh:$mm',
               icon: Icons.schedule_outlined,
@@ -802,7 +892,9 @@ class _MealDetailScreenState extends State<MealDetailScreen> {
                         borderRadius: BorderRadius.circular(10),
                         child: Container(
                           padding: const EdgeInsets.symmetric(
-                              horizontal: 12, vertical: 10),
+                            horizontal: 12,
+                            vertical: 10,
+                          ),
                           decoration: BoxDecoration(
                             color: AppColors.primaryLemonLight,
                             borderRadius: BorderRadius.circular(10),
@@ -822,8 +914,11 @@ class _MealDetailScreenState extends State<MealDetailScreen> {
                       IconButton(
                         visualDensity: VisualDensity.compact,
                         onPressed: () => _removeFood(i),
-                        icon: const Icon(Icons.close,
-                            size: 18, color: AppColors.textLight),
+                        icon: const Icon(
+                          Icons.close,
+                          size: 18,
+                          color: AppColors.textLight,
+                        ),
                         tooltip: 'Remove',
                       ),
                   ],
@@ -848,6 +943,12 @@ class _MealDetailScreenState extends State<MealDetailScreen> {
   // ─── Done button ────────────────────────────────────────────────────
 
   Widget _buildDoneButton() {
+    // Re-analyze mode: when the user has edited any food item, the button
+    // changes label so it's clear tapping it re-runs the structuring layer.
+    final reanalyzeMode = _hasFoodEdits();
+    final label = reanalyzeMode ? 'Re-analyze' : 'Done';
+    final loadingLabel = reanalyzeMode ? 'Re-analyzing your meal…' : null;
+
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16),
       child: SizedBox(
@@ -862,16 +963,35 @@ class _MealDetailScreenState extends State<MealDetailScreen> {
             ),
           ),
           child: _saving
-              ? const SizedBox(
-                  width: 22,
-                  height: 22,
-                  child: CircularProgressIndicator(
-                      color: Colors.white, strokeWidth: 2.5),
+              ? Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    const SizedBox(
+                      width: 22,
+                      height: 22,
+                      child: CircularProgressIndicator(
+                        color: Colors.white,
+                        strokeWidth: 2.5,
+                      ),
+                    ),
+                    if (loadingLabel != null) ...[
+                      const SizedBox(width: 12),
+                      Text(
+                        loadingLabel,
+                        style: const TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ],
+                  ],
                 )
-              : const Text(
-                  'Done',
-                  style:
-                      TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+              : Text(
+                  label,
+                  style: const TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w600,
+                  ),
                 ),
         ),
       ),
@@ -881,6 +1001,11 @@ class _MealDetailScreenState extends State<MealDetailScreen> {
   // ─── Nutrition breakdown ────────────────────────────────────────────
 
   Widget _buildBreakdownCard() {
+    // All six rows share the meal's nutrition-level colour so the card visually
+    // aligns with the overall tier (vivid gold = Nutritious, calm grey-beige
+    // = Limited). Bars are READ-ONLY — the only way to change them is to edit
+    // foods or portions and tap Re-analyze.
+    final fill = (_meal?.nutritionLevel ?? NutritionLevel.fair).color;
     return _card(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -888,37 +1013,74 @@ class _MealDetailScreenState extends State<MealDetailScreen> {
           MacroSegmentedBar(
             label: 'Protein',
             level: _macroRatio.protein,
-            onLevelChanged: _isOwner
-                ? (lvl) => setState(
-                    () => _macroRatio = _macroRatio.copyWith(protein: lvl))
-                : null,
+            fillColor: fill,
           ),
           const SizedBox(height: 16),
           MacroSegmentedBar(
             label: 'Carbs',
             level: _macroRatio.carbs,
-            onLevelChanged: _isOwner
-                ? (lvl) => setState(
-                    () => _macroRatio = _macroRatio.copyWith(carbs: lvl))
-                : null,
+            fillColor: fill,
           ),
           const SizedBox(height: 16),
           MacroSegmentedBar(
             label: 'Fat',
             level: _macroRatio.fat,
-            onLevelChanged: _isOwner
-                ? (lvl) => setState(
-                    () => _macroRatio = _macroRatio.copyWith(fat: lvl))
-                : null,
+            fillColor: fill,
           ),
           const SizedBox(height: 16),
           MacroSegmentedBar(
             label: 'Fiber',
             level: _macroRatio.fiber,
-            onLevelChanged: _isOwner
-                ? (lvl) => setState(
-                    () => _macroRatio = _macroRatio.copyWith(fiber: lvl))
-                : null,
+            fillColor: fill,
+          ),
+          const SizedBox(height: 16),
+          MacroSegmentedBar(
+            label: 'Processing Level',
+            level: _processingLevel,
+            fillColor: fill,
+          ),
+          const SizedBox(height: 16),
+          MacroSegmentedBar(
+            label: 'Added Sugar',
+            level: _addedSugar,
+            fillColor: fill,
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildPortionBarSection() {
+    if (_foodItems.length < 2) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const Padding(
+            padding: EdgeInsets.fromLTRB(4, 0, 4, 8),
+            child: Text(
+              'PORTIONS  ·  DRAG TO ADJUST',
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w700,
+                color: AppColors.textSecondary,
+                letterSpacing: 0.6,
+              ),
+            ),
+          ),
+          Container(
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: AppColors.cardBackground,
+              borderRadius: BorderRadius.circular(16),
+              boxShadow: AppColors.cardShadow,
+            ),
+            child: PortionRatioBar(
+              names: _foodItems.map((f) => f.name).toList(),
+              weights: _foodItems.map((f) => f.portionWeight).toList(),
+              onChanged: _isOwner ? _onPortionsChanged : null,
+            ),
           ),
         ],
       ),
@@ -953,9 +1115,9 @@ class _MealDetailScreenState extends State<MealDetailScreen> {
                   onTap: teams.isEmpty
                       ? null
                       : () => setState(() {
-                            _visibility = MealVisibility.team;
-                            _selectedTeamId ??= teams.first.teamId;
-                          }),
+                          _visibility = MealVisibility.team;
+                          _selectedTeamId ??= teams.first.teamId;
+                        }),
                 ),
               ),
             ],
@@ -969,13 +1131,15 @@ class _MealDetailScreenState extends State<MealDetailScreen> {
                   borderRadius: BorderRadius.circular(12),
                 ),
                 contentPadding: const EdgeInsets.symmetric(
-                    horizontal: 12, vertical: 8),
+                  horizontal: 12,
+                  vertical: 8,
+                ),
               ),
               items: teams
-                  .map((t) => DropdownMenuItem(
-                        value: t.teamId,
-                        child: Text(t.name),
-                      ))
+                  .map(
+                    (t) =>
+                        DropdownMenuItem(value: t.teamId, child: Text(t.name)),
+                  )
                   .toList(),
               onChanged: (v) => setState(() => _selectedTeamId = v),
             ),
@@ -1005,8 +1169,7 @@ class _MealDetailScreenState extends State<MealDetailScreen> {
       child: Container(
         padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 8),
         decoration: BoxDecoration(
-          color:
-              selected ? AppColors.primaryLemon : AppColors.backgroundLight,
+          color: selected ? AppColors.primaryLemon : AppColors.backgroundLight,
           borderRadius: BorderRadius.circular(12),
           border: Border.all(
             color: selected
@@ -1024,8 +1187,8 @@ class _MealDetailScreenState extends State<MealDetailScreen> {
               color: disabled
                   ? AppColors.textLight
                   : (selected
-                      ? AppColors.textOnYellow
-                      : AppColors.textSecondary),
+                        ? AppColors.textOnYellow
+                        : AppColors.textSecondary),
             ),
           ),
         ),
@@ -1058,70 +1221,5 @@ class _MealDetailScreenState extends State<MealDetailScreen> {
   }
 }
 
-// ─── Tappable pill field (for Meal Type / Time) ───────────────────────
-
-class _PillField extends StatelessWidget {
-  final String label;
-  final String value;
-  final IconData icon;
-  final VoidCallback? onTap;
-  final bool enabled;
-
-  const _PillField({
-    required this.label,
-    required this.value,
-    required this.icon,
-    this.onTap,
-    required this.enabled,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(14),
-      child: Container(
-        padding: const EdgeInsets.fromLTRB(12, 8, 12, 10),
-        decoration: BoxDecoration(
-          color: AppColors.cardBackground,
-          borderRadius: BorderRadius.circular(14),
-          boxShadow: AppColors.cardShadow,
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              label,
-              style: const TextStyle(
-                fontSize: 10,
-                fontWeight: FontWeight.w700,
-                color: AppColors.textLight,
-                letterSpacing: 0.6,
-              ),
-            ),
-            const SizedBox(height: 4),
-            Row(
-              children: [
-                Icon(icon, size: 18, color: AppColors.primaryLemonDark),
-                const SizedBox(width: 6),
-                Expanded(
-                  child: Text(
-                    value,
-                    style: const TextStyle(
-                      fontSize: 15,
-                      fontWeight: FontWeight.w600,
-                      color: AppColors.textPrimary,
-                    ),
-                  ),
-                ),
-                if (enabled)
-                  const Icon(Icons.expand_more,
-                      size: 18, color: AppColors.textLight),
-              ],
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
+// _PillField was extracted to widgets/meal_pill_field.dart so the Log Meal
+// screen and Detail screen share a single source of truth.

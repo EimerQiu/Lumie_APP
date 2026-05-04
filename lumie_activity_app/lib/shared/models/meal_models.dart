@@ -1,6 +1,8 @@
 // Meal Feature models — mirror backend app/models/meal.py.
 // Macro ratios are categorical (low/moderate/high); numeric grams never reach the client.
 
+import 'package:flutter/material.dart' show Color;
+
 // Backend uses datetime.utcnow().isoformat() which does NOT append 'Z'.
 String _ensureUtcSuffix(String dateStr) {
   if (!dateStr.endsWith('Z') && !dateStr.contains('+')) {
@@ -131,6 +133,23 @@ enum NutritionLevel {
     }
   }
 
+  /// Slice 7A §3 colour palette — warm, never alarming.
+  /// Progression: muted/neutral at Limited → vivid gold at Nutritious.
+  /// Used for the slider dot + active fill, the breakdown bar fills, and the
+  /// level label on cards.
+  Color get color {
+    switch (this) {
+      case NutritionLevel.nutritious:
+        return const Color(0xFFF59E0B); // primaryLemonDark — vivid gold
+      case NutritionLevel.good:
+        return const Color(0xFFFBBF24); // primaryYellow — soft yellow-gold
+      case NutritionLevel.fair:
+        return const Color(0xFFD4A574); // warm muted amber
+      case NutritionLevel.limited:
+        return const Color(0xFFA8A29E); // calm grey-beige (no warning)
+    }
+  }
+
   static NutritionLevel fromString(String? value) {
     switch (value) {
       case 'Limited':
@@ -194,27 +213,49 @@ class FoodItem {
   final String name;
   final MacroRatio? macroRatio;
 
-  const FoodItem({required this.name, this.macroRatio});
+  /// Relative portion weight on the plate. Always integer ≥1. The visible
+  /// width of each segment in the portion bar is `portionWeight / Σweights`.
+  /// No grams, no calories — pure relative ratio.
+  final int portionWeight;
+
+  const FoodItem({
+    required this.name,
+    this.macroRatio,
+    this.portionWeight = 1,
+  });
 
   factory FoodItem.fromJson(Map<String, dynamic> json) {
     final ratio = json['macro_ratio'];
+    final weight = json['portion_weight'];
+    int parsedWeight = 1;
+    if (weight is int) {
+      parsedWeight = weight;
+    } else if (weight is double) {
+      parsedWeight = weight.round();
+    } else if (weight is String) {
+      parsedWeight = int.tryParse(weight) ?? 1;
+    }
+    if (parsedWeight < 1) parsedWeight = 1;
     return FoodItem(
       name: (json['name'] as String?) ?? '',
       macroRatio: ratio is Map<String, dynamic>
           ? MacroRatio.fromJson(ratio)
           : null,
+      portionWeight: parsedWeight,
     );
   }
 
   Map<String, dynamic> toJson() => {
         'name': name,
         if (macroRatio != null) 'macro_ratio': macroRatio!.toJson(),
+        'portion_weight': portionWeight,
       };
 
-  FoodItem copyWith({String? name, MacroRatio? macroRatio}) {
+  FoodItem copyWith({String? name, MacroRatio? macroRatio, int? portionWeight}) {
     return FoodItem(
       name: name ?? this.name,
       macroRatio: macroRatio ?? this.macroRatio,
+      portionWeight: portionWeight ?? this.portionWeight,
     );
   }
 }
@@ -269,6 +310,8 @@ class MealAnalyzeResult {
   final String? mealName;
   final NutritionLevel? nutritionLevel;
   final String? advisorInsight;
+  final MacroLevel? processingLevel;
+  final MacroLevel? addedSugar;
 
   const MealAnalyzeResult({
     required this.mealId,
@@ -278,6 +321,8 @@ class MealAnalyzeResult {
     this.mealName,
     this.nutritionLevel,
     this.advisorInsight,
+    this.processingLevel,
+    this.addedSugar,
   });
 
   factory MealAnalyzeResult.fromJson(Map<String, dynamic> json) {
@@ -299,6 +344,12 @@ class MealAnalyzeResult {
           ? NutritionLevel.fromString(json['nutrition_level'] as String?)
           : null,
       advisorInsight: json['advisor_insight'] as String?,
+      processingLevel: json['processing_level'] is String
+          ? MacroLevel.fromString(json['processing_level'] as String?)
+          : null,
+      addedSugar: json['added_sugar'] is String
+          ? MacroLevel.fromString(json['added_sugar'] as String?)
+          : null,
     );
   }
 }
@@ -319,6 +370,8 @@ class Meal {
   final DateTime? mealTime;
   final NutritionLevel? nutritionLevel;
   final String? advisorInsight;
+  final MacroLevel? processingLevel;
+  final MacroLevel? addedSugar;
   final DateTime createdAt;
   final DateTime updatedAt;
 
@@ -338,6 +391,8 @@ class Meal {
     this.mealTime,
     this.nutritionLevel,
     this.advisorInsight,
+    this.processingLevel,
+    this.addedSugar,
     required this.createdAt,
     required this.updatedAt,
   });
@@ -380,6 +435,12 @@ class Meal {
           ? NutritionLevel.fromString(json['nutrition_level'] as String?)
           : null,
       advisorInsight: json['advisor_insight'] as String?,
+      processingLevel: json['processing_level'] is String
+          ? MacroLevel.fromString(json['processing_level'] as String?)
+          : null,
+      addedSugar: json['added_sugar'] is String
+          ? MacroLevel.fromString(json['added_sugar'] as String?)
+          : null,
       createdAt: DateTime.parse(_ensureUtcSuffix(json['created_at'] as String)),
       updatedAt: DateTime.parse(_ensureUtcSuffix(json['updated_at'] as String)),
     );

@@ -48,6 +48,8 @@ class _Track extends StatelessWidget {
   Widget build(BuildContext context) {
     final trackHeight = compact ? 4.0 : 6.0;
     final dotSize = compact ? 12.0 : 16.0;
+    // Slice 7A §3: dot + active fill use the level's warm palette colour.
+    final accent = level.color;
 
     return LayoutBuilder(
       builder: (context, constraints) {
@@ -73,7 +75,7 @@ class _Track extends StatelessWidget {
                   ),
                 ),
               ),
-              // Filled portion (gold) from 0 → dot center
+              // Filled portion (level-tinted) from 0 → dot center
               Padding(
                 padding: EdgeInsets.symmetric(horizontal: dotSize / 2),
                 child: Align(
@@ -83,7 +85,7 @@ class _Track extends StatelessWidget {
                     child: Container(
                       height: trackHeight,
                       decoration: BoxDecoration(
-                        gradient: AppColors.progressGradient,
+                        color: accent,
                         borderRadius: BorderRadius.circular(trackHeight),
                       ),
                     ),
@@ -97,7 +99,7 @@ class _Track extends StatelessWidget {
                   width: dotSize,
                   height: dotSize,
                   decoration: BoxDecoration(
-                    color: AppColors.primaryLemonDark,
+                    color: accent,
                     shape: BoxShape.circle,
                     border: Border.all(color: Colors.white, width: 2),
                     boxShadow: const [
@@ -129,6 +131,8 @@ class _LabelsRow extends StatelessWidget {
     return Row(
       children: List.generate(labels.length, (i) {
         final isActive = i == active.index;
+        // Slice 7A §3: the active label takes the level's warm palette colour.
+        final activeColor = NutritionLevel.values[i].color;
         return Expanded(
           child: Align(
             alignment: _alignmentForIndex(i, labels.length),
@@ -137,9 +141,7 @@ class _LabelsRow extends StatelessWidget {
               style: TextStyle(
                 fontSize: 11,
                 fontWeight: isActive ? FontWeight.w700 : FontWeight.w500,
-                color: isActive
-                    ? AppColors.textOnYellow
-                    : AppColors.textLight,
+                color: isActive ? activeColor : AppColors.textLight,
               ),
             ),
           ),
