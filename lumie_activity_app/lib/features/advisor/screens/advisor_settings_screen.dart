@@ -156,9 +156,13 @@ class _AdvisorSettingsScreenState extends State<AdvisorSettingsScreen> {
         content: TextField(
           controller: controller,
           autofocus: true,
-          maxLength: 240,
+          maxLength: 500,
+          maxLines: null,
+          minLines: 3,
+          expands: false,
           decoration: const InputDecoration(
             hintText: 'e.g. Morning medicine before school',
+            alignLabelWithHint: true,
           ),
         ),
         actions: [
