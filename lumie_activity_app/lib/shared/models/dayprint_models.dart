@@ -1,5 +1,5 @@
 class DayprintEvent {
-  final String type; // "task_completed" | "advisor_chat"
+  final String type; // "task_completed" | "advisor_chat" | "meal_logged" | …
   final String timestamp;
   final Map<String, dynamic> data;
 
@@ -14,6 +14,40 @@ class DayprintEvent {
     timestamp: json['timestamp'] as String? ?? '',
     data: (json['data'] as Map<String, dynamic>?) ?? {},
   );
+
+  /// Canonical identity for dedupe — must match the backend scheme so a
+  /// row written by the bridge collapses with any legacy variant for the
+  /// same logical event.
+  ///
+  ///   - Nutrition-task event → `nutrition_task:<user_id>:<source_task_id>`
+  ///   - Manual meal_logged   → `meal:<meal_id>`
+  ///   - Other task_completed → `task:<user_id>:<source_task_id>`
+  ///   - Anything else        → null (no dedupe applies)
+  String? canonicalSourceKey(String userId) {
+    final sourceTaskId = data['source_task_id'] as String?;
+    final taskType = data['task_type'] as String?;
+    final sourceType = data['source_type'] as String? ?? '';
+    final mealId = data['meal_id'] as String?;
+
+    final isNutrition = sourceType.startsWith('nutrition_task') ||
+        taskType == 'Nutrition' ||
+        taskType == 'nutrition';
+
+    if (sourceTaskId != null &&
+        sourceTaskId.isNotEmpty &&
+        (isNutrition || type == 'meal_logged')) {
+      return 'nutrition_task:$userId:$sourceTaskId';
+    }
+    if (type == 'meal_logged' && mealId != null && mealId.isNotEmpty) {
+      return 'meal:$mealId';
+    }
+    if (type == 'task_completed' &&
+        sourceTaskId != null &&
+        sourceTaskId.isNotEmpty) {
+      return 'task:$userId:$sourceTaskId';
+    }
+    return null;
+  }
 }
 
 class Dayprint {

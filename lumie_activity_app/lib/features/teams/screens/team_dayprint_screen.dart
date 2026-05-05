@@ -52,6 +52,44 @@ class _TeamDayprintScreenState extends State<TeamDayprintScreen> {
     }
   }
 
+  /// Defensive dedupe of team feed items.
+  ///
+  /// Two scenarios this guards against:
+  ///   1. The same item arrives twice across pages because of a stale
+  ///      cursor or a refresh racing a load-more.
+  ///   2. Legacy backend data emits both a `task_*` item AND a `meal` item
+  ///      for the same Nutrition task (the backend now suppresses this,
+  ///      but old responses cached in flight may still contain it).
+  ///
+  /// Identity rule:
+  ///   - meal item: `meal:<member_user_id>:<meal_id>`
+  ///   - task item: `task:<member_user_id>:<item_id>`
+  ///   - sleep item: `sleep:<member_user_id>:<item_id>`
+  /// First occurrence wins (preserves chronological ordering).
+  List<TeamFeedItem> _dedupeFeedItems(Iterable<TeamFeedItem> items) {
+    final seen = <String>{};
+    final out = <TeamFeedItem>[];
+    for (final item in items) {
+      final String prefix;
+      switch (item.type) {
+        case TeamFeedItemType.meal:
+          prefix = 'meal';
+          break;
+        case TeamFeedItemType.taskWithPhoto:
+        case TeamFeedItemType.taskText:
+          prefix = 'task';
+          break;
+        case TeamFeedItemType.sleepScore:
+          prefix = 'sleep';
+          break;
+      }
+      final key =
+          '$prefix:${item.memberUserId}:${item.mealId ?? item.itemId}';
+      if (seen.add(key)) out.add(item);
+    }
+    return out;
+  }
+
   Future<void> _loadFeed({bool loadMore = false}) async {
     if (_isLoading) return;
     if (loadMore && !_hasMore) return;
@@ -98,11 +136,10 @@ class _TeamDayprintScreenState extends State<TeamDayprintScreen> {
 
       if (mounted) {
         setState(() {
-          if (loadMore) {
-            _items.addAll(response.items);
-          } else {
-            _items = response.items;
-          }
+          final next = loadMore
+              ? _dedupeFeedItems([..._items, ...response.items])
+              : _dedupeFeedItems(response.items);
+          _items = next;
           _hasMore = response.hasMore;
           _nextBefore = response.nextBefore;
           _isLoading = false;

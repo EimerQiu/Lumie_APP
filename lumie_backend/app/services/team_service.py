@@ -1299,6 +1299,14 @@ class TeamService:
         tasks = await tasks_cursor.to_list(length=None)
 
         for task in tasks:
+            # Nutrition tasks are subsumed by the bridged meal item below —
+            # emitting a parallel task_text/task_with_photo item produces a
+            # duplicate row in the team feed (same root cause that made
+            # log_task_completed skip nutrition events on the personal
+            # Dayprint).
+            if task.get("task_type") in ("Nutrition", "nutrition"):
+                continue
+
             attachments = task.get("attachments", [])
             image_attachments = [
                 a for a in attachments if a.get("media_type") == "image"
@@ -1373,6 +1381,13 @@ class TeamService:
 
         meals_cursor = db.meals.find(meal_filter).sort("created_at", -1).limit(limit * 3)
         meals_docs = await meals_cursor.to_list(length=None)
+
+        # Defensive dedupe: legacy duplicate meal rows for the same nutrition
+        # task can still exist in storage until the migration runs. The team
+        # feed uses the same canonical-identity rule as the Meals page so a
+        # shared meal renders as one card per (user, source_task_id).
+        from .meal_service import MealService
+        meals_docs = MealService._dedupe_meal_docs(meals_docs)
 
         for meal in meals_docs:
             created_at = meal.get("created_at")

@@ -54,7 +54,7 @@ from ..models.meal import (
     MealTrendResponse,
 )
 from ..models.team import MemberStatus
-from .dayprint_service import log_meal_logged
+from .dayprint_service import log_meal_logged, refresh_dayprint_event_for_meal
 from .llm_client import chat_completion
 
 logger = logging.getLogger(__name__)
@@ -965,6 +965,18 @@ class MealService:
                 added_sugar=added_sugar_value,
             ).value
 
+        # Strict identity rule: a meal carrying linked_task_id IS a Nutrition-
+        # task meal — must be stamped with source_type/source_task_id so it
+        # uses the canonical identity everywhere (Meals API dedupe, dayprint
+        # source_key, migration grouping). Without this, a manual /meals POST
+        # with linked_task_id and a later bridge call produced two parallel
+        # representations with different canonical keys.
+        source_type_value: Optional[str] = None
+        source_task_id_value: Optional[str] = None
+        if data.linked_task_id:
+            source_type_value = "nutrition_task"
+            source_task_id_value = data.linked_task_id
+
         doc = {
             "meal_id": data.meal_id,
             "user_id": user_id,
@@ -985,10 +997,15 @@ class MealService:
             "created_at": now,
             "updated_at": now,
         }
+        if source_type_value:
+            doc["source_type"] = source_type_value
+            doc["source_task_id"] = source_task_id_value
         await db.meals.insert_one(doc)
 
         # Mark the moment this meal entered the user's day. Fire-and-forget
-        # so dayprint write failures never break meal creation.
+        # so dayprint write failures never break meal creation. Pass the
+        # canonical source identity so the dayprint event's source_key
+        # collapses with any bridge-emitted event for the same task.
         first_image_url = images[0]["url"] if images else None
         try:
             await log_meal_logged(
@@ -998,6 +1015,8 @@ class MealService:
                 image_url=first_image_url,
                 visibility=data.visibility.value,
                 team_id=team_id,
+                source_type=source_type_value or "meal",
+                source_task_id=source_task_id_value,
             )
         except Exception as exc:
             logger.warning("Dayprint log_meal_logged failed for %s: %s", user_id, exc)
@@ -1035,6 +1054,18 @@ class MealService:
                 detail="Only the meal owner can edit this meal",
             )
 
+        # When food_items changed, the request is a re-analyze: only nutrition
+        # fields may move. The original logged_at (meal_time / meal_type) and
+        # created_at must be preserved so the meal stays anchored to when the
+        # user actually ate, not when they re-analyzed.
+        is_reanalyze = (
+            data.food_items is not None
+            and not self._food_lists_equal_with_portions(
+                doc.get("food_items", []),
+                [fi.model_dump() for fi in data.food_items],
+            )
+        )
+
         updates: dict = {}
         if data.food_items is not None:
             updates["food_items"] = [fi.model_dump() for fi in data.food_items]
@@ -1044,9 +1075,9 @@ class MealService:
             updates["note"] = data.note
         if data.meal_name is not None:
             updates["meal_name"] = data.meal_name.strip()
-        if data.meal_type is not None:
+        if data.meal_type is not None and not is_reanalyze:
             updates["meal_type"] = data.meal_type.value
-        if data.meal_time is not None:
+        if data.meal_time is not None and not is_reanalyze:
             updates["meal_time"] = data.meal_time
         if data.nutrition_level is not None:
             updates["nutrition_level"] = data.nutrition_level.value
@@ -1064,64 +1095,59 @@ class MealService:
         # therefore produce a meaningfully different nutrition_level.
         # Caller-provided values still win — re-analysis only fills fields
         # the caller didn't explicitly override.
-        if data.food_items is not None:
-            existing_foods = doc.get("food_items", [])
+        if is_reanalyze:
             new_foods_dump = updates["food_items"]
-            if not self._food_lists_equal_with_portions(existing_foods, new_foods_dump):
-                # Include explicit portion hints when ANY item has a non-default
-                # portion weight, so the structuring LLM knows to weight the
-                # macros accordingly. Format: "name (portion N), name2 (portion M)".
-                has_portion_signal = any(
-                    int(fi.get("portion_weight", 1) or 1) != 1
+            has_portion_signal = any(
+                int(fi.get("portion_weight", 1) or 1) != 1
+                for fi in new_foods_dump
+            )
+            if has_portion_signal:
+                synthetic_text = ", ".join(
+                    f"{str(fi.get('name', '')).strip()} (portion {int(fi.get('portion_weight', 1) or 1)})"
                     for fi in new_foods_dump
+                    if fi.get("name")
                 )
-                if has_portion_signal:
-                    synthetic_text = ", ".join(
-                        f"{str(fi.get('name', '')).strip()} (portion {int(fi.get('portion_weight', 1) or 1)})"
-                        for fi in new_foods_dump
-                        if fi.get("name")
+            else:
+                synthetic_text = ", ".join(
+                    str(fi.get("name", "")).strip()
+                    for fi in new_foods_dump
+                    if fi.get("name")
+                )
+            if synthetic_text:
+                logger.info(
+                    "Update re-analysing meal_id=%s with new foods text=%r",
+                    meal_id, synthetic_text[:120],
+                )
+                try:
+                    re_parsed = await self._structure_text_to_meal(
+                        synthetic_text, user_id=user_id,
                     )
-                else:
-                    synthetic_text = ", ".join(
-                        str(fi.get("name", "")).strip()
-                        for fi in new_foods_dump
-                        if fi.get("name")
-                    )
-                if synthetic_text:
+                    if data.macro_ratio is None and re_parsed.get("macro_ratio"):
+                        updates["macro_ratio"] = re_parsed["macro_ratio"]
+                    if data.nutrition_level is None and re_parsed.get("nutrition_level"):
+                        updates["nutrition_level"] = re_parsed["nutrition_level"]
+                    if data.meal_name is None and re_parsed.get("meal_name"):
+                        updates["meal_name"] = re_parsed["meal_name"]
+                    if data.advisor_insight is None and re_parsed.get("advisor_insight"):
+                        updates["advisor_insight"] = re_parsed["advisor_insight"]
+                    if data.processing_level is None and re_parsed.get("processing_level"):
+                        updates["processing_level"] = re_parsed["processing_level"]
+                    if data.added_sugar is None and re_parsed.get("added_sugar"):
+                        updates["added_sugar"] = re_parsed["added_sugar"]
                     logger.info(
-                        "Update re-analysing meal_id=%s with new foods text=%r",
-                        meal_id, synthetic_text[:120],
+                        "Update re-analysed meal_id=%s "
+                        "nutrition_level=%s meal_name='%s'",
+                        meal_id,
+                        re_parsed.get("nutrition_level"),
+                        (re_parsed.get("meal_name") or "")[:40],
                     )
-                    try:
-                        re_parsed = await self._structure_text_to_meal(
-                            synthetic_text, user_id=user_id,
-                        )
-                        if data.macro_ratio is None and re_parsed.get("macro_ratio"):
-                            updates["macro_ratio"] = re_parsed["macro_ratio"]
-                        if data.nutrition_level is None and re_parsed.get("nutrition_level"):
-                            updates["nutrition_level"] = re_parsed["nutrition_level"]
-                        if data.meal_name is None and re_parsed.get("meal_name"):
-                            updates["meal_name"] = re_parsed["meal_name"]
-                        if data.advisor_insight is None and re_parsed.get("advisor_insight"):
-                            updates["advisor_insight"] = re_parsed["advisor_insight"]
-                        if data.processing_level is None and re_parsed.get("processing_level"):
-                            updates["processing_level"] = re_parsed["processing_level"]
-                        if data.added_sugar is None and re_parsed.get("added_sugar"):
-                            updates["added_sugar"] = re_parsed["added_sugar"]
-                        logger.info(
-                            "Update re-analysed meal_id=%s "
-                            "nutrition_level=%s meal_name='%s'",
-                            meal_id,
-                            re_parsed.get("nutrition_level"),
-                            (re_parsed.get("meal_name") or "")[:40],
-                        )
-                    except Exception as exc:
-                        logger.warning(
-                            "Re-analysis on update failed for meal_id=%s: %s",
-                            meal_id, exc,
-                        )
-                        # Fall through — the food edit still saves; we just
-                        # skip the structured refresh.
+                except Exception as exc:
+                    logger.warning(
+                        "Re-analysis on update failed for meal_id=%s: %s",
+                        meal_id, exc,
+                    )
+                    # Fall through — the food edit still saves; we just
+                    # skip the structured refresh.
 
         # Visibility / team transitions
         new_visibility = data.visibility.value if data.visibility is not None else doc.get("visibility")
@@ -1152,6 +1178,37 @@ class MealService:
         updates["updated_at"] = datetime.utcnow()
         await db.meals.update_one({"meal_id": meal_id}, {"$set": updates})
         updated = await db.meals.find_one({"meal_id": meal_id})
+
+        # Strict "Meal = Dayprint event" rule: any time the meal mutates we
+        # also refresh the linked dayprint event payload so the dayprint
+        # never renders stale food_preview / image data. The helper is
+        # an in-place update keyed on canonical source_key — it does NOT
+        # create a new event for meals that were never previously logged
+        # to dayprint, so re-analyses against legacy meals are safe.
+        try:
+            images = updated.get("images") or []
+            first_image_url = images[0].get("url") if images else None
+            source_task = (
+                updated.get("source_task_id") or updated.get("linked_task_id")
+            )
+            await refresh_dayprint_event_for_meal(
+                user_id=user_id,
+                meal_id=meal_id,
+                food_preview=self._food_preview(updated.get("food_items") or []),
+                image_url=first_image_url,
+                visibility=updated.get("visibility") or MealVisibility.PRIVATE.value,
+                team_id=updated.get("team_id"),
+                source_type=(
+                    "nutrition_task" if source_task else "meal"
+                ),
+                source_task_id=source_task,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Dayprint refresh after update_meal failed for %s: %s",
+                meal_id, exc,
+            )
+
         return self._meal_doc_to_response(updated, user_name=await self._resolve_user_name(user_id))
 
     async def delete_meal(self, meal_id: str, user_id: str) -> dict:
@@ -1189,6 +1246,104 @@ class MealService:
         except ValueError:
             return None
 
+    @staticmethod
+    def _meal_canonical_identity(doc: dict) -> str:
+        """Canonical identity used to dedupe duplicate rows at API time.
+
+        Mirrors the dayprint scheme so a Meal and its Dayprint event always
+        share one identity:
+
+            • task-linked meal  → "nutrition_task:<user_id>:<task_id>"
+            • normal manual     → "meal:<meal_id>"
+
+        A meal is task-linked when ANY of these is true (in priority order):
+            1. `source_type` starts with "nutrition_task" with a `source_task_id`
+            2. `source_task_id` exists
+            3. `linked_task_id` exists
+
+        Rule 3 is essential — legacy `POST /meals` calls written before
+        `create_meal` learned to canonicalize stored `linked_task_id` only,
+        and they MUST resolve to the same identity as the bridge-stamped
+        meal for the same task. Otherwise the Meals page shows two cards
+        (one with picture from the bridge, one without from the manual save)
+        for what is logically the same Nutrition task.
+        """
+        user_id = doc.get("user_id") or ""
+        task_id = (
+            doc.get("source_task_id")
+            or doc.get("linked_task_id")
+        )
+        if task_id:
+            return f"nutrition_task:{user_id}:{task_id}"
+        return f"meal:{doc.get('meal_id')}"
+
+    @classmethod
+    def _dedupe_meal_docs(cls, docs: list[dict]) -> list[dict]:
+        """Collapse duplicate rows by canonical identity, keeping the oldest
+        (canonical) row but MERGING image / food data from siblings so the
+        surviving card always carries the richest user-visible state.
+        Manually-logged meals (no task link) never collapse with each other.
+        """
+        groups: dict[str, list[dict]] = {}
+        order: list[str] = []
+        for doc in docs:
+            identity = cls._meal_canonical_identity(doc)
+            if identity not in groups:
+                groups[identity] = []
+                order.append(identity)
+            groups[identity].append(doc)
+
+        result: list[dict] = []
+        collapsed = 0
+        for identity in order:
+            group = groups[identity]
+            if len(group) == 1:
+                result.append(group[0])
+                continue
+            ordered = sorted(group, key=cls._meal_age_key)
+            canonical = dict(ordered[0])  # oldest created_at wins (id/timestamps)
+            # Display source: prefer a row that has a picture — that's the
+            # bridge-written row carrying the freshest task-derived data.
+            # Falls back to canonical if no row has images.
+            display = next((m for m in ordered if m.get("images")), canonical)
+            if display.get("images"):
+                canonical["images"] = display["images"]
+            if display.get("food_items"):
+                canonical["food_items"] = display["food_items"]
+            if not canonical.get("note"):
+                for sibling in ordered[1:]:
+                    if sibling.get("note"):
+                        canonical["note"] = sibling["note"]
+                        break
+            collapsed += len(group) - 1
+            result.append(canonical)
+
+        if collapsed:
+            logger.info(
+                "Meals API defensive dedupe collapsed %d duplicate row(s)",
+                collapsed,
+            )
+        return result
+
+    def _log_returned_meals(self, label: str, docs: list[dict]) -> None:
+        """Per-meal canonical-identity log line so production traces can
+        prove the API only emits one row per identity. Cheap; one INFO
+        line per meal returned.
+        """
+        for doc in docs:
+            logger.info(
+                "MealsAPI %s meal_id=%s identity=%s source_type=%s "
+                "source_task_id=%s user_id=%s created_at=%s meal_time=%s",
+                label,
+                doc.get("meal_id"),
+                self._meal_canonical_identity(doc),
+                doc.get("source_type"),
+                doc.get("source_task_id") or doc.get("linked_task_id"),
+                doc.get("user_id"),
+                doc.get("created_at"),
+                doc.get("meal_time"),
+            )
+
     async def list_user_meals(
         self,
         user_id: str,
@@ -1201,17 +1356,23 @@ class MealService:
         if cursor_dt is not None:
             query["created_at"] = {"$lt": cursor_dt}
 
-        cursor = db.meals.find(query).sort("created_at", -1).limit(limit + 1)
-        docs = await cursor.to_list(length=limit + 1)
+        # Over-fetch so the dedupe pass cannot collapse the response below
+        # `limit` and starve the page. We trim back after dedup.
+        fetch_limit = (limit + 1) * 2
+        cursor = db.meals.find(query).sort("created_at", -1).limit(fetch_limit)
+        raw_docs = await cursor.to_list(length=fetch_limit)
+        deduped = self._dedupe_meal_docs(raw_docs)
+        self._log_returned_meals("list_user_meals", deduped)
+
         next_cursor: Optional[str] = None
-        if len(docs) > limit:
-            docs = docs[:limit]
-            next_cursor = format_utc_datetime(docs[-1]["created_at"])
+        if len(deduped) > limit:
+            deduped = deduped[:limit]
+            next_cursor = format_utc_datetime(deduped[-1]["created_at"])
 
         user_name = await self._resolve_user_name(user_id)
         return MealListResponse(
-            meals=[self._meal_doc_to_response(d, user_name=user_name) for d in docs],
-            total=len(docs),
+            meals=[self._meal_doc_to_response(d, user_name=user_name) for d in deduped],
+            total=len(deduped),
             next_cursor=next_cursor,
         )
 
@@ -1233,17 +1394,21 @@ class MealService:
         if cursor_dt is not None:
             query["created_at"] = {"$lt": cursor_dt}
 
-        cursor = db.meals.find(query).sort("created_at", -1).limit(limit + 1)
-        docs = await cursor.to_list(length=limit + 1)
+        fetch_limit = (limit + 1) * 2
+        cursor = db.meals.find(query).sort("created_at", -1).limit(fetch_limit)
+        raw_docs = await cursor.to_list(length=fetch_limit)
+        deduped = self._dedupe_meal_docs(raw_docs)
+        self._log_returned_meals("get_team_feed", deduped)
+
         next_cursor: Optional[str] = None
-        if len(docs) > limit:
-            docs = docs[:limit]
-            next_cursor = format_utc_datetime(docs[-1]["created_at"])
+        if len(deduped) > limit:
+            deduped = deduped[:limit]
+            next_cursor = format_utc_datetime(deduped[-1]["created_at"])
 
         # Resolve user_name per meal — small N, simple loop.
         name_cache: dict[str, Optional[str]] = {}
         meals: List[MealResponse] = []
-        for d in docs:
+        for d in deduped:
             uid = d["user_id"]
             if uid not in name_cache:
                 name_cache[uid] = await self._resolve_user_name(uid)
@@ -1389,15 +1554,138 @@ class MealService:
             "user_id": task.get("user_id"),
         }
 
+    @staticmethod
+    def _meal_age_key(meal: dict):
+        """Order key used to pick the canonical meal among duplicates.
+
+        Oldest created_at wins; meal_time breaks ties. None values sort last
+        so a malformed legacy doc never trumps a properly-stamped one.
+        """
+        created = meal.get("created_at")
+        meal_time = meal.get("meal_time")
+        if isinstance(meal_time, str):
+            try:
+                meal_time = datetime.fromisoformat(meal_time.replace("Z", ""))
+            except ValueError:
+                meal_time = None
+        return (
+            created is None,
+            created or datetime.max,
+            meal_time is None,
+            meal_time or datetime.max,
+        )
+
+    async def _consolidate_duplicate_source_meals(
+        self,
+        db,
+        candidates: List[dict],
+    ) -> Optional[dict]:
+        """Pick a canonical meal from a list of duplicates and remove the rest.
+
+        Canonical = oldest created_at (so the original logged time is preserved).
+        Drops the duplicates from `meals` and rewrites `dayprints.events.*`
+        references to point at the canonical meal_id, keeping every connected
+        surface (Dayprint, team feed, task-linked meal, detail screen) on the
+        same row.
+
+        Returns the canonical meal dict, or None when `candidates` is empty.
+        """
+        if not candidates:
+            return None
+        if len(candidates) == 1:
+            return candidates[0]
+
+        ordered = sorted(candidates, key=self._meal_age_key)
+        canonical = ordered[0]
+        canonical_id = canonical.get("meal_id")
+        if not canonical_id:
+            return canonical
+
+        # Merge richer data from duplicates onto the canonical BEFORE we
+        # delete them. Critical for the "one card with picture, one without"
+        # bug — the canonical is the oldest by created_at (preserves logged
+        # time), but the photo / structured food data may live on a younger
+        # bridge-written row. We lift the display row's payload onto the
+        # canonical so the surviving row carries the complete user-visible
+        # state. Display row = the one with images (= the bridge's view).
+        merged_fields: dict = {}
+        display = next((d for d in ordered if d.get("images")), canonical)
+        if display.get("images") and not (canonical.get("images") or []):
+            merged_fields["images"] = display["images"]
+        if display.get("food_items") and not (canonical.get("food_items") or []):
+            merged_fields["food_items"] = display["food_items"]
+        if not canonical.get("note"):
+            for dup in ordered[1:]:
+                if dup.get("note"):
+                    merged_fields["note"] = dup["note"]
+                    break
+        if not canonical.get("source_type"):
+            merged_fields["source_type"] = "nutrition_task"
+        if not canonical.get("source_task_id"):
+            for dup in ordered[1:]:
+                tid = dup.get("source_task_id") or dup.get("linked_task_id")
+                if tid:
+                    merged_fields["source_task_id"] = tid
+                    break
+        if merged_fields:
+            try:
+                await db.meals.update_one(
+                    {"meal_id": canonical_id},
+                    {"$set": merged_fields},
+                )
+                canonical.update(merged_fields)
+                logger.info(
+                    "Merged into canonical meal %s: %s",
+                    canonical_id, list(merged_fields.keys()),
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Failed to merge duplicate fields into canonical %s: %s",
+                    canonical_id, exc,
+                )
+
+        for dup in ordered[1:]:
+            dup_id = dup.get("meal_id")
+            if not dup_id or dup_id == canonical_id:
+                continue
+            try:
+                await db.meals.delete_one({"meal_id": dup_id})
+            except Exception as exc:
+                logger.warning(
+                    "Failed to delete duplicate meal %s during consolidation: %s",
+                    dup_id, exc,
+                )
+                continue
+            try:
+                await db.dayprints.update_many(
+                    {"events.data.meal_id": dup_id},
+                    {"$set": {
+                        "events.$[evt].data.meal_id": canonical_id,
+                    }},
+                    array_filters=[{"evt.data.meal_id": dup_id}],
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Failed to rewrite dayprint references %s→%s: %s",
+                    dup_id, canonical_id, exc,
+                )
+            logger.info(
+                "Consolidated duplicate meal %s into canonical %s",
+                dup_id, canonical_id,
+            )
+        return canonical
+
     async def _find_existing_nutrition_task_meal(self, db, task: dict) -> Optional[dict]:
         task_id = task.get("task_id")
         source_filter = self._nutrition_task_source_filter(task)
-        existing = await db.meals.find_one({
+        cursor = db.meals.find({
             "$or": [
                 source_filter,
-                {"linked_task_id": task_id},
+                {"linked_task_id": task_id, "user_id": task.get("user_id")},
             ]
         })
+        candidates = await cursor.to_list(length=None)
+        existing = await self._consolidate_duplicate_source_meals(db, candidates)
         if existing and existing.get("source_type") != "nutrition_task":
             try:
                 await db.meals.update_one(
@@ -1414,18 +1702,15 @@ class MealService:
         return existing
 
     async def _log_bridged_meal_once(self, db, meal: dict) -> None:
+        """Sync the dayprint event for a bridged meal.
+
+        The dayprint layer is now idempotent on canonical source_key, so
+        every bridge call (create / updateNote / uploadAttachments /
+        completeTask / re-analysis) safely upserts the same one event —
+        food_preview / image refresh, no duplicates.
+        """
         meal_id = meal.get("meal_id")
         if not meal_id:
-            return
-
-        result = await db.meals.update_one(
-            {"meal_id": meal_id, "bridge_dayprint_logged": {"$ne": True}},
-            {"$set": {
-                "bridge_dayprint_logged": True,
-                "bridge_dayprint_logged_at": datetime.utcnow(),
-            }},
-        )
-        if getattr(result, "modified_count", 0) != 1:
             return
 
         images = meal.get("images") or []
@@ -1437,6 +1722,8 @@ class MealService:
             image_url=first_image_url,
             visibility=meal.get("visibility") or MealVisibility.PRIVATE.value,
             team_id=meal.get("team_id"),
+            source_type="nutrition_task",
+            source_task_id=meal.get("source_task_id") or meal.get("linked_task_id"),
         )
 
     async def create_meal_from_nutrition_task(
@@ -1638,7 +1925,6 @@ class MealService:
             "user_edited": False,
             "meal_type": meal_type_value,
             "meal_time": meal_time_value,
-            "bridge_dayprint_logged": False,
             "created_at": now,
         }
         try:

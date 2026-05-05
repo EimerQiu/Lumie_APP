@@ -10,6 +10,40 @@ import '../../../shared/models/meal_models.dart';
 
 enum MealsState { initial, loading, loaded, error }
 
+/// Canonical identity for a Meal — must match the backend scheme.
+///
+///   - Nutrition-task meal (source-linked) → `nutrition_task:user:task`
+///   - Manual meal                          → `meal:meal_id`
+///
+/// Used by [_mergeMealsDeduped] to keep only one card per real-world meal
+/// even when stale list-state, race-conditions, or legacy DB rows would
+/// otherwise produce duplicates on the Meals page.
+String _mealCanonicalIdentity(Meal meal) {
+  final taskId = meal.linkedTaskId;
+  if (taskId != null && taskId.isNotEmpty) {
+    return 'nutrition_task:${meal.userId}:$taskId';
+  }
+  return 'meal:${meal.mealId}';
+}
+
+/// Merge `incoming` into `existing` (in arrival order), discarding any
+/// entry whose canonical identity is already represented. Preserves the
+/// first occurrence's order. The "first occurrence" rule — combined with
+/// the backend ordering by `created_at` desc — means the canonical
+/// (oldest) row wins when stale state and a fresh fetch overlap.
+List<Meal> _mergeMealsDeduped(
+  Iterable<Meal> existing,
+  Iterable<Meal> incoming,
+) {
+  final seen = <String>{};
+  final out = <Meal>[];
+  for (final m in [...existing, ...incoming]) {
+    final id = _mealCanonicalIdentity(m);
+    if (seen.add(id)) out.add(m);
+  }
+  return out;
+}
+
 class MealProvider extends ChangeNotifier {
   final MealService _service = MealService();
 
@@ -143,9 +177,19 @@ class MealProvider extends ChangeNotifier {
       addedSugar: addedSugar ?? draft.addedSugar,
       timezone: timezone,
     );
-    _myMeals.insert(0, meal);
+    // Prepend the new meal, then dedupe by canonical identity. If a stale
+    // server row for the same nutrition task is already in `_myMeals` (the
+    // user happened to log via the task flow earlier), the prepended fresh
+    // copy wins because it appears first in the merge.
+    final merged = _mergeMealsDeduped([meal], _myMeals);
+    _myMeals
+      ..clear()
+      ..addAll(merged);
     if (meal.isTeamMeal && meal.teamId == _activeTeamId) {
-      _teamMeals.insert(0, meal);
+      final mergedTeam = _mergeMealsDeduped([meal], _teamMeals);
+      _teamMeals
+        ..clear()
+        ..addAll(mergedTeam);
     }
     _draft = null;
     // The new meal moved today's average — invalidate the cached trend so the
@@ -170,7 +214,14 @@ class MealProvider extends ChangeNotifier {
     notifyListeners();
     try {
       final response = await _service.listMyMeals(before: _myCursor);
-      _myMeals.addAll(response.meals);
+      // Defensive dedupe: even after the storage migration, a race between
+      // a fresh-fetch and a previously-loaded page can put two copies of
+      // the same canonical meal in the list. Existing entries win (page
+      // order) so pagination remains stable.
+      final merged = _mergeMealsDeduped(_myMeals, response.meals);
+      _myMeals
+        ..clear()
+        ..addAll(merged);
       _myCursor = response.nextCursor;
       _hasMoreMyMeals = response.nextCursor != null;
       _state = MealsState.loaded;
@@ -198,7 +249,10 @@ class MealProvider extends ChangeNotifier {
     try {
       final response =
           await _service.getTeamMealFeed(teamId: teamId, before: _teamCursor);
-      _teamMeals.addAll(response.meals);
+      final merged = _mergeMealsDeduped(_teamMeals, response.meals);
+      _teamMeals
+        ..clear()
+        ..addAll(merged);
       _teamCursor = response.nextCursor;
       _hasMoreTeamMeals = response.nextCursor != null;
       _state = MealsState.loaded;

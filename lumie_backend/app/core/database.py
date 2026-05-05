@@ -82,6 +82,9 @@ async def create_indexes():
         partialFilterExpression={"source_type": "nutrition_task"},
     )
 
+    # Dayprint collection indexes
+    await db.db.dayprints.create_index([("user_id", 1), ("date", 1)], unique=True)
+
     # Task templates collection indexes
     await db.db.task_templates.create_index("id", unique=True)
     await db.db.task_templates.create_index("created_by")

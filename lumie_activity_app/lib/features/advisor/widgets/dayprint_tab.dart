@@ -109,10 +109,36 @@ class _DayprintTabState extends State<DayprintTab>
     }
   }
 
+  /// Strict "Nutrition Task = Meal" rule on the frontend: any
+  /// `task_completed` event tied to a Nutrition task is dropped outright
+  /// — the bridged `meal_logged` is the only valid representation. Defensive
+  /// against any backend leak or stale cached response.
+  bool _isNutritionTaskCompleted(DayprintEvent event) {
+    if (event.type != 'task_completed') return false;
+    final taskType = event.data['task_type'] as String?;
+    final sourceType = (event.data['source_type'] as String?) ?? '';
+    return taskType == 'Nutrition' ||
+        taskType == 'nutrition' ||
+        sourceType.startsWith('nutrition_task');
+  }
+
   List<_TimelineEntry> _flattenDayprints(List<Dayprint> dayprints) {
+    // Two-stage filter:
+    //   1. Drop every `task_completed` event for a Nutrition task — it has
+    //      no valid representation on this surface; only the bridged
+    //      meal_logged event should render.
+    //   2. Dedupe remaining events by canonical source_key so a legacy
+    //      double-bridge write or an unmigrated mixed-format event
+    //      collapses to a single visible row.
     final result = <_TimelineEntry>[];
+    final seen = <String>{};
     for (final day in dayprints) {
       for (final event in day.events.reversed) {
+        if (_isNutritionTaskCompleted(event)) continue;
+        final key = event.canonicalSourceKey(day.userId);
+        if (key != null) {
+          if (!seen.add(key)) continue;
+        }
         result.add(_TimelineEntry(date: day.date, event: event));
       }
     }
