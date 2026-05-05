@@ -25,7 +25,11 @@ from ..models.task import (
 logger = logging.getLogger(__name__)
 
 
-async def _bridge_nutrition_task_to_meal(task_id: str) -> None:
+async def _bridge_nutrition_task_to_meal(
+    task_id: str,
+    *,
+    emit_dayprint: bool = False,
+) -> None:
     """Fire-and-forget: when a Nutrition task is completed, mirror it as a Meal record.
 
     PRD Phase-1 backward compatibility (§9): Nutrition Task continues to work as
@@ -37,7 +41,10 @@ async def _bridge_nutrition_task_to_meal(task_id: str) -> None:
         task = await db.tasks.find_one({"task_id": task_id})
         if not task or task.get("task_type") != TaskType.NUTRITION.value:
             return
-        await meal_service.create_meal_from_nutrition_task(task)
+        await meal_service.create_meal_from_nutrition_task(
+            task,
+            emit_dayprint=emit_dayprint,
+        )
     except Exception as exc:
         logger.warning("Nutrition→Meal bridge failed for task %s: %s", task_id, exc)
 
@@ -214,9 +221,18 @@ async def complete_task(
     - Records completion timestamp
     """
     result = await task_service.complete_task(task_id, user_id)
-    asyncio.create_task(log_task_completed(user_id, result.task_name, result.task_type))
+    asyncio.create_task(
+        log_task_completed(
+            user_id,
+            result.task_name,
+            result.task_type,
+            source_task_id=task_id,
+        )
+    )
     if result.task_type == TaskType.NUTRITION:
-        asyncio.create_task(_bridge_nutrition_task_to_meal(task_id))
+        asyncio.create_task(
+            _bridge_nutrition_task_to_meal(task_id, emit_dayprint=True)
+        )
     return result
 
 

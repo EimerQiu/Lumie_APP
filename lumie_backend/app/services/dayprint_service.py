@@ -35,18 +35,35 @@ async def _upsert_dayprint(db, user_id: str, date: str) -> None:
         })
 
 
-async def log_task_completed(user_id: str, task_name: str, task_type: str) -> None:
+async def log_task_completed(
+    user_id: str,
+    task_name: str,
+    task_type: str,
+    *,
+    source_task_id: Optional[str] = None,
+) -> None:
     """Append a task_completed event to today's dayprint."""
     try:
         db = get_database()
         date = _today_utc_str()
         await _upsert_dayprint(db, user_id, date)
 
+        data = {"task_name": task_name, "task_type": task_type}
+        if source_task_id:
+            data["source_task_id"] = source_task_id
+            doc = await db.dayprints.find_one({"user_id": user_id, "date": date})
+            for existing in (doc or {}).get("events", []):
+                if (
+                    existing.get("type") == "task_completed"
+                    and existing.get("data", {}).get("source_task_id") == source_task_id
+                ):
+                    return
+
         event = {
             "event_id": str(uuid.uuid4()),
             "type": "task_completed",
             "timestamp": format_utc_datetime(datetime.now(timezone.utc)),
-            "data": {"task_name": task_name, "task_type": task_type},
+            "data": data,
         }
         await db.dayprints.update_one(
             {"user_id": user_id, "date": date},

@@ -30,6 +30,7 @@ from zoneinfo import ZoneInfo
 
 import httpx
 from fastapi import HTTPException, status, UploadFile
+from pymongo.errors import DuplicateKeyError
 from starlette.datastructures import Headers
 
 from ..core.database import get_database
@@ -1380,7 +1381,70 @@ class MealService:
 
     # ============ Bridge: Nutrition Task → Meal ============
 
-    async def create_meal_from_nutrition_task(self, task: dict) -> Optional[str]:
+    @staticmethod
+    def _nutrition_task_source_filter(task: dict) -> dict:
+        return {
+            "source_type": "nutrition_task",
+            "source_task_id": task.get("task_id"),
+            "user_id": task.get("user_id"),
+        }
+
+    async def _find_existing_nutrition_task_meal(self, db, task: dict) -> Optional[dict]:
+        task_id = task.get("task_id")
+        source_filter = self._nutrition_task_source_filter(task)
+        existing = await db.meals.find_one({
+            "$or": [
+                source_filter,
+                {"linked_task_id": task_id},
+            ]
+        })
+        if existing and existing.get("source_type") != "nutrition_task":
+            try:
+                await db.meals.update_one(
+                    {"meal_id": existing["meal_id"]},
+                    {"$set": {
+                        **source_filter,
+                        "linked_task_id": task_id,
+                    }},
+                )
+                existing.update(source_filter)
+                existing["linked_task_id"] = task_id
+            except DuplicateKeyError:
+                existing = await db.meals.find_one(source_filter)
+        return existing
+
+    async def _log_bridged_meal_once(self, db, meal: dict) -> None:
+        meal_id = meal.get("meal_id")
+        if not meal_id:
+            return
+
+        result = await db.meals.update_one(
+            {"meal_id": meal_id, "bridge_dayprint_logged": {"$ne": True}},
+            {"$set": {
+                "bridge_dayprint_logged": True,
+                "bridge_dayprint_logged_at": datetime.utcnow(),
+            }},
+        )
+        if getattr(result, "modified_count", 0) != 1:
+            return
+
+        images = meal.get("images") or []
+        first_image_url = images[0].get("url") if images else None
+        await log_meal_logged(
+            user_id=meal["user_id"],
+            meal_id=meal_id,
+            food_preview=self._food_preview(meal.get("food_items") or []),
+            image_url=first_image_url,
+            visibility=meal.get("visibility") or MealVisibility.PRIVATE.value,
+            team_id=meal.get("team_id"),
+        )
+
+    async def create_meal_from_nutrition_task(
+        self,
+        task: dict,
+        *,
+        emit_dayprint: bool = False,
+    ) -> Optional[str]:
         """Upsert a Meal record from a Nutrition task.
 
         Called from every Med-Reminder lifecycle event (create / update / note
@@ -1389,7 +1453,8 @@ class MealService:
         the same meal twice.
 
         Sync rules:
-          • Look up an existing meal by `linked_task_id`.
+          • Look up an existing meal by stable source fields, with
+            `linked_task_id` as a legacy fallback.
           • If the user has manually edited that meal in the Meals feature
             (`user_edited == True`), DO NOT overwrite — return the existing id.
           • Otherwise upsert: rebuild food_items / macro_ratio from the latest
@@ -1405,11 +1470,20 @@ class MealService:
             return None
 
         db = get_database()
-        existing = await db.meals.find_one({"linked_task_id": task.get("task_id")})
+        source_filter = self._nutrition_task_source_filter(task)
+        existing = await self._find_existing_nutrition_task_meal(db, task)
 
         # Respect manual user edits — once the user touches the meal in the
         # Meals feature, the bridge stops overwriting it.
         if existing and existing.get("user_edited"):
+            if emit_dayprint:
+                try:
+                    await self._log_bridged_meal_once(db, existing)
+                except Exception as exc:
+                    logger.warning(
+                        "Dayprint log_meal_logged failed for bridged meal %s: %s",
+                        existing.get("meal_id"), exc,
+                    )
             return existing["meal_id"]
 
         attachments = [
@@ -1520,77 +1594,89 @@ class MealService:
             meal_type_value = self._derive_meal_type_from_local_dt(anchor_dt).value
         meal_time_value = format_utc_datetime(anchor_dt if not anchor_dt.tzinfo else anchor_dt.astimezone(timezone.utc).replace(tzinfo=None))
 
-        if existing:
-            await db.meals.update_one(
-                {"meal_id": existing["meal_id"]},
-                {"$set": {
-                    "images": images,
-                    "food_items": structured["food_items"],
-                    "macro_ratio": structured["macro_ratio"],
-                    "note": note or None,
-                    "visibility": visibility,
-                    "team_id": team_id,
-                    "meal_name": meal_name,
-                    "nutrition_level": nutrition_level_value,
-                    "advisor_insight": advisor_insight_value,
-                    "processing_level": processing_level_value,
-                    "added_sugar": added_sugar_value,
-                    "bridge_note_hash": note_hash,
-                    "updated_at": now,
-                }},
-            )
-            logger.info(
-                "Bridge-updated nutrition task %s → meal %s",
-                task.get("task_id"), existing["meal_id"],
-            )
-            return existing["meal_id"]
-
-        meal_id = str(uuid.uuid4())
-        doc = {
-            "meal_id": meal_id,
-            "user_id": task["user_id"],
+        update_fields = {
+            **source_filter,
+            "linked_task_id": task.get("task_id"),
             "images": images,
             "food_items": structured["food_items"],
             "macro_ratio": structured["macro_ratio"],
             "note": note or None,
             "visibility": visibility,
             "team_id": team_id,
-            "linked_task_id": task.get("task_id"),
-            "user_edited": False,
-            "bridge_note_hash": note_hash,
             "meal_name": meal_name,
-            "meal_type": meal_type_value,
-            "meal_time": meal_time_value,
             "nutrition_level": nutrition_level_value,
             "advisor_insight": advisor_insight_value,
             "processing_level": processing_level_value,
             "added_sugar": added_sugar_value,
-            "created_at": now,
+            "bridge_note_hash": note_hash,
             "updated_at": now,
         }
-        await db.meals.insert_one(doc)
-        logger.info(
-            "Bridge-created nutrition task %s → meal %s",
-            task.get("task_id"), meal_id,
-        )
-        # Mark the bridged meal in the user's dayprint, but only on first create —
-        # subsequent task edits shouldn't spam the dayprint log with new entries.
+
+        if existing:
+            await db.meals.update_one(
+                {"meal_id": existing["meal_id"]},
+                {"$set": update_fields},
+            )
+            updated_meal = await db.meals.find_one({"meal_id": existing["meal_id"]})
+            logger.info(
+                "Bridge-updated nutrition task %s → meal %s",
+                task.get("task_id"), existing["meal_id"],
+            )
+            if emit_dayprint and updated_meal:
+                try:
+                    await self._log_bridged_meal_once(db, updated_meal)
+                except Exception as exc:
+                    logger.warning(
+                        "Dayprint log_meal_logged failed for bridged meal %s: %s",
+                        existing["meal_id"], exc,
+                    )
+            return existing["meal_id"]
+
+        meal_id = str(uuid.uuid4())
+        insert_fields = {
+            "meal_id": meal_id,
+            "user_edited": False,
+            "meal_type": meal_type_value,
+            "meal_time": meal_time_value,
+            "bridge_dayprint_logged": False,
+            "created_at": now,
+        }
         try:
-            first_image_url = images[0]["url"] if images else None
-            await log_meal_logged(
-                user_id=task["user_id"],
-                meal_id=meal_id,
-                food_preview=self._food_preview(structured["food_items"]),
-                image_url=first_image_url,
-                visibility=visibility,
-                team_id=team_id,
+            result = await db.meals.update_one(
+                source_filter,
+                {
+                    "$set": update_fields,
+                    "$setOnInsert": insert_fields,
+                },
+                upsert=True,
             )
-        except Exception as exc:
+        except DuplicateKeyError:
+            result = None
+
+        meal = await db.meals.find_one(source_filter)
+        if not meal:
+            meal = await self._find_existing_nutrition_task_meal(db, task)
+        if not meal:
             logger.warning(
-                "Dayprint log_meal_logged failed for bridged meal %s: %s",
-                meal_id, exc,
+                "Bridge could not resolve upserted nutrition task meal for %s",
+                task.get("task_id"),
             )
-        return meal_id
+            return None
+
+        logger.info(
+            "Bridge-%s nutrition task %s → meal %s",
+            "created" if getattr(result, "upserted_id", None) is not None else "updated",
+            task.get("task_id"), meal["meal_id"],
+        )
+        if emit_dayprint:
+            try:
+                await self._log_bridged_meal_once(db, meal)
+            except Exception as exc:
+                logger.warning(
+                    "Dayprint log_meal_logged failed for bridged meal %s: %s",
+                    meal.get("meal_id"), exc,
+                )
+        return meal["meal_id"]
 
     async def _build_history_context(self, user_id: str) -> Optional[str]:
         """Compact 14-day-history summary, injected into the structuring prompt

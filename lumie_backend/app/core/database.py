@@ -73,6 +73,15 @@ async def create_indexes():
     await db.db.tasks.create_index([("team_id", 1), ("user_id", 1)])
     await db.db.tasks.create_index("created_by")
 
+    # Meal collection indexes
+    await db.db.meals.create_index("meal_id", unique=True)
+    await db.db.meals.create_index("linked_task_id", sparse=True)
+    await db.db.meals.create_index(
+        [("source_type", 1), ("source_task_id", 1), ("user_id", 1)],
+        unique=True,
+        partialFilterExpression={"source_type": "nutrition_task"},
+    )
+
     # Task templates collection indexes
     await db.db.task_templates.create_index("id", unique=True)
     await db.db.task_templates.create_index("created_by")

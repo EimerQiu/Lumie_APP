@@ -945,12 +945,11 @@ class TaskService:
                 detail="Only the assigned user can complete this task"
             )
 
-        # Check if already completed (completed_at field exists)
+        # Idempotent retry: completing an already-completed task returns the
+        # completed task instead of failing. Downstream completion logs/bridges
+        # carry their own source-level idempotency guards.
         if task.get("completed_at"):
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="Task is already completed"
-            )
+            return self._task_doc_to_response(task)
 
         now = datetime.utcnow()
         await db.tasks.update_one(
