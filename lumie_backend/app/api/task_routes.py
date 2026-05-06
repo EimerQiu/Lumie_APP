@@ -16,6 +16,7 @@ from ..services.ai_tips_service import get_ai_tips
 from ..services.dayprint_service import log_task_completed
 from ..models.task import (
     TaskCreate, TaskUpdate, TaskResponse, TaskListResponse,
+    TaskCompleteRequest,
     TaskType,
     TemplateCreate, TemplateUpdate, TemplateResponse, TemplateListResponse,
     BatchGenerateRequest, BatchGenerateResponse,
@@ -212,6 +213,7 @@ async def update_task(
 @router.post("/{task_id}/complete", response_model=TaskResponse)
 async def complete_task(
     task_id: str,
+    data: TaskCompleteRequest = Body(default_factory=TaskCompleteRequest),
     user_id: str = Depends(get_current_user_id)
 ):
     """
@@ -220,18 +222,26 @@ async def complete_task(
     - Only the assigned user can complete
     - Records completion timestamp
     """
-    result = await task_service.complete_task(task_id, user_id)
-    asyncio.create_task(
-        log_task_completed(
-            user_id,
-            result.task_name,
-            result.task_type,
-            source_task_id=task_id,
-        )
+    result = await task_service.complete_task(
+        task_id,
+        user_id,
+        associations=data.associations,
     )
+    if not data.suppress_dayprint:
+        asyncio.create_task(
+            log_task_completed(
+                user_id,
+                result.task_name,
+                result.task_type,
+                source_task_id=task_id,
+            )
+        )
     if result.task_type == TaskType.NUTRITION:
         asyncio.create_task(
-            _bridge_nutrition_task_to_meal(task_id, emit_dayprint=True)
+            _bridge_nutrition_task_to_meal(
+                task_id,
+                emit_dayprint=not data.suppress_dayprint,
+            )
         )
     return result
 

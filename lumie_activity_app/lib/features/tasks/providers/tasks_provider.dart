@@ -180,8 +180,16 @@ class TasksProvider extends ChangeNotifier {
   }
 
   /// Complete a task
-  Future<void> completeTask(String taskId) async {
-    await _taskService.completeTask(taskId);
+  Future<void> completeTask(
+    String taskId, {
+    List<TaskAssociation>? associations,
+    bool suppressDayprint = false,
+  }) async {
+    await _taskService.completeTask(
+      taskId,
+      associations: associations,
+      suppressDayprint: suppressDayprint,
+    );
     // Remove from local list immediately for responsive UI
     _tasks.removeWhere((t) => t.taskId == taskId);
     notifyListeners();

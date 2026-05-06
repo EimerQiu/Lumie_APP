@@ -102,6 +102,7 @@ class AdminTaskService:
             rpttask_info=task.get("task_info"),
             note=task.get("note"),
             attachments=task.get("attachments", []),
+            associations=task.get("associations", []),
             completed_at=format_utc_datetime(task["completed_at"]) if task.get("completed_at") else None,
             rpttask_type=task.get("task_type", ""),
             rpttask_list=rpttask_list,

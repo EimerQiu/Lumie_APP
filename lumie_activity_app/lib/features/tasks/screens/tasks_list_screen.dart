@@ -18,6 +18,7 @@ import '../../../shared/widgets/animated_fab.dart';
 import '../providers/tasks_provider.dart';
 import '../widgets/task_card.dart';
 import '../../advisor/screens/advisor_screen.dart';
+import '../../meals/screens/meal_log_screen.dart';
 
 class TasksListScreen extends StatefulWidget {
   const TasksListScreen({super.key});
@@ -509,6 +510,33 @@ class _TaskCompleteDialogState extends State<_TaskCompleteDialog> {
     final trimmed = additions.take(available).toList();
     setState(() => _media.addAll(trimmed));
 
+    // Nutrition flow: once the user selects at least one image, switch the
+    // whole flow to Log Meal immediately (do not wait for "Complete").
+    if (widget.task.taskType == TaskType.nutrition) {
+      final nutritionImages = trimmed
+          .where((m) => !m.isVideo)
+          .map((m) => m.file)
+          .toList();
+      if (nutritionImages.isNotEmpty) {
+        final completed = await Navigator.of(context, rootNavigator: true).push<bool>(
+          MaterialPageRoute(
+            builder: (_) => MealLogScreen(
+              initialImages: nutritionImages,
+              pendingCompletionTask: widget.task,
+              initialNote: _noteController.text.trim().isEmpty
+                  ? null
+                  : _noteController.text.trim(),
+            ),
+          ),
+        );
+        if (!mounted) return;
+        if (completed == true) {
+          Navigator.of(context).pop('"${widget.task.taskName}" completed');
+        }
+        return;
+      }
+    }
+
     if (additions.length > trimmed.length && mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Only the first 99 files were kept.')),
@@ -670,6 +698,31 @@ class _TaskCompleteDialogState extends State<_TaskCompleteDialog> {
     try {
       final provider = context.read<TasksProvider>();
       final note = _noteController.text.trim();
+      final nutritionImages = _media
+          .where((m) => !m.isVideo)
+          .map((m) => m.file)
+          .toList();
+
+      if (widget.task.taskType == TaskType.nutrition &&
+          nutritionImages.isNotEmpty) {
+        final completed = await Navigator.of(context, rootNavigator: true).push<bool>(
+          MaterialPageRoute(
+            builder: (_) => MealLogScreen(
+              initialImages: nutritionImages,
+              pendingCompletionTask: widget.task,
+              initialNote: note.isEmpty ? null : note,
+            ),
+          ),
+        );
+        if (!mounted) return;
+        if (completed == true) {
+          Navigator.of(context).pop('"${widget.task.taskName}" completed');
+        } else {
+          setState(() => _isWorking = false);
+        }
+        return;
+      }
+
       if (note.isNotEmpty) {
         await provider.updateNote(widget.task.taskId, note);
       }

@@ -18,6 +18,8 @@ import 'package:provider/provider.dart';
 
 import '../../../core/theme/app_colors.dart';
 import '../../../shared/models/meal_models.dart';
+import '../../../shared/models/task_models.dart';
+import '../../tasks/providers/tasks_provider.dart';
 import '../../teams/providers/teams_provider.dart';
 import '../providers/meal_provider.dart';
 import '../utils/food_input_split.dart';
@@ -28,7 +30,16 @@ import '../widgets/nutrition_level_slider.dart';
 import '../widgets/portion_ratio_bar.dart';
 
 class MealLogScreen extends StatefulWidget {
-  const MealLogScreen({super.key});
+  final List<File> initialImages;
+  final Task? pendingCompletionTask;
+  final String? initialNote;
+
+  const MealLogScreen({
+    super.key,
+    this.initialImages = const [],
+    this.pendingCompletionTask,
+    this.initialNote,
+  });
 
   @override
   State<MealLogScreen> createState() => _MealLogScreenState();
@@ -38,7 +49,7 @@ class _MealLogScreenState extends State<MealLogScreen> {
   final ImagePicker _imagePicker = ImagePicker();
   final TextEditingController _noteController = TextEditingController();
 
-  File? _selectedImage;
+  List<File> _selectedImages = const [];
 
   // Editable working copy of the analysis result. Per spec, only foods,
   // portions, meal type/time, and meal name are user-editable on this screen
@@ -92,6 +103,7 @@ class _MealLogScreenState extends State<MealLogScreen> {
   @override
   void initState() {
     super.initState();
+    _noteController.text = widget.initialNote ?? '';
     final teams = context.read<TeamsProvider>().teams;
     if (teams.isNotEmpty) {
       _visibility = MealVisibility.team;
@@ -103,7 +115,15 @@ class _MealLogScreenState extends State<MealLogScreen> {
     // Auto-open the photo picker on entry — the screen exists ONLY to
     // capture/upload one photo and edit the analyzed result.
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) _pickPhoto();
+      if (!mounted) return;
+      if (widget.initialImages.isNotEmpty) {
+        setState(() {
+          _selectedImages = List<File>.from(widget.initialImages);
+        });
+        _analyze();
+      } else {
+        _pickPhoto();
+      }
     });
   }
 
@@ -205,7 +225,7 @@ class _MealLogScreenState extends State<MealLogScreen> {
     // non-null promotion of a captured local across a setState callback.
     final imagePath = picked.path;
     setState(() {
-      _selectedImage = File(imagePath);
+      _selectedImages = [File(imagePath)];
     });
     await _analyze();
   }
@@ -213,15 +233,14 @@ class _MealLogScreenState extends State<MealLogScreen> {
   // ─── Phase 2: analyze ───────────────────────────────────────────────
 
   Future<void> _analyze() async {
-    final image = _selectedImage;
-    if (image == null) return;
+    if (_selectedImages.isEmpty) return;
     setState(() {
       _isAnalyzing = true;
       _errorMessage = null;
     });
     try {
       final provider = context.read<MealProvider>();
-      final result = await provider.analyzeImages([image]);
+      final result = await provider.analyzeImages(_selectedImages);
       setState(() {
         _applyAnalysisResult(result);
         _originalAiFoods = List.of(result.foodItems);
@@ -496,6 +515,7 @@ class _MealLogScreenState extends State<MealLogScreen> {
             : _noteController.text.trim(),
         visibility: _visibility,
         teamId: _visibility == MealVisibility.team ? _selectedTeamId : null,
+        linkedTaskId: widget.pendingCompletionTask?.taskId,
         // Slice 7A §4: meal type + time captured directly on this screen so
         // the saved meal already has the user's chosen values from the start.
         mealType: _mealType,
@@ -506,6 +526,19 @@ class _MealLogScreenState extends State<MealLogScreen> {
         processingLevel: _processingLevel,
         addedSugar: _addedSugar,
       );
+      if (widget.pendingCompletionTask != null) {
+        await context.read<TasksProvider>().completeTask(
+          widget.pendingCompletionTask!.taskId,
+          associations: [
+            TaskAssociation(
+              targetType: 'meal',
+              targetId: created.mealId,
+              relation: 'completed_via',
+            ),
+          ],
+          suppressDayprint: true,
+        );
+      }
       // Capture user's edits to the AI prediction so the backend can bias
       // future analyses (PRD §6). Fire-and-forget — failures don't block save.
       if (_predictionWasCorrected()) {
@@ -573,7 +606,7 @@ class _MealLogScreenState extends State<MealLogScreen> {
         centerTitle: true,
       ),
       body: SafeArea(
-        child: _selectedImage == null
+        child: _selectedImages.isEmpty
             ? const _PickerLoadingState()
             : ListView(
                 padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
@@ -645,7 +678,7 @@ class _MealLogScreenState extends State<MealLogScreen> {
       borderRadius: BorderRadius.circular(20),
       child: AspectRatio(
         aspectRatio: 4 / 3,
-        child: Image.file(_selectedImage!, fit: BoxFit.cover),
+        child: Image.file(_selectedImages.first, fit: BoxFit.cover),
       ),
     );
   }

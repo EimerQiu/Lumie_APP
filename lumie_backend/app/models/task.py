@@ -27,6 +27,24 @@ class TaskStatus(str, Enum):
     EXPIRED = "expired"
 
 
+class TaskAssociationTarget(str, Enum):
+    """Generic link target for task-related behavior records."""
+    MEAL = "meal"
+    ACTIVE = "active"
+    OTHER = "other"
+
+
+class TaskAssociation(BaseModel):
+    """A behavior record associated with this task completion."""
+    target_type: TaskAssociationTarget
+    target_id: str = Field(..., min_length=1, max_length=200)
+    relation: Optional[str] = Field(
+        None,
+        max_length=100,
+        description="Optional semantic relation label (e.g. completed_via).",
+    )
+
+
 # ============ Task Models ============
 
 class TaskCreate(BaseModel):
@@ -75,6 +93,7 @@ class TaskResponse(BaseModel):
     task_info: Optional[str] = None
     note: Optional[str] = None
     attachments: List[dict] = Field(default_factory=list)
+    associations: List[TaskAssociation] = Field(default_factory=list)
     completed_at: Optional[str] = None
     extension_count: int = 0
     created_at: str
@@ -85,6 +104,15 @@ class TaskListResponse(BaseModel):
     """Response for GET /tasks"""
     tasks: List[TaskResponse]
     total: int
+
+
+class TaskCompleteRequest(BaseModel):
+    """Optional payload for completion-time associations."""
+    associations: List[TaskAssociation] = Field(default_factory=list)
+    suppress_dayprint: bool = Field(
+        default=False,
+        description="When true, completion will not emit dayprint events.",
+    )
 
 
 # ============ Template Models ============
@@ -219,6 +247,7 @@ class AdminTaskData(BaseModel):
     rpttask_info: Optional[str] = None
     note: Optional[str] = None
     attachments: List[dict] = Field(default_factory=list)
+    associations: List[TaskAssociation] = Field(default_factory=list)
     completed_at: Optional[str] = None
     rpttask_type: str
     rpttask_list: List[RptTaskItem] = []

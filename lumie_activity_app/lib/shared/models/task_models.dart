@@ -64,6 +64,7 @@ class Task {
   final String? taskInfo;
   final String? note;
   final List<TaskAttachment> attachments;
+  final List<TaskAssociation> associations;
   final DateTime? completedAt;
   final int extensionCount;
   final DateTime createdAt;
@@ -82,6 +83,7 @@ class Task {
     this.taskInfo,
     this.note,
     this.attachments = const [],
+    this.associations = const [],
     this.completedAt,
     this.extensionCount = 0,
     required this.createdAt,
@@ -104,6 +106,11 @@ class Task {
       attachments:
           (json['attachments'] as List?)
               ?.map((a) => TaskAttachment.fromJson(a as Map<String, dynamic>))
+              .toList() ??
+          const [],
+      associations:
+          (json['associations'] as List?)
+              ?.map((a) => TaskAssociation.fromJson(a as Map<String, dynamic>))
               .toList() ??
           const [],
       completedAt: json['completed_at'] != null
@@ -129,6 +136,7 @@ class Task {
       'task_info': taskInfo,
       'note': note,
       'attachments': attachments.map((a) => a.toJson()).toList(),
+      'associations': associations.map((a) => a.toJson()).toList(),
       'completed_at': completedAt?.toIso8601String(),
       'extension_count': extensionCount,
       'created_at': createdAt.toIso8601String(),
@@ -234,6 +242,32 @@ class Task {
     ).toLocal();
     return !now.isAfter(close);
   }
+}
+
+class TaskAssociation {
+  final String targetType; // meal | active | other
+  final String targetId;
+  final String? relation;
+
+  const TaskAssociation({
+    required this.targetType,
+    required this.targetId,
+    this.relation,
+  });
+
+  factory TaskAssociation.fromJson(Map<String, dynamic> json) {
+    return TaskAssociation(
+      targetType: (json['target_type'] as String?) ?? 'other',
+      targetId: json['target_id'] as String,
+      relation: json['relation'] as String?,
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+        'target_type': targetType,
+        'target_id': targetId,
+        if (relation != null) 'relation': relation,
+      };
 }
 
 class TaskListResponse {
@@ -399,6 +433,7 @@ class AdminTaskData {
   final String? rpttaskInfo;
   final String? note;
   final List<TaskAttachment> attachments;
+  final List<TaskAssociation> associations;
   final String? completedAt;
   final String rpttaskType;
   final List<RptTaskItem> rpttaskList;
@@ -419,6 +454,7 @@ class AdminTaskData {
     this.rpttaskInfo,
     this.note,
     this.attachments = const [],
+    this.associations = const [],
     this.completedAt,
     required this.rpttaskType,
     this.rpttaskList = const [],
@@ -443,6 +479,11 @@ class AdminTaskData {
       attachments:
           (json['attachments'] as List?)
               ?.map((a) => TaskAttachment.fromJson(a as Map<String, dynamic>))
+              .toList() ??
+          const [],
+      associations:
+          (json['associations'] as List?)
+              ?.map((a) => TaskAssociation.fromJson(a as Map<String, dynamic>))
               .toList() ??
           const [],
       completedAt: json['completed_at'] as String?,
@@ -490,6 +531,15 @@ class AdminTaskData {
       closeDatetime.replaceAll(' ', 'T') + 'Z',
     ).toLocal();
     return now.isAfter(close);
+  }
+
+  String? get linkedMealId {
+    for (final association in associations) {
+      if (association.targetType == 'meal' && association.targetId.isNotEmpty) {
+        return association.targetId;
+      }
+    }
+    return null;
   }
 
   /// Formatted time window for display (UTC→local conversion)

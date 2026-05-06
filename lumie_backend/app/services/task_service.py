@@ -23,6 +23,7 @@ from ..core.datetime_utils import format_utc_datetime, format_utc_datetime_with_
 from ..core.subscription_helpers import get_task_date_range, raise_task_date_range_error
 from ..models.task import (
     TaskType,
+    TaskAssociation,
     TaskCreate, TaskUpdate, TaskResponse, TaskListResponse,
     TemplateCreate, TemplateUpdate, TemplateResponse, TemplateListResponse,
     TimeWindow, BatchGenerateRequest, BatchGenerateResponse,
@@ -192,6 +193,7 @@ class TaskService:
             task_info=doc.get("task_info"),
             note=doc.get("note"),
             attachments=doc.get("attachments", []),
+            associations=doc.get("associations", []),
             completed_at=format_utc_datetime(doc["completed_at"]) if doc.get("completed_at") else None,
             extension_count=doc.get("extension_count", 0),
             created_at=format_utc_datetime(doc["created_at"]),
@@ -915,7 +917,12 @@ class TaskService:
         updated = await db.tasks.find_one({"task_id": task_id})
         return self._task_doc_to_response(updated)
 
-    async def complete_task(self, task_id: str, user_id: str) -> TaskResponse:
+    async def complete_task(
+        self,
+        task_id: str,
+        user_id: str,
+        associations: Optional[List[TaskAssociation]] = None,
+    ) -> TaskResponse:
         """
         Mark a task as completed
 
@@ -952,16 +959,18 @@ class TaskService:
             return self._task_doc_to_response(task)
 
         now = datetime.utcnow()
-        await db.tasks.update_one(
-            {"task_id": task_id},
-            {"$set": {
-                "completed_at": now,
-                "updated_at": now,
-            }}
-        )
+        updates = {
+            "completed_at": now,
+            "updated_at": now,
+        }
+        if associations:
+            updates["associations"] = [a.model_dump() for a in associations]
+        await db.tasks.update_one({"task_id": task_id}, {"$set": updates})
 
         task["completed_at"] = now
         task["updated_at"] = now
+        if associations:
+            task["associations"] = [a.model_dump() for a in associations]
 
         # Min-interval postpone logic: only for template-generated tasks
         await self._apply_min_interval_postpone(db, task, now)

@@ -390,6 +390,9 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                 resolveAttachmentUrls: _thumbnailUrlCandidates,
                 onAttachmentTap: (attachment) =>
                     _openAttachmentPreview(attachment),
+                onOpenLinkedMeal: task.linkedMealId == null
+                    ? null
+                    : () => _openLinkedMeal(task.linkedMealId!),
                 onAddAttachment: (task.isCompleted && isTaskOwner)
                     ? () => _pickAndUploadAttachments(provider, task)
                     : null,
@@ -431,6 +434,9 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                 resolveAttachmentUrls: _thumbnailUrlCandidates,
                 onAttachmentTap: (attachment) =>
                     _openAttachmentPreview(attachment),
+                onOpenLinkedMeal: task.linkedMealId == null
+                    ? null
+                    : () => _openLinkedMeal(task.linkedMealId!),
                 onAddAttachment: (task.isCompleted && isTaskOwner)
                     ? () => _pickAndUploadAttachments(provider, task)
                     : null,
@@ -980,6 +986,11 @@ reason: $reason
     );
   }
 
+  Future<void> _openLinkedMeal(String mealId) async {
+    if (!mounted) return;
+    await Navigator.of(context).pushNamed('/meals/detail', arguments: mealId);
+  }
+
   /// Check if current user can view a task (access control filter)
   /// Can view if: team admin, task assigned to user, or personal task owner
   bool _canViewTask(BuildContext context, AdminTaskData task) {
@@ -1092,6 +1103,7 @@ class _AdminTaskCard extends StatelessWidget {
   final VoidCallback onTap;
   final List<String> Function(TaskAttachment) resolveAttachmentUrls;
   final ValueChanged<TaskAttachment> onAttachmentTap;
+  final VoidCallback? onOpenLinkedMeal;
   final VoidCallback? onAddAttachment;
 
   const _AdminTaskCard({
@@ -1104,6 +1116,7 @@ class _AdminTaskCard extends StatelessWidget {
     required this.onTap,
     required this.resolveAttachmentUrls,
     required this.onAttachmentTap,
+    this.onOpenLinkedMeal,
     this.onAddAttachment,
   });
 
@@ -1377,6 +1390,43 @@ class _AdminTaskCard extends StatelessWidget {
             Text(
               task.rpttaskType,
               style: const TextStyle(fontSize: 11, color: AppColors.textLight),
+            ),
+          ],
+
+          if (onOpenLinkedMeal != null) ...[
+            const SizedBox(height: 8),
+            InkWell(
+              onTap: onOpenLinkedMeal,
+              borderRadius: BorderRadius.circular(12),
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                decoration: BoxDecoration(
+                  color: AppColors.primaryLemon.withValues(alpha: 0.25),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(
+                    color: AppColors.primaryLemonDark.withValues(alpha: 0.45),
+                  ),
+                ),
+                child: const Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      Icons.restaurant_menu,
+                      size: 14,
+                      color: AppColors.textOnYellow,
+                    ),
+                    SizedBox(width: 6),
+                    Text(
+                      'Linked Meal',
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        color: AppColors.textOnYellow,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
             ),
           ],
 

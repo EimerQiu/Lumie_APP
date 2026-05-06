@@ -170,12 +170,20 @@ class TaskService {
   }
 
   /// Complete a task
-  Future<Task> completeTask(String taskId) async {
+  Future<Task> completeTask(
+    String taskId, {
+    List<TaskAssociation>? associations,
+    bool suppressDayprint = false,
+  }) async {
     if (_token == null) throw Exception('Not authenticated');
 
     final response = await http.post(
       Uri.parse('${ApiConstants.baseUrl}/tasks/$taskId/complete'),
       headers: _headers,
+      body: json.encode({
+        'associations': associations?.map((a) => a.toJson()).toList() ?? [],
+        'suppress_dayprint': suppressDayprint,
+      }),
     );
 
     if (response.statusCode == 200) {
