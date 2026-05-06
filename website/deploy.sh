@@ -5,10 +5,10 @@
 set -e  # Exit on error
 
 # Configuration
-SERVER_IP="54.193.153.37"
+SERVER_IP="54.177.85.124"
 SERVER_USER="ubuntu"
 SSH_KEY="$HOME/.ssh/Lumie_Key.pem"
-REMOTE_DIR="/var/www/yumo.org"
+REMOTE_DIR="/home/ubuntu/website"
 LOCAL_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 echo "========================================="
@@ -45,6 +45,9 @@ scp -i "$SSH_KEY" *.js "$SERVER_USER@$SERVER_IP:/tmp/" 2>/dev/null || true
 echo "  → Uploading assets..."
 scp -i "$SSH_KEY" -r assets "$SERVER_USER@$SERVER_IP:/tmp/" 2>/dev/null || true
 
+echo "  → Uploading docs..."
+scp -i "$SSH_KEY" -r docs "$SERVER_USER@$SERVER_IP:/tmp/" 2>/dev/null || true
+
 echo "✅ Upload complete"
 echo ""
 
@@ -53,14 +56,15 @@ ssh -i "$SSH_KEY" "$SERVER_USER@$SERVER_IP" << 'ENDSSH'
 set -e
 
 # Move files to web directory
-sudo mv /tmp/*.html /var/www/yumo.org/ 2>/dev/null || true
-sudo mv /tmp/*.css /var/www/yumo.org/ 2>/dev/null || true
-sudo mv /tmp/*.js /var/www/yumo.org/ 2>/dev/null || true
-sudo mv /tmp/assets /var/www/yumo.org/ 2>/dev/null || true
+mv /tmp/*.html /home/ubuntu/website/ 2>/dev/null || true
+mv /tmp/*.css /home/ubuntu/website/ 2>/dev/null || true
+mv /tmp/*.js /home/ubuntu/website/ 2>/dev/null || true
+mv /tmp/assets /home/ubuntu/website/ 2>/dev/null || true
+mv /tmp/docs /home/ubuntu/website/ 2>/dev/null || true
 
 # Set proper permissions
-sudo chown -R www-data:www-data /var/www/yumo.org
-sudo chmod -R 755 /var/www/yumo.org
+chown -R ubuntu:ubuntu /home/ubuntu/website
+chmod -R 755 /home/ubuntu/website
 
 echo "✅ Files moved successfully"
 ENDSSH
