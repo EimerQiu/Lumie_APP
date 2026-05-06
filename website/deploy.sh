@@ -60,7 +60,9 @@ mv /tmp/*.html /home/ubuntu/website/ 2>/dev/null || true
 mv /tmp/*.css /home/ubuntu/website/ 2>/dev/null || true
 mv /tmp/*.js /home/ubuntu/website/ 2>/dev/null || true
 mv /tmp/assets /home/ubuntu/website/ 2>/dev/null || true
-mv /tmp/docs /home/ubuntu/website/ 2>/dev/null || true
+# Copy docs to merge with existing (don't replace entire directory)
+cp -r /tmp/docs/* /home/ubuntu/website/docs/ 2>/dev/null || true
+rm -rf /tmp/docs 2>/dev/null || true
 
 # Set proper permissions
 chown -R ubuntu:ubuntu /home/ubuntu/website
