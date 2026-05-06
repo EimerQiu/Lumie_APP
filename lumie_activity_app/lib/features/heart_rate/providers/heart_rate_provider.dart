@@ -137,7 +137,7 @@ class HeartRateProvider extends ChangeNotifier {
 
     if (_measureState == HrMeasureState.measuring) {
       // Re-subscribe to the new characteristic so the stream stays live.
-      // Also resends 0x28/0x09/0x19 start commands in case the ring lost state.
+      // startHrStreaming() re-enables 0x19 exercise push mode as needed.
       dlog(
         'HR_PROV',
         'reconnect resub: cancelling old _hrSub (was=${_hrSub == null ? "null" : "alive"})',
@@ -173,6 +173,11 @@ class HeartRateProvider extends ChangeNotifier {
   int? get liveHr => isWarmingUp ? null : _currentBpm;
   int? get finalHr => _currentBpm;
   Duration get elapsed => _elapsed;
+  Duration get timelineElapsed {
+    if (_sessionReadings.length < 2) return _elapsed;
+    final span = _sessionReadings.last.time.difference(_sessionReadings.first.time);
+    return span.isNegative ? Duration.zero : span;
+  }
   List<HrSessionPoint> get sessionReadings =>
       List.unmodifiable(_sessionReadings);
 

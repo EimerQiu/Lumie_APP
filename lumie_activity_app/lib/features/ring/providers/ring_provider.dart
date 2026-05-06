@@ -38,6 +38,8 @@ class RingProvider extends ChangeNotifier with WidgetsBindingObserver {
   String? _errorMessage;
   bool _isBluetoothOn = false;
   bool _heartRateMeasurementInProgress = false;
+  Future<void>? _reconnectInFlight;
+  bool _autoReconnectLoopRunning = false;
   StreamSubscription<BluetoothAdapterState>? _btStateSubscription;
   Timer? _commandPollTimer;
 
@@ -111,7 +113,7 @@ class RingProvider extends ChangeNotifier with WidgetsBindingObserver {
       _state = RingProviderState.disconnected;
       notifyListeners();
       // Auto-reconnect with retry after a short delay
-      _autoReconnectWithRetry();
+      unawaited(_autoReconnectWithRetry());
     }
   }
 
@@ -119,7 +121,15 @@ class RingProvider extends ChangeNotifier with WidgetsBindingObserver {
   Future<void> tryReconnect() => _tryReconnect();
 
   Future<void> _tryReconnect() async {
-    await _tryReconnectInternal(runBackgroundSyncAfterConnect: true);
+    if (_reconnectInFlight != null) {
+      dlog('RING', 'reconnect skipped: in-flight reconnect already running');
+      return _reconnectInFlight;
+    }
+    final future = _tryReconnectInternal(runBackgroundSyncAfterConnect: true);
+    _reconnectInFlight = future.whenComplete(() {
+      _reconnectInFlight = null;
+    });
+    return _reconnectInFlight;
   }
 
   Future<void> _tryReconnectInternal({
@@ -214,80 +224,37 @@ class RingProvider extends ChangeNotifier with WidgetsBindingObserver {
   /// First attempt fires after a 5 s stabilisation delay so the BLE stack
   /// has time to notice the disconnect before we try again.
   Future<void> _autoReconnectWithRetry() async {
+    if (_autoReconnectLoopRunning) {
+      dlog('RING', 'auto-reconnect loop skipped: already running');
+      return;
+    }
+    _autoReconnectLoopRunning = true;
     const maxAttempts = 10;
     const firstDelay = Duration(seconds: 5);
     const retryInterval = Duration(seconds: 30);
 
-    for (var attempt = 1; attempt <= maxAttempts; attempt++) {
-      final bleDeviceName = await _ringService.loadLastBleDeviceName();
-      final bleDeviceId =
-          await _ringService.loadLastBleDeviceId() ?? _ringInfo?.ringDeviceId;
-      if (bleDeviceName == null && bleDeviceId == null) return;
-      if (_bleService.isConnected) return; // Already reconnected
+    try {
+      for (var attempt = 1; attempt <= maxAttempts; attempt++) {
+        final bleDeviceName = await _ringService.loadLastBleDeviceName();
+        final bleDeviceId =
+            await _ringService.loadLastBleDeviceId() ?? _ringInfo?.ringDeviceId;
+        if (bleDeviceName == null && bleDeviceId == null) return;
+        if (_bleService.isConnected) return; // Already reconnected
 
-      final delay = attempt == 1 ? firstDelay : retryInterval;
-      debugPrint(
-        '[Ring] Auto-reconnect attempt $attempt/$maxAttempts in ${delay.inSeconds}s',
-      );
-      await Future.delayed(delay);
-
-      // Re-check after delay
-      if (_bleService.isConnected || _ringInfo?.ringDeviceId == null) return;
-
-      try {
-        try {
-          if (bleDeviceName != null && bleDeviceName.isNotEmpty) {
-            await _bleService.scanAndReconnectByName(bleDeviceName);
-          } else if (bleDeviceId != null) {
-            await _bleService.reconnect(bleDeviceId);
-          } else {
-            throw Exception('No cached ring identifier available');
-          }
-        } catch (directError) {
-          debugPrint(
-            '[Ring] Auto-reconnect preferred path failed ($directError) — trying scan',
-          );
-          if (bleDeviceId != null) {
-            await _bleService.scanAndReconnect(bleDeviceId);
-          } else if (bleDeviceName != null && bleDeviceName.isNotEmpty) {
-            await _bleService.scanAndReconnectByName(bleDeviceName);
-          } else {
-            throw Exception('No cached ring identifier available');
-          }
-        }
-        final battery = await _bleService.fetchBatteryLevel();
-        final connectedBleId = _bleService.connectedBleDeviceId;
-        if (connectedBleId != null) {
-          await _ringService.saveLastBleDeviceId(connectedBleId);
-        }
-        final connectedBleName = _bleService.connectedBleDeviceName;
-        if (connectedBleName != null && connectedBleName.isNotEmpty) {
-          await _ringService.saveLastBleDeviceName(connectedBleName);
-        }
-
-        // Initialize ring: set time, user info, and measurement intervals
-        final ringUser = await _resolveRingUserInfoFromProfile();
-        await _bleService.initializeRing(
-          gender: ringUser.gender,
-          age: ringUser.age,
-          heightCm: ringUser.heightCm,
-          weightKg: ringUser.weightKg,
+        final delay = attempt == 1 ? firstDelay : retryInterval;
+        debugPrint(
+          '[Ring] Auto-reconnect attempt $attempt/$maxAttempts in ${delay.inSeconds}s',
         );
+        await Future.delayed(delay);
 
-        _ringInfo = _ringInfo?.copyWith(
-          connectionStatus: RingConnectionStatus.connected,
-          batteryLevel: battery ?? _ringInfo?.batteryLevel,
-        );
-        if (_ringInfo != null) {
-          await _ringService.saveLocalRingInfo(_ringInfo!);
+        // Re-check after delay
+        if (_bleService.isConnected || _ringInfo?.ringDeviceId == null) return;
+
+        await _tryReconnect();
+        if (_bleService.isConnected) {
+          debugPrint('[Ring] Auto-reconnect succeeded on attempt $attempt');
+          return;
         }
-        _state = RingProviderState.paired;
-        debugPrint('[Ring] Auto-reconnect succeeded on attempt $attempt');
-        notifyListeners();
-        _syncSleepInBackground();
-        return;
-      } catch (e) {
-        debugPrint('[Ring] Auto-reconnect attempt $attempt failed: $e');
         if (attempt == maxAttempts) {
           debugPrint('[Ring] All reconnect attempts exhausted after 5 min');
           _ringInfo = _ringInfo?.copyWith(
@@ -297,6 +264,8 @@ class RingProvider extends ChangeNotifier with WidgetsBindingObserver {
           notifyListeners();
         }
       }
+    } finally {
+      _autoReconnectLoopRunning = false;
     }
   }
 

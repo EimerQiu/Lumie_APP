@@ -96,7 +96,6 @@ class _HeartRateScreenState extends State<HeartRateScreen>
 
     if (_disconnectConfirmTimer?.isActive ?? false) return;
 
-    ring.tryReconnect();
     _disconnectConfirmTimer = Timer(_disconnectConfirmDelay, () {
       if (!mounted) return;
       final stillDisconnected =
@@ -345,7 +344,7 @@ class _HeartRateScreenState extends State<HeartRateScreen>
     required bool isRingConnected,
     required bool showDisconnectedInPlace,
   }) {
-    final elapsed = hr.elapsed;
+    final elapsed = hr.timelineElapsed;
     final mm = elapsed.inMinutes.remainder(60).toString().padLeft(2, '0');
     final ss = elapsed.inSeconds.remainder(60).toString().padLeft(2, '0');
 
@@ -482,7 +481,7 @@ class _HeartRateScreenState extends State<HeartRateScreen>
     HeartRateProvider hr, {
     required bool isRingConnected,
   }) {
-    final elapsed = hr.elapsed;
+    final elapsed = hr.timelineElapsed;
     final mm = elapsed.inMinutes.remainder(60).toString().padLeft(2, '0');
     final ss = elapsed.inSeconds.remainder(60).toString().padLeft(2, '0');
 
@@ -666,7 +665,7 @@ class _HeartRateScreenState extends State<HeartRateScreen>
               const SizedBox(height: 4),
               Center(
                 child: Text(
-                  _formatElapsed(hr.elapsed),
+                  _formatElapsed(hr.timelineElapsed),
                   style: TextStyle(fontSize: 13, color: AppColors.textSecondary),
                 ),
               ),

@@ -327,7 +327,7 @@ class RingMeasurementInterval {
   });
 }
 
-/// Result of a live HR measurement (command 0x28 + 0x09 for N seconds).
+/// Result of a live HR measurement from 0x18 push packets during 0x19 mode.
 class RingHrMeasurementResult {
   final int avgBpm;
   final int minBpm;

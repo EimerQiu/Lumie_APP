@@ -96,14 +96,23 @@ class HrSessionChart extends StatelessWidget {
               showTitles: true,
               reservedSize: 22,
               interval: _xInterval(totalSecs),
-              getTitlesWidget: (value, _) {
+              getTitlesWidget: (value, meta) {
+                final interval = _xInterval(totalSecs);
+                // Prevent crowded right-edge labels like "6:00" and "6:06".
+                if (value < totalSecs &&
+                    (totalSecs - value) < (interval * 0.6)) {
+                  return const SizedBox.shrink();
+                }
                 final m = (value ~/ 60).toString();
                 final s = (value.toInt() % 60).toString().padLeft(2, '0');
-                return Text(
-                  '$m:$s',
-                  style: TextStyle(
-                    fontSize: 9,
-                    color: AppColors.textSecondary,
+                return SideTitleWidget(
+                  axisSide: meta.axisSide,
+                  child: Text(
+                    '$m:$s',
+                    style: TextStyle(
+                      fontSize: 9,
+                      color: AppColors.textSecondary,
+                    ),
                   ),
                 );
               },

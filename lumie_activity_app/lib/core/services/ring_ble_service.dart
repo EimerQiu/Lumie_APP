@@ -1028,9 +1028,8 @@ class RingBleService {
   }
 
   /// Start continuous HR streaming.
-  /// Sends 0x28 (HR mode, max duration) + 0x09 (realtime) + 0x19 (exercise
-  /// mode). The 0x19 exercise mode causes the ring to emit 0x18 packets with
-  /// fresh optical HR at Byte[1] every ~1 s. 0x09 packets are used as fallback.
+  /// Experimental mode: only send 0x19 (exercise mode) and consume 0x18 push
+  /// packets as the live HR source.
   /// Call [stopHrStreaming] to tear everything down.
   Stream<int> startHrStreaming() {
     if (_notifyChar == null) {
@@ -1038,10 +1037,10 @@ class RingBleService {
       dlog('HR_BLE', 'startHrStreaming SKIPPED — notifyChar=null');
       return const Stream.empty();
     }
-    debugPrint('[Ring BLE] startHrStreaming: starting 0x28 + 0x09 + 0x19');
+    debugPrint('[Ring BLE] startHrStreaming: starting 0x19 only (experimental)');
     dlog(
       'HR_BLE',
-      'startHrStreaming begin '
+      'startHrStreaming begin (0x19-only) '
           '(prev_controller=${_hrStreamController == null ? "null" : "alive"}, '
           'prev_sub=${_hrStreamSub == null ? "null" : "alive"})',
     );
@@ -1096,32 +1095,6 @@ class RingBleService {
       cancelOnError: false,
     );
 
-    // 0x28: activate optical sensor, max 90 min = 5400 s
-    final measurePayload = List<int>.filled(15, 0);
-    measurePayload[0] = 0x28;
-    measurePayload[1] = 0x02; // HR mode
-    measurePayload[2] = 0x01; // start
-    measurePayload[5] = 0x18; // 5400 & 0xFF
-    measurePayload[6] = 0x15; // 5400 >> 8
-    _writeCommand(measurePayload).then((_) {
-      dlog('HR_BLE', '→ 0x28 start (HR mode, 5400s) ok');
-    }).catchError((e) {
-      debugPrint('[Ring BLE] startHrStreaming 0x28 error: $e');
-      dlog('HR_BLE', '→ 0x28 start error: $e');
-    });
-
-    // 0x09: realtime streaming (fallback HR source)
-    final streamPayload = List<int>.filled(15, 0);
-    streamPayload[0] = 0x09;
-    streamPayload[1] = 0x01;
-    streamPayload[2] = 0x01; // enable temperature
-    _writeCommand(streamPayload).then((_) {
-      dlog('HR_BLE', '→ 0x09 start (realtime) ok');
-    }).catchError((e) {
-      debugPrint('[Ring BLE] startHrStreaming 0x09 error: $e');
-      dlog('HR_BLE', '→ 0x09 start error: $e');
-    });
-
     // 0x19: exercise mode — triggers live 0x18 push packets
     final exercisePayload = List<int>.filled(15, 0);
     exercisePayload[0] = 0x19;
@@ -1154,29 +1127,6 @@ class RingBleService {
     } catch (e) {
       debugPrint('[Ring BLE] stopHrStreaming 0x19 stop error: $e');
       dlog('HR_BLE', '← 0x19 stop error: $e');
-    }
-
-    try {
-      final measurePayload = List<int>.filled(15, 0);
-      measurePayload[0] = 0x28;
-      measurePayload[1] = 0x02;
-      measurePayload[2] = 0x00; // stop
-      await _writeCommand(measurePayload);
-      dlog('HR_BLE', '← 0x28 stop ok');
-    } catch (e) {
-      debugPrint('[Ring BLE] stopHrStreaming 0x28 stop error: $e');
-      dlog('HR_BLE', '← 0x28 stop error: $e');
-    }
-
-    try {
-      final streamPayload = List<int>.filled(15, 0);
-      streamPayload[0] = 0x09;
-      streamPayload[1] = 0x00; // stop
-      await _writeCommand(streamPayload);
-      dlog('HR_BLE', '← 0x09 stop ok');
-    } catch (e) {
-      debugPrint('[Ring BLE] stopHrStreaming 0x09 stop error: $e');
-      dlog('HR_BLE', '← 0x09 stop error: $e');
     }
 
     await _hrStreamSub?.cancel();
@@ -1490,12 +1440,10 @@ class RingBleService {
     }
   }
 
-  /// Command 0x28 + 0x09 + 0x19 — Live HR measurement for [durationSeconds] seconds.
+  /// Live HR measurement for [durationSeconds] seconds using 0x19 exercise mode.
   ///
-  /// Starts HR mode (0x28), realtime streaming (0x09), and exercise mode (0x19).
-  /// Exercise mode causes the ring to emit 0x18 packets with live optical HR at
-  /// bytes[1]. 0x09 streaming alone returns the ring's stale cached background HR.
-  /// Returns avg/min/max + raw readings.
+  /// Reads live optical HR from 0x18 push packets (byte[1]). Returns
+  /// avg/min/max + raw readings.
   Future<RingHrMeasurementResult?> measureHeartRate({
     int durationSeconds = 10,
   }) async {
@@ -1515,10 +1463,7 @@ class RingBleService {
 
     sub = _notifyChar!.onValueReceived.listen((data) {
       if (data.isEmpty) return;
-      if (data[0] == 0x09 ||
-          data[0] == 0x18 ||
-          data[0] == 0x28 ||
-          data[0] == 0xA8) {
+      if (data[0] == 0x18 || data[0] == 0xA6) {
         print(
           '[Ring BLE] measureHeartRate RX: cmd=0x${data[0].toRadixString(16)} len=${data.length} data=${_hexDump(data)}',
         );
@@ -1528,12 +1473,6 @@ class RingBleService {
       if (data[0] == 0x18) {
         // 0x18 exercise packet: live optical HR at bytes[1]
         if (data.length >= 2 && data[1] != 0xFF) hr = data[1];
-      } else if (data[0] == 0x09) {
-        if (data.length == 16) {
-          hr = data[13];
-        } else if (data.length >= 23) {
-          hr = data[22];
-        }
       }
 
       if (hr > 0 && hr < 250 && hr != lastHr) {
@@ -1546,26 +1485,6 @@ class RingBleService {
     });
 
     try {
-      // Start HR measurement. Protocol requires a minimum duration of 30 s.
-      final measurePayload = List<int>.filled(15, 0);
-      measurePayload[0] = 0x28;
-      measurePayload[1] = 0x02; // HR mode
-      measurePayload[2] = 0x01; // start
-      measurePayload[5] = protocolDurationSeconds & 0xFF;
-      measurePayload[6] = (protocolDurationSeconds >> 8) & 0xFF;
-      print('[Ring BLE] measureHeartRate: sending 0x28 start');
-      await _writeCommand(measurePayload);
-
-      await Future.delayed(const Duration(seconds: 1));
-
-      // Enable realtime streaming
-      final streamPayload = List<int>.filled(15, 0);
-      streamPayload[0] = 0x09;
-      streamPayload[1] = 0x01; // start
-      streamPayload[2] = 0x01; // enable temperature
-      print('[Ring BLE] measureHeartRate: sending 0x09 start');
-      await _writeCommand(streamPayload);
-
       // Start exercise mode (0x19, mode=0x09) — triggers 0x18 packets with live HR
       final exercisePayload = List<int>.filled(15, 0);
       exercisePayload[0] = 0x19;
@@ -1586,20 +1505,6 @@ class RingBleService {
       stopExercise[2] = 0x09;
       print('[Ring BLE] measureHeartRate: sending 0x19 exercise stop');
       await _writeCommand(stopExercise);
-
-      // Stop HR measurement
-      final stopMeasure = List<int>.filled(15, 0);
-      stopMeasure[0] = 0x28;
-      stopMeasure[1] = 0x02;
-      stopMeasure[2] = 0x00; // stop
-      print('[Ring BLE] measureHeartRate: sending 0x28 stop');
-      await _writeCommand(stopMeasure);
-
-      final stopStream = List<int>.filled(15, 0);
-      stopStream[0] = 0x09;
-      stopStream[1] = 0x00; // stop
-      print('[Ring BLE] measureHeartRate: sending 0x09 stop');
-      await _writeCommand(stopStream);
 
       if (readings.isEmpty) {
         debugPrint('[Ring BLE] measureHeartRate: no readings received');
