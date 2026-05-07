@@ -41,8 +41,10 @@ from ..models.meal import (
     MacroRatio,
     MealVisibility,
     MealType,
+    MealStructure,
     NutritionLevel,
     FoodItem,
+    Ingredient,
     MealAnalyzeResponse,
     MealCreate,
     MealUpdate,
@@ -387,6 +389,9 @@ class MealService:
             images=images,
             food_items=[FoodItem(**fi) for fi in parsed["food_items"]],
             macro_ratio=MacroRatio(**parsed["macro_ratio"]),
+            structure=MealStructure(
+                parsed.get("structure") or MealStructure.MULTI_ITEM.value
+            ),
             meal_name=parsed.get("meal_name")
                 or self._derive_meal_name_from_items(parsed["food_items"]),
             nutrition_level=(
@@ -428,22 +433,7 @@ class MealService:
             )
 
         items_dump = [fi.model_dump() for fi in food_items]
-        has_portion_signal = any(
-            int(fi.get("portion_weight", 1) or 1) != 1
-            for fi in items_dump
-        )
-        if has_portion_signal:
-            synthetic_text = ", ".join(
-                f"{str(fi.get('name', '')).strip()} (portion {int(fi.get('portion_weight', 1) or 1)})"
-                for fi in items_dump
-                if fi.get("name")
-            )
-        else:
-            synthetic_text = ", ".join(
-                str(fi.get("name", "")).strip()
-                for fi in items_dump
-                if fi.get("name")
-            )
+        synthetic_text = self._build_restructure_text(items_dump)
         if not synthetic_text:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -476,6 +466,7 @@ class MealService:
                     "fat": "moderate",
                     "fiber": "low",
                 },
+                "structure": parsed.get("structure"),
                 "meal_name": parsed.get("meal_name"),
                 "nutrition_level": parsed.get("nutrition_level"),
                 "advisor_insight": parsed.get("advisor_insight"),
@@ -483,19 +474,99 @@ class MealService:
                 "added_sugar": parsed.get("added_sugar"),
             }
 
-        # Always preserve the user's typed names + portion weights — the LLM
-        # may have re-cased or re-ordered, but the user's deliberate edits win.
+        # The user's structure choice (which they expressed implicitly by
+        # supplying ingredients on a single food_item, or by listing siblings)
+        # is the authoritative one for the UI. The LLM's structure is only
+        # used when the user-supplied list doesn't itself disambiguate.
+        user_structure = self._infer_structure_from_items(items_dump)
+        if user_structure is not None:
+            parsed["structure"] = user_structure
+        elif not parsed.get("structure"):
+            parsed["structure"] = MealStructure.MULTI_ITEM.value
+
+        # Always preserve the user's typed names + portion weights + the
+        # ingredients they edited. The LLM may have re-cased or re-ordered,
+        # but the user's deliberate edits win on identity & portion data.
         out_items = []
         for i, fi in enumerate(items_dump):
             llm_item = parsed["food_items"][i] if i < len(parsed["food_items"]) else {}
-            out_items.append({
+            out: dict = {
                 "name": fi.get("name", ""),
                 "portion_weight": int(fi.get("portion_weight", 1) or 1),
                 "macro_ratio": llm_item.get("macro_ratio") if isinstance(llm_item, dict) else None,
-            })
+            }
+            ingredients = fi.get("ingredients")
+            if isinstance(ingredients, list) and ingredients:
+                out["ingredients"] = [
+                    {
+                        "name": str(ing.get("name", "")).strip()[:200],
+                        "portion_weight": int(ing.get("portion_weight", 1) or 1),
+                    }
+                    for ing in ingredients
+                    if isinstance(ing, dict) and (ing.get("name") or "").strip()
+                ] or None
+                if not out["ingredients"]:
+                    out.pop("ingredients", None)
+            out_items.append(out)
         parsed["food_items"] = out_items
 
+        # Strip ingredients from food_items when the resolved structure is
+        # multi_item — keeps the API contract clean for the UI.
+        if parsed.get("structure") == MealStructure.MULTI_ITEM.value:
+            for it in parsed["food_items"]:
+                it.pop("ingredients", None)
+
         return parsed
+
+    @staticmethod
+    def _build_restructure_text(items_dump: List[dict]) -> str:
+        """Render a user-edited food list (with portions and any ingredients)
+        as a synthetic note for the structuring LLM. Mirrors the format the
+        prompt expects for both multi-item and single-item-with-ingredients
+        layouts so the LLM honours the user's structural intent."""
+        parts: List[str] = []
+        for fi in items_dump:
+            name = str(fi.get("name", "")).strip()
+            if not name:
+                continue
+            weight = int(fi.get("portion_weight", 1) or 1)
+            ingredients = fi.get("ingredients")
+            if isinstance(ingredients, list) and ingredients:
+                ing_text = "; ".join(
+                    f"{str(ing.get('name', '')).strip()} (portion {int(ing.get('portion_weight', 1) or 1)})"
+                    for ing in ingredients
+                    if isinstance(ing, dict) and (ing.get("name") or "").strip()
+                )
+                if ing_text:
+                    parts.append(f"{name} with [{ing_text}]")
+                    continue
+            if weight != 1:
+                parts.append(f"{name} (portion {weight})")
+            else:
+                parts.append(name)
+        return ", ".join(parts)
+
+    @staticmethod
+    def _infer_structure_from_items(items_dump: List[dict]) -> Optional[str]:
+        """Decide the meal structure from a user-edited food list.
+
+        - Exactly one food_item with non-empty ingredients → single_item_with_ingredients.
+        - More than one food_item → multi_item (ingredients on those items
+          are ignored — the UI never shows them in multi-item mode anyway).
+        - Otherwise (one item, no ingredients) → caller decides; return None
+          so the LLM's structure call (or the multi_item default) wins.
+        """
+        usable = [fi for fi in items_dump if (fi.get("name") or "").strip()]
+        if len(usable) == 1:
+            ingredients = usable[0].get("ingredients")
+            if isinstance(ingredients, list) and any(
+                isinstance(ing, dict) and (ing.get("name") or "").strip()
+                for ing in ingredients
+            ):
+                return MealStructure.SINGLE_ITEM_WITH_INGREDIENTS.value
+        if len(usable) > 1:
+            return MealStructure.MULTI_ITEM.value
+        return None
 
     def _parse_analysis_json(self, raw_text: str) -> dict:
         """Tolerant JSON extraction. Returns
@@ -522,6 +593,42 @@ class MealService:
                 "fiber": obj.get("fiber") if obj.get("fiber") in valid_levels else "low",
             }
 
+        def _coerce_weight(raw: Any) -> int:
+            if isinstance(raw, bool):
+                return 1
+            if isinstance(raw, int):
+                w = raw
+            elif isinstance(raw, float):
+                w = int(round(raw))
+            elif isinstance(raw, str):
+                try:
+                    w = int(float(raw))
+                except Exception:
+                    w = 1
+            else:
+                w = 1
+            if w < 1:
+                w = 1
+            if w > 20:
+                w = 20
+            return w
+
+        def _coerce_ingredients(raw: Any) -> Optional[List[dict]]:
+            if not isinstance(raw, list):
+                return None
+            out: List[dict] = []
+            for it in raw:
+                if not isinstance(it, dict):
+                    continue
+                ing_name = str(it.get("name", "")).strip()
+                if not ing_name:
+                    continue
+                out.append({
+                    "name": ing_name[:200],
+                    "portion_weight": _coerce_weight(it.get("portion_weight")),
+                })
+            return out or None
+
         items_in = data.get("food_items") if isinstance(data, dict) else None
         items_in = items_in if isinstance(items_in, list) else []
         food_items: List[dict] = []
@@ -531,29 +638,35 @@ class MealService:
             name = str(it.get("name", "")).strip()
             if not name:
                 continue
-            raw_weight = it.get("portion_weight")
-            if isinstance(raw_weight, bool):
-                weight = 1
-            elif isinstance(raw_weight, int):
-                weight = raw_weight
-            elif isinstance(raw_weight, float):
-                weight = int(round(raw_weight))
-            elif isinstance(raw_weight, str):
-                try:
-                    weight = int(float(raw_weight))
-                except Exception:
-                    weight = 1
-            else:
-                weight = 1
-            if weight < 1:
-                weight = 1
-            if weight > 20:
-                weight = 20
-            food_items.append({
+            entry: dict = {
                 "name": name[:200],
                 "macro_ratio": coerce_ratio(it.get("macro_ratio")),
-                "portion_weight": weight,
-            })
+                "portion_weight": _coerce_weight(it.get("portion_weight")),
+            }
+            ingredients = _coerce_ingredients(it.get("ingredients"))
+            if ingredients:
+                entry["ingredients"] = ingredients
+            food_items.append(entry)
+
+        valid_structures = {s.value for s in MealStructure}
+        structure_raw = data.get("structure") if isinstance(data, dict) else None
+        # Default to multi_item if missing or unrecognised. Also coerce to
+        # multi_item when the LLM declared single_item_with_ingredients but
+        # produced more than one food_item — that's an inconsistent answer
+        # and the safer fallback for the UI is item-level portions.
+        if structure_raw not in valid_structures:
+            structure_value = MealStructure.MULTI_ITEM.value
+        else:
+            structure_value = structure_raw
+        if (
+            structure_value == MealStructure.SINGLE_ITEM_WITH_INGREDIENTS.value
+            and len(food_items) != 1
+        ):
+            structure_value = MealStructure.MULTI_ITEM.value
+        # Strip any stray ingredients on multi_item items so the UI stays clean.
+        if structure_value == MealStructure.MULTI_ITEM.value:
+            for entry in food_items:
+                entry.pop("ingredients", None)
 
         meal_ratio = coerce_ratio(data.get("macro_ratio") if isinstance(data, dict) else None)
 
@@ -576,6 +689,7 @@ class MealService:
         return {
             "food_items": food_items,
             "macro_ratio": meal_ratio,
+            "structure": structure_value,
             "meal_name": meal_name,
             "nutrition_level": nutrition_level,
             "advisor_insight": advisor_insight,
@@ -617,6 +731,12 @@ class MealService:
         if sugar_raw not in valid_macro_levels:
             sugar_raw = MacroLevel.LOW.value
 
+        valid_structures = {s.value for s in MealStructure}
+        structure_raw = doc.get("structure")
+        if structure_raw not in valid_structures:
+            inferred = self._infer_structure_from_items(food_items_raw)
+            structure_raw = inferred or MealStructure.MULTI_ITEM.value
+
         return MealResponse(
             meal_id=doc["meal_id"],
             user_id=doc["user_id"],
@@ -624,6 +744,7 @@ class MealService:
             images=doc.get("images", []),
             food_items=[FoodItem(**fi) for fi in food_items_raw],
             macro_ratio=MacroRatio(**macro_ratio_raw),
+            structure=MealStructure(structure_raw),
             note=doc.get("note"),
             visibility=MealVisibility(doc.get("visibility", "private")),
             team_id=doc.get("team_id"),
@@ -700,13 +821,13 @@ class MealService:
 
     @staticmethod
     def _food_lists_equal_with_portions(a: list, b: list) -> bool:
-        """Positional comparison including portion_weight.
+        """Positional comparison including portion_weight and ingredients.
 
-        Returns True only when name AND portion_weight are identical
-        position-by-position. Any rename, deletion, addition, reorder, OR
-        portion-bar adjustment makes the lists unequal — which triggers
-        re-analysis on any single user-visible change to the food list
-        (including pure portion edits with no rename).
+        Returns True only when name AND portion_weight AND ingredient list
+        (name + portion_weight, position-by-position) are identical. Any
+        rename, deletion, addition, reorder, portion-bar adjustment, OR
+        ingredient-level edit makes the lists unequal — which triggers
+        re-analysis on any user-visible change.
         """
         a = a or []
         b = b or []
@@ -721,6 +842,21 @@ class MealService:
             bi_w = bi.get("portion_weight", 1) if isinstance(bi, dict) else 1
             if int(ai_w or 1) != int(bi_w or 1):
                 return False
+            ai_ings = ai.get("ingredients") if isinstance(ai, dict) else None
+            bi_ings = bi.get("ingredients") if isinstance(bi, dict) else None
+            ai_ings = ai_ings if isinstance(ai_ings, list) else []
+            bi_ings = bi_ings if isinstance(bi_ings, list) else []
+            if len(ai_ings) != len(bi_ings):
+                return False
+            for ax, bx in zip(ai_ings, bi_ings):
+                ax_name = (ax.get("name") or "").strip() if isinstance(ax, dict) else ""
+                bx_name = (bx.get("name") or "").strip() if isinstance(bx, dict) else ""
+                if ax_name != bx_name:
+                    return False
+                ax_w = ax.get("portion_weight", 1) if isinstance(ax, dict) else 1
+                bx_w = bx.get("portion_weight", 1) if isinstance(bx, dict) else 1
+                if int(ax_w or 1) != int(bx_w or 1):
+                    return False
         return True
 
     @staticmethod
@@ -869,19 +1005,16 @@ class MealService:
         return (profile or {}).get("timezone") or "UTC"
 
     @staticmethod
-    def _parse_task_local_dt(task: dict) -> Optional[datetime]:
-        """Extract a usable datetime anchor from a Nutrition task. Tasks store
-        open_datetime as 'YYYY-MM-DD HH:MM' UTC strings; completed_at as a real
-        datetime. Returns the most informative one available."""
+    def _parse_task_completed_at(task: dict) -> Optional[datetime]:
+        """Return the moment the user actually completed/logged the task, if
+        recorded. Used as the meal-time anchor for the Nutrition-task → Meal
+        bridge — we explicitly do NOT fall back to the task's scheduled
+        `open_datetime` because the meal time must reflect when the user
+        ate/logged, never when the task was *supposed* to start.
+        """
         completed = task.get("completed_at")
         if isinstance(completed, datetime):
             return completed
-        open_dt = task.get("open_datetime")
-        if isinstance(open_dt, str):
-            try:
-                return datetime.strptime(open_dt, "%Y-%m-%d %H:%M")
-            except ValueError:
-                pass
         return None
 
     @staticmethod
@@ -927,6 +1060,20 @@ class MealService:
         # relies entirely on these defaults.
         food_items_dump = [fi.model_dump() for fi in data.food_items]
         macro_ratio_dump = data.macro_ratio.model_dump()
+
+        # Resolve structure: caller-provided > inferred from the food list >
+        # multi_item default. Strip ingredients on multi_item so a stray
+        # array on the wire never leaks into the persisted document.
+        if data.structure is not None:
+            structure_value = data.structure.value
+        else:
+            structure_value = (
+                self._infer_structure_from_items(food_items_dump)
+                or MealStructure.MULTI_ITEM.value
+            )
+        if structure_value == MealStructure.MULTI_ITEM.value:
+            for fi in food_items_dump:
+                fi.pop("ingredients", None)
 
         meal_name = (data.meal_name or "").strip() or self._derive_meal_name_from_items(food_items_dump)
 
@@ -983,6 +1130,7 @@ class MealService:
             "images": images,
             "food_items": food_items_dump,
             "macro_ratio": macro_ratio_dump,
+            "structure": structure_value,
             "note": data.note,
             "visibility": data.visibility.value,
             "team_id": team_id,
@@ -1067,10 +1215,33 @@ class MealService:
         )
 
         updates: dict = {}
+        new_food_dump: Optional[List[dict]] = None
         if data.food_items is not None:
-            updates["food_items"] = [fi.model_dump() for fi in data.food_items]
+            new_food_dump = [fi.model_dump() for fi in data.food_items]
+            updates["food_items"] = new_food_dump
         if data.macro_ratio is not None:
             updates["macro_ratio"] = data.macro_ratio.model_dump()
+
+        # Resolve the effective structure for this update so the persisted
+        # document and the re-analysis prompt agree on whether ingredients
+        # are in play. Caller-provided > inferred from the (possibly new)
+        # food list > existing > multi_item default.
+        if data.structure is not None:
+            structure_effective = data.structure.value
+        else:
+            inferred_source = new_food_dump if new_food_dump is not None else doc.get("food_items", [])
+            structure_effective = (
+                self._infer_structure_from_items(inferred_source)
+                or doc.get("structure")
+                or MealStructure.MULTI_ITEM.value
+            )
+        if data.structure is not None or new_food_dump is not None:
+            updates["structure"] = structure_effective
+        if structure_effective == MealStructure.MULTI_ITEM.value and new_food_dump is not None:
+            for fi in new_food_dump:
+                fi.pop("ingredients", None)
+            updates["food_items"] = new_food_dump
+
         if data.note is not None:
             updates["note"] = data.note
         if data.meal_name is not None:
@@ -1097,22 +1268,7 @@ class MealService:
         # the caller didn't explicitly override.
         if is_reanalyze:
             new_foods_dump = updates["food_items"]
-            has_portion_signal = any(
-                int(fi.get("portion_weight", 1) or 1) != 1
-                for fi in new_foods_dump
-            )
-            if has_portion_signal:
-                synthetic_text = ", ".join(
-                    f"{str(fi.get('name', '')).strip()} (portion {int(fi.get('portion_weight', 1) or 1)})"
-                    for fi in new_foods_dump
-                    if fi.get("name")
-                )
-            else:
-                synthetic_text = ", ".join(
-                    str(fi.get("name", "")).strip()
-                    for fi in new_foods_dump
-                    if fi.get("name")
-                )
+            synthetic_text = self._build_restructure_text(new_foods_dump)
             if synthetic_text:
                 logger.info(
                     "Update re-analysing meal_id=%s with new foods text=%r",
@@ -1868,10 +2024,12 @@ class MealService:
             added_sugar=added_sugar_value,
         ).value
 
-        # meal_type / meal_time anchor on the user's local time, derived from
-        # the task's open_datetime (when they planned to eat) if available,
-        # else now.
-        anchor_dt = self._parse_task_local_dt(task) or now
+        # meal_type / meal_time anchor on when the user ACTUALLY logged/
+        # completed the task — not when it was scheduled. Falling back to
+        # now() means a bridge call at upload/note/completion time stamps
+        # the meal with that real-world moment, which is what the user sees
+        # in the feed.
+        anchor_dt = self._parse_task_completed_at(task) or now
         try:
             tz_name = await self._resolve_user_timezone(task["user_id"])
             local_dt = anchor_dt if anchor_dt.tzinfo else anchor_dt.replace(tzinfo=timezone.utc)
@@ -2132,8 +2290,25 @@ class MealService:
             "present, estimate the portions from the text (e.g. \"a "
             "generous serving of rice\" → 3, \"a small side of cabbage\" → "
             "1). Single-item meals always get portion_weight 1.\n"
+            "\nMEAL STRUCTURE CLASSIFICATION — every meal is one of:\n"
+            "  • multi_item: separate dishes/foods on the plate. "
+            "Examples: 'whole-wheat bread + almond butter + milk', "
+            "'fried egg + egg whites', 'salmon + rice + cabbage'. Output "
+            "each as its own entry in food_items. Do NOT populate "
+            "`ingredients` for these items.\n"
+            "  • single_item_with_ingredients: ONE composite dish made "
+            "of components. Examples: 'whole-wheat bread with peanut "
+            "butter and banana' (a sandwich), 'yogurt bowl with granola "
+            "and berries', 'salad with toppings', 'oatmeal with fruit "
+            "and nuts'. Output exactly ONE entry in food_items and put "
+            "every component into its `ingredients` array, each with a "
+            "`portion_weight` reflecting how much of the dish that "
+            "component takes up.\n"
+            "If the structure is genuinely ambiguous, default to "
+            "multi_item. Set the top-level `structure` field accordingly.\n"
             "\nPORTION-AWARE MACRO WEIGHTING — the meal-level `macro_ratio` "
-            "and `nutrition_level` MUST be weighted by each item's "
+            "and `nutrition_level` MUST be weighted by each item's (and, "
+            "for single_item_with_ingredients, each ingredient's) "
             "portion_weight. A small whole-food side does NOT pull a "
             "processed dominant item up; a dominant whole-food item DOES "
             "pull the meal up even if there's a small processed side. The "
@@ -2144,14 +2319,19 @@ class MealService:
             "generous — never judgmental, never use forbidden words."
             f"{history_block}"
             "\nOutput strict JSON only matching this schema: "
-            '{"food_items":[{"name":"string","portion_weight":1,"macro_ratio":{"protein":"low|moderate|high",'
+            '{"structure":"multi_item|single_item_with_ingredients",'
+            '"food_items":[{"name":"string","portion_weight":1,'
+            '"ingredients":[{"name":"string","portion_weight":1}],'
+            '"macro_ratio":{"protein":"low|moderate|high",'
             '"carbs":"low|moderate|high","fat":"low|moderate|high","fiber":"low|moderate|high"}}],'
             '"macro_ratio":{"protein":"low|moderate|high","carbs":"low|moderate|high",'
             '"fat":"low|moderate|high","fiber":"low|moderate|high"},'
             '"meal_name":"string","nutrition_level":"Limited|Fair|Good|Nutritious",'
             '"processing_level":"low|moderate|high","added_sugar":"low|moderate|high",'
             '"advisor_insight":"string"}. '
-            "Never include numbers, calories, or kcal in the output."
+            "Omit `ingredients` (or set it to null) when structure is "
+            "multi_item. Never include numbers, calories, or kcal in the "
+            "output."
             f"{correction_hint}"
         )
 

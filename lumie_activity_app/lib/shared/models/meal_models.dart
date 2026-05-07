@@ -61,6 +61,36 @@ enum MealVisibility {
       value == 'team' ? MealVisibility.team : MealVisibility.private;
 }
 
+/// Layout for the portion editor — mirrors backend `MealStructure`.
+///
+/// `multiItem` (default): each food in `food_items` gets its own portion bar
+/// at the item level. `singleItemWithIngredients`: there is exactly one entry
+/// in `food_items`, and its `ingredients` list is what the portion bar
+/// operates on.
+enum MealStructure {
+  multiItem,
+  singleItemWithIngredients;
+
+  String get apiValue {
+    switch (this) {
+      case MealStructure.multiItem:
+        return 'multi_item';
+      case MealStructure.singleItemWithIngredients:
+        return 'single_item_with_ingredients';
+    }
+  }
+
+  static MealStructure fromString(String? value) {
+    switch (value) {
+      case 'single_item_with_ingredients':
+        return MealStructure.singleItemWithIngredients;
+      case 'multi_item':
+      default:
+        return MealStructure.multiItem;
+    }
+  }
+}
+
 enum MealType {
   breakfast,
   lunch,
@@ -209,6 +239,46 @@ class MacroRatio {
   }
 }
 
+/// A component of a single composite food item (e.g. granola in a yogurt
+/// bowl). Only meaningful when the parent meal's [MealStructure] is
+/// `singleItemWithIngredients`. Carries only a name and a relative portion
+/// weight — no grams or calories ever cross the wire.
+class Ingredient {
+  final String name;
+  final int portionWeight;
+
+  const Ingredient({required this.name, this.portionWeight = 1});
+
+  factory Ingredient.fromJson(Map<String, dynamic> json) {
+    final weight = json['portion_weight'];
+    int parsedWeight = 1;
+    if (weight is int) {
+      parsedWeight = weight;
+    } else if (weight is double) {
+      parsedWeight = weight.round();
+    } else if (weight is String) {
+      parsedWeight = int.tryParse(weight) ?? 1;
+    }
+    if (parsedWeight < 1) parsedWeight = 1;
+    return Ingredient(
+      name: (json['name'] as String?) ?? '',
+      portionWeight: parsedWeight,
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+        'name': name,
+        'portion_weight': portionWeight,
+      };
+
+  Ingredient copyWith({String? name, int? portionWeight}) {
+    return Ingredient(
+      name: name ?? this.name,
+      portionWeight: portionWeight ?? this.portionWeight,
+    );
+  }
+}
+
 class FoodItem {
   final String name;
   final MacroRatio? macroRatio;
@@ -218,10 +288,15 @@ class FoodItem {
   /// No grams, no calories — pure relative ratio.
   final int portionWeight;
 
+  /// Components of a composite dish. Populated only when the parent meal's
+  /// [MealStructure] is `singleItemWithIngredients`. Null/empty otherwise.
+  final List<Ingredient>? ingredients;
+
   const FoodItem({
     required this.name,
     this.macroRatio,
     this.portionWeight = 1,
+    this.ingredients,
   });
 
   factory FoodItem.fromJson(Map<String, dynamic> json) {
@@ -236,12 +311,23 @@ class FoodItem {
       parsedWeight = int.tryParse(weight) ?? 1;
     }
     if (parsedWeight < 1) parsedWeight = 1;
+    final rawIngredients = json['ingredients'];
+    List<Ingredient>? ingredients;
+    if (rawIngredients is List) {
+      final parsed = rawIngredients
+          .whereType<Map<String, dynamic>>()
+          .map(Ingredient.fromJson)
+          .where((i) => i.name.trim().isNotEmpty)
+          .toList();
+      if (parsed.isNotEmpty) ingredients = parsed;
+    }
     return FoodItem(
       name: (json['name'] as String?) ?? '',
       macroRatio: ratio is Map<String, dynamic>
           ? MacroRatio.fromJson(ratio)
           : null,
       portionWeight: parsedWeight,
+      ingredients: ingredients,
     );
   }
 
@@ -249,13 +335,23 @@ class FoodItem {
         'name': name,
         if (macroRatio != null) 'macro_ratio': macroRatio!.toJson(),
         'portion_weight': portionWeight,
+        if (ingredients != null && ingredients!.isNotEmpty)
+          'ingredients': ingredients!.map((i) => i.toJson()).toList(),
       };
 
-  FoodItem copyWith({String? name, MacroRatio? macroRatio, int? portionWeight}) {
+  FoodItem copyWith({
+    String? name,
+    MacroRatio? macroRatio,
+    int? portionWeight,
+    List<Ingredient>? ingredients,
+    bool clearIngredients = false,
+  }) {
     return FoodItem(
       name: name ?? this.name,
       macroRatio: macroRatio ?? this.macroRatio,
       portionWeight: portionWeight ?? this.portionWeight,
+      ingredients:
+          clearIngredients ? null : (ingredients ?? this.ingredients),
     );
   }
 }
@@ -307,6 +403,7 @@ class MealAnalyzeResult {
   final List<MealAttachment> images;
   final List<FoodItem> foodItems;
   final MacroRatio macroRatio;
+  final MealStructure structure;
   final String? mealName;
   final NutritionLevel? nutritionLevel;
   final String? advisorInsight;
@@ -318,6 +415,7 @@ class MealAnalyzeResult {
     required this.images,
     required this.foodItems,
     required this.macroRatio,
+    this.structure = MealStructure.multiItem,
     this.mealName,
     this.nutritionLevel,
     this.advisorInsight,
@@ -339,6 +437,7 @@ class MealAnalyzeResult {
       macroRatio: MacroRatio.fromJson(
         (json['macro_ratio'] as Map<String, dynamic>?) ?? const {},
       ),
+      structure: MealStructure.fromString(json['structure'] as String?),
       mealName: json['meal_name'] as String?,
       nutritionLevel: json['nutrition_level'] is String
           ? NutritionLevel.fromString(json['nutrition_level'] as String?)
@@ -361,6 +460,7 @@ class Meal {
   final List<MealAttachment> images;
   final List<FoodItem> foodItems;
   final MacroRatio macroRatio;
+  final MealStructure structure;
   final String? note;
   final MealVisibility visibility;
   final String? teamId;
@@ -382,6 +482,7 @@ class Meal {
     this.images = const [],
     required this.foodItems,
     required this.macroRatio,
+    this.structure = MealStructure.multiItem,
     this.note,
     required this.visibility,
     this.teamId,
@@ -422,6 +523,7 @@ class Meal {
       macroRatio: MacroRatio.fromJson(
         (json['macro_ratio'] as Map<String, dynamic>?) ?? const {},
       ),
+      structure: MealStructure.fromString(json['structure'] as String?),
       note: json['note'] as String?,
       visibility: MealVisibility.fromString(json['visibility'] as String?),
       teamId: json['team_id'] as String?,

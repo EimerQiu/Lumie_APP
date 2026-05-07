@@ -41,11 +41,35 @@ class NutritionLevel(str, Enum):
     NUTRITIOUS = "Nutritious"
 
 
+class MealStructure(str, Enum):
+    """How the meal is laid out for portion editing.
+
+    - MULTI_ITEM: separate dishes/foods (e.g. bread + egg + milk). Portion
+      slider is shown at the item level, one drag bar per food.
+    - SINGLE_ITEM_WITH_INGREDIENTS: one composite dish made of components
+      (e.g. yogurt bowl with yogurt + berries + granola). Portion slider is
+      shown at the ingredient level — the parent food acts as a container.
+
+    Defaults to MULTI_ITEM when ambiguous so the UI always renders a usable
+    portion control even if classification is unsure.
+    """
+    MULTI_ITEM = "multi_item"
+    SINGLE_ITEM_WITH_INGREDIENTS = "single_item_with_ingredients"
+
+
 class MacroRatio(BaseModel):
     protein: MacroLevel
     carbs: MacroLevel
     fat: MacroLevel
     fiber: MacroLevel
+
+
+class Ingredient(BaseModel):
+    """A component of a single composite food item (e.g. granola in a yogurt
+    bowl). Carries only a name and a relative portion weight — no grams or
+    calories ever leave the backend."""
+    name: str = Field(..., min_length=1, max_length=200)
+    portion_weight: int = Field(1, ge=1, le=20)
 
 
 class FoodItem(BaseModel):
@@ -56,6 +80,11 @@ class FoodItem(BaseModel):
     # calories. Used to weight each item's macro contribution in the
     # structuring prompt and to render the user-draggable portion bar.
     portion_weight: int = Field(1, ge=1, le=20)
+    # Populated only when the parent meal's `structure` is
+    # SINGLE_ITEM_WITH_INGREDIENTS. Each ingredient gets its own portion
+    # weight; the user-draggable bar then operates on these instead of on
+    # sibling food_items.
+    ingredients: Optional[List[Ingredient]] = None
 
 
 # ============ Analyze (multipart upload result) ============
@@ -67,6 +96,10 @@ class MealAnalyzeResponse(BaseModel):
     images: List[dict] = Field(default_factory=list)
     food_items: List[FoodItem]
     macro_ratio: MacroRatio
+    structure: MealStructure = Field(
+        MealStructure.MULTI_ITEM,
+        description="Layout for the portion editor (item-level vs ingredient-level)",
+    )
     meal_name: Optional[str] = Field(None, description="3–6 word descriptive name generated from food items")
     nutrition_level: Optional[NutritionLevel] = Field(None, description="Overall meal-quality tier")
     advisor_insight: Optional[str] = Field(None, description="Short, curiosity-driven Advisor paragraph (1–2 sentences)")
@@ -81,6 +114,10 @@ class MealCreate(BaseModel):
     meal_id: str = Field(..., description="meal_id returned by /meals/analyze")
     food_items: List[FoodItem] = Field(..., min_length=1)
     macro_ratio: MacroRatio
+    structure: Optional[MealStructure] = Field(
+        None,
+        description="Multi-item vs single-item-with-ingredients; defaults to multi_item",
+    )
     note: Optional[str] = Field(None, description="Free-form user note; no char cap (PRD §11)")
     visibility: MealVisibility = MealVisibility.PRIVATE
     team_id: Optional[str] = Field(None, description="Required when visibility='team'")
@@ -100,6 +137,7 @@ class MealUpdate(BaseModel):
     """Partial update. Fields not present are unchanged."""
     food_items: Optional[List[FoodItem]] = Field(None, min_length=1)
     macro_ratio: Optional[MacroRatio] = None
+    structure: Optional[MealStructure] = None
     note: Optional[str] = None
     visibility: Optional[MealVisibility] = None
     team_id: Optional[str] = Field(None, description="null to detach from a team")
@@ -119,6 +157,7 @@ class MealResponse(BaseModel):
     images: List[dict] = Field(default_factory=list)
     food_items: List[FoodItem]
     macro_ratio: MacroRatio
+    structure: MealStructure = MealStructure.MULTI_ITEM
     note: Optional[str] = None
     visibility: MealVisibility
     team_id: Optional[str] = None
@@ -184,6 +223,7 @@ class MealRestructureResponse(BaseModel):
     """Same shape as MealAnalyzeResponse minus the persisted-image bits."""
     food_items: List[FoodItem]
     macro_ratio: MacroRatio
+    structure: MealStructure = MealStructure.MULTI_ITEM
     meal_name: Optional[str] = None
     nutrition_level: Optional[NutritionLevel] = None
     advisor_insight: Optional[str] = None
