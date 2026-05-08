@@ -137,43 +137,78 @@ class _PortionRatioBarState extends State<PortionRatioBar> {
   Widget build(BuildContext context) {
     if (widget.names.length < 2) return const SizedBox.shrink();
 
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final totalWidth = constraints.maxWidth;
-        return SizedBox(
-          height: 40,
-          child: Stack(
-            clipBehavior: Clip.none,
-            children: [
-              // Segment row.
-              Row(
-                children: List.generate(widget.names.length, (i) {
-                  final f = i < _fractions.length ? _fractions[i] : 0.0;
-                  return SizedBox(
-                    width: totalWidth * f,
-                    child: _Segment(
-                      name: widget.names[i],
-                      isFirst: i == 0,
-                      isLast: i == widget.names.length - 1,
-                      color: _segmentColor(i),
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        LayoutBuilder(
+          builder: (context, constraints) {
+            final totalWidth = constraints.maxWidth;
+            return SizedBox(
+              height: 40,
+              child: Stack(
+                clipBehavior: Clip.none,
+                children: [
+                  // Segment row.
+                  Row(
+                    children: List.generate(widget.names.length, (i) {
+                      final f = i < _fractions.length ? _fractions[i] : 0.0;
+                      return SizedBox(
+                        width: totalWidth * f,
+                        child: _Segment(
+                          name: widget.names[i],
+                          isFirst: i == 0,
+                          isLast: i == widget.names.length - 1,
+                          color: _segmentColor(i),
+                        ),
+                      );
+                    }),
+                  ),
+                  // Divider handles between segments. Each one sits at the
+                  // running sum of fractions on its left.
+                  for (var i = 0; i < widget.names.length - 1; i++)
+                    _DividerHandle(
+                      leftFraction: _runningFraction(i + 1),
+                      totalWidth: totalWidth,
+                      enabled: widget.onChanged != null,
+                      onDrag: (dx) => _shiftDivider(i, dx / totalWidth),
+                      onDragEnd: _emit,
                     ),
-                  );
-                }),
+                ],
               ),
-              // Divider handles between segments. Each one sits at the running
-              // sum of fractions on its left.
-              for (var i = 0; i < widget.names.length - 1; i++)
-                _DividerHandle(
-                  leftFraction: _runningFraction(i + 1),
-                  totalWidth: totalWidth,
-                  enabled: widget.onChanged != null,
-                  onDrag: (dx) => _shiftDivider(i, dx / totalWidth),
-                  onDragEnd: _emit,
+            );
+          },
+        ),
+        const SizedBox(height: 6),
+        // No grams, no calories, no percentages — just a simple "Less"
+        // anchor on the left and "More" on the right so the user knows
+        // which way the drag means more of that segment.
+        const Padding(
+          padding: EdgeInsets.symmetric(horizontal: 2),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                'Less',
+                style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w500,
+                  color: AppColors.textLight,
+                  letterSpacing: 0.3,
                 ),
+              ),
+              Text(
+                'More',
+                style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w500,
+                  color: AppColors.textLight,
+                  letterSpacing: 0.3,
+                ),
+              ),
             ],
           ),
-        );
-      },
+        ),
+      ],
     );
   }
 

@@ -61,6 +61,7 @@ class _MealLogScreenState extends State<MealLogScreen> {
     fat: MacroLevel.moderate,
     fiber: MacroLevel.low,
   );
+  MealStructure _structure = MealStructure.multiItem;
   NutritionLevel _nutritionLevel = NutritionLevel.fair;
   MacroLevel _processingLevel = MacroLevel.moderate;
   MacroLevel _addedSugar = MacroLevel.low;
@@ -94,6 +95,11 @@ class _MealLogScreenState extends State<MealLogScreen> {
   // Slice 7A §4: pre-filled meal type + time, both editable on this screen.
   late MealType _mealType;
   late DateTime _mealTime;
+  // True once the user has explicitly picked a different time via the time
+  // pill. Until then, the meal time follows DateTime.now() at confirm so the
+  // saved meal reflects the actual upload/log moment, not when the screen
+  // was opened.
+  bool _userEditedMealTime = false;
 
   bool _isAnalyzing = false;
   bool _isConfirming = false;
@@ -260,6 +266,7 @@ class _MealLogScreenState extends State<MealLogScreen> {
     _foodItems = List.of(result.foodItems);
     _analyzedFoods = List.of(result.foodItems);
     _macroRatio = result.macroRatio;
+    _structure = result.structure;
     _nutritionLevel = result.nutritionLevel ?? NutritionLevel.fair;
     _processingLevel = result.processingLevel ?? MacroLevel.moderate;
     _addedSugar = result.addedSugar ?? MacroLevel.low;
@@ -311,18 +318,22 @@ class _MealLogScreenState extends State<MealLogScreen> {
     }
   }
 
-  /// True when the food list (names or portion weights) has changed since
-  /// the last analysis. Drives the Done → Re-analyze button label.
+  /// True when the food list (names, portion weights, or any ingredient
+  /// edit) has changed since the last analysis. Drives the save button
+  /// label and whether re-analysis fires before save.
   bool _hasFoodEdits() {
     if (_foodItems.length != _analyzedFoods.length) return true;
     for (var i = 0; i < _foodItems.length; i++) {
-      if (_foodItems[i].name.trim() !=
-          _analyzedFoods[i].name.trim()) {
-        return true;
-      }
-      if (_foodItems[i].portionWeight !=
-          _analyzedFoods[i].portionWeight) {
-        return true;
+      final cur = _foodItems[i];
+      final ref = _analyzedFoods[i];
+      if (cur.name.trim() != ref.name.trim()) return true;
+      if (cur.portionWeight != ref.portionWeight) return true;
+      final curIngs = cur.ingredients ?? const <Ingredient>[];
+      final refIngs = ref.ingredients ?? const <Ingredient>[];
+      if (curIngs.length != refIngs.length) return true;
+      for (var j = 0; j < curIngs.length; j++) {
+        if (curIngs[j].name.trim() != refIngs[j].name.trim()) return true;
+        if (curIngs[j].portionWeight != refIngs[j].portionWeight) return true;
       }
     }
     return false;
@@ -395,6 +406,7 @@ class _MealLogScreenState extends State<MealLogScreen> {
           picked.hour,
           picked.minute,
         );
+        _userEditedMealTime = true;
       });
     }
   }
@@ -480,12 +492,120 @@ class _MealLogScreenState extends State<MealLogScreen> {
     setState(() => _foodItems = [..._foodItems]..removeAt(index));
   }
 
+  // ─── Ingredient edits (single_item_with_ingredients) ────────────────
+
+  Future<void> _editIngredientName(int index) async {
+    if (_foodItems.length != 1) return;
+    final ingredients = _foodItems.first.ingredients;
+    if (ingredients == null || index >= ingredients.length) return;
+    final controller = TextEditingController(text: ingredients[index].name);
+    final result = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Edit ingredient'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          decoration: const InputDecoration(hintText: 'Ingredient name'),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, controller.text),
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+    if (result == null) return;
+    final trimmed = result.trim();
+    if (trimmed.isEmpty) return;
+    setState(() {
+      final next = [...ingredients];
+      next[index] = next[index].copyWith(name: trimmed);
+      _foodItems = [_foodItems.first.copyWith(ingredients: next)];
+    });
+  }
+
+  Future<void> _addIngredient() async {
+    if (_foodItems.length != 1) return;
+    final controller = TextEditingController();
+    final result = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Add ingredient'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          decoration: const InputDecoration(hintText: 'e.g. "Granola"'),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, controller.text),
+            child: const Text('Add'),
+          ),
+        ],
+      ),
+    );
+    if (result == null) return;
+    final pieces = splitFoodInput(result);
+    if (pieces.isEmpty) return;
+    setState(() {
+      final current = _foodItems.first.ingredients ?? const <Ingredient>[];
+      final next = [
+        ...current,
+        for (final name in pieces) Ingredient(name: name),
+      ];
+      _foodItems = [_foodItems.first.copyWith(ingredients: next)];
+    });
+  }
+
+  void _removeIngredient(int index) {
+    if (_foodItems.length != 1) return;
+    final ingredients = _foodItems.first.ingredients;
+    if (ingredients == null || index >= ingredients.length) return;
+    setState(() {
+      final next = [...ingredients]..removeAt(index);
+      _foodItems = [
+        _foodItems.first.copyWith(
+          ingredients: next.isEmpty ? null : next,
+          clearIngredients: next.isEmpty,
+        ),
+      ];
+    });
+  }
+
   void _onPortionsChanged(List<int> weights) {
     if (weights.length != _foodItems.length) return;
     setState(() {
       _foodItems = [
         for (var i = 0; i < _foodItems.length; i++)
           _foodItems[i].copyWith(portionWeight: weights[i]),
+      ];
+    });
+  }
+
+  /// Update the ingredient portion weights for the single composite food
+  /// item when the meal is `singleItemWithIngredients`. The container food
+  /// itself keeps its weight; only its `ingredients` list changes.
+  void _onIngredientPortionsChanged(List<int> weights) {
+    if (_foodItems.length != 1) return;
+    final ingredients = _foodItems.first.ingredients;
+    if (ingredients == null || weights.length != ingredients.length) return;
+    setState(() {
+      final updatedIngredients = [
+        for (var i = 0; i < ingredients.length; i++)
+          ingredients[i].copyWith(portionWeight: weights[i]),
+      ];
+      _foodItems = [
+        _foodItems.first.copyWith(ingredients: updatedIngredients),
       ];
     });
   }
@@ -505,6 +625,14 @@ class _MealLogScreenState extends State<MealLogScreen> {
       _isConfirming = true;
       _errorMessage = null;
     });
+    // The meal's timestamp must reflect when the user actually logged/
+    // confirmed the meal. If they didn't change the auto-suggested time
+    // pill, use the confirm moment (DateTime.now()) so the meal isn't
+    // stamped with screen-open time or, on the task→meal bridge, the
+    // task's scheduled start time.
+    final mealTimeForSave = _userEditedMealTime ? _mealTime : DateTime.now();
+    final mealTypeForSave =
+        _userEditedMealTime ? _mealType : _suggestMealTypeFromTime(mealTimeForSave);
     try {
       final provider = context.read<MealProvider>();
       final created = await provider.confirmDraft(
@@ -518,8 +646,8 @@ class _MealLogScreenState extends State<MealLogScreen> {
         linkedTaskId: widget.pendingCompletionTask?.taskId,
         // Slice 7A §4: meal type + time captured directly on this screen so
         // the saved meal already has the user's chosen values from the start.
-        mealType: _mealType,
-        mealTime: _mealTime,
+        mealType: mealTypeForSave,
+        mealTime: mealTimeForSave,
         mealName: _mealName,
         nutritionLevel: _nutritionLevel,
         advisorInsight: _advisorInsight,
@@ -606,10 +734,13 @@ class _MealLogScreenState extends State<MealLogScreen> {
         centerTitle: true,
       ),
       body: SafeArea(
+        bottom: false,
         child: _selectedImages.isEmpty
             ? const _PickerLoadingState()
             : ListView(
-                padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+                // Bottom padding leaves room above the sticky action bar
+                // so the last section never sits flush against the button.
+                padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
                 children: [
                   _buildPhotoHero(),
                   const SizedBox(height: 16),
@@ -635,12 +766,14 @@ class _MealLogScreenState extends State<MealLogScreen> {
                     _buildNoteSection(),
                     const SizedBox(height: 20),
                     _buildVisibilitySection(),
-                    const SizedBox(height: 24),
-                    _buildConfirmButton(),
                   ],
                 ],
               ),
       ),
+      // Sticky bottom action — does not move with the scrolling content.
+      // Hidden until we have a photo (the picker handles its own loading).
+      bottomNavigationBar:
+          _selectedImages.isEmpty ? null : _buildStickyActionBar(),
     );
   }
 
@@ -726,6 +859,10 @@ class _MealLogScreenState extends State<MealLogScreen> {
   }
 
   Widget _buildFoodsSection() {
+    final singleWithIngredients =
+        _structure == MealStructure.singleItemWithIngredients &&
+            _foodItems.length == 1 &&
+            (_foodItems.first.ingredients?.isNotEmpty ?? false);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -736,17 +873,48 @@ class _MealLogScreenState extends State<MealLogScreen> {
             children: [
               for (var i = 0; i < _foodItems.length; i++)
                 _buildFoodChip(i, _foodItems[i]),
-              const SizedBox(height: 4),
-              TextButton.icon(
-                onPressed: _addFood,
-                icon: const Icon(Icons.add, size: 18),
-                label: const Text('Add a food'),
-                style: TextButton.styleFrom(
-                  foregroundColor: AppColors.accentOrange,
-                  padding: EdgeInsets.zero,
-                  alignment: Alignment.centerLeft,
+              if (singleWithIngredients) ...[
+                const SizedBox(height: 12),
+                const Padding(
+                  padding: EdgeInsets.only(left: 4, bottom: 4),
+                  child: Text(
+                    'Ingredients',
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                      color: AppColors.textSecondary,
+                      letterSpacing: 0.4,
+                    ),
+                  ),
                 ),
-              ),
+                for (var i = 0;
+                    i < (_foodItems.first.ingredients?.length ?? 0);
+                    i++)
+                  _buildIngredientChip(i, _foodItems.first.ingredients![i]),
+                const SizedBox(height: 4),
+                TextButton.icon(
+                  onPressed: _addIngredient,
+                  icon: const Icon(Icons.add, size: 18),
+                  label: const Text('Add an ingredient'),
+                  style: TextButton.styleFrom(
+                    foregroundColor: AppColors.accentOrange,
+                    padding: EdgeInsets.zero,
+                    alignment: Alignment.centerLeft,
+                  ),
+                ),
+              ] else ...[
+                const SizedBox(height: 4),
+                TextButton.icon(
+                  onPressed: _addFood,
+                  icon: const Icon(Icons.add, size: 18),
+                  label: const Text('Add a food'),
+                  style: TextButton.styleFrom(
+                    foregroundColor: AppColors.accentOrange,
+                    padding: EdgeInsets.zero,
+                    alignment: Alignment.centerLeft,
+                  ),
+                ),
+              ],
             ],
           ),
         ),
@@ -784,6 +952,48 @@ class _MealLogScreenState extends State<MealLogScreen> {
             visualDensity: VisualDensity.compact,
             onPressed: () => _removeFood(index),
             icon: const Icon(Icons.close, size: 18, color: AppColors.textLight),
+            tooltip: 'Remove',
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildIngredientChip(int index, Ingredient ingredient) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 3),
+      child: Row(
+        children: [
+          Expanded(
+            child: InkWell(
+              onTap: () => _editIngredientName(index),
+              borderRadius: BorderRadius.circular(10),
+              child: Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                decoration: BoxDecoration(
+                  color: AppColors.backgroundLight,
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(
+                    color: AppColors.surfaceLight,
+                    width: 1,
+                  ),
+                ),
+                child: Text(
+                  ingredient.name,
+                  style: const TextStyle(
+                    fontSize: 13,
+                    color: AppColors.textPrimary,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+              ),
+            ),
+          ),
+          IconButton(
+            visualDensity: VisualDensity.compact,
+            onPressed: () => _removeIngredient(index),
+            icon: const Icon(Icons.close, size: 16, color: AppColors.textLight),
             tooltip: 'Remove',
           ),
         ],
@@ -856,6 +1066,27 @@ class _MealLogScreenState extends State<MealLogScreen> {
   }
 
   Widget _buildPortionSection() {
+    // SINGLE_ITEM_WITH_INGREDIENTS: the parent food is a container (e.g. a
+    // sandwich, a bowl); the portion bar operates on its ingredients.
+    if (_structure == MealStructure.singleItemWithIngredients &&
+        _foodItems.length == 1 &&
+        (_foodItems.first.ingredients?.length ?? 0) >= 2) {
+      final ingredients = _foodItems.first.ingredients!;
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          _sectionHeader('INGREDIENTS  ·  DRAG TO ADJUST'),
+          _card(
+            child: PortionRatioBar(
+              names: ingredients.map((i) => i.name).toList(),
+              weights: ingredients.map((i) => i.portionWeight).toList(),
+              onChanged: _onIngredientPortionsChanged,
+            ),
+          ),
+        ],
+      );
+    }
+    // MULTI_ITEM (default): one bar per separate food.
     if (_foodItems.length < 2) return const SizedBox.shrink();
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -1060,34 +1291,93 @@ class _MealLogScreenState extends State<MealLogScreen> {
     );
   }
 
-  Widget _buildConfirmButton() {
-    final reanalyzeMode = _hasFoodEdits();
-    final label = reanalyzeMode ? 'Re-analyze' : 'Save meal';
-    final disabled = _isConfirming || _isReanalyzing;
-    return SizedBox(
-      height: 52,
-      child: ElevatedButton(
-        onPressed: disabled
-            ? null
-            : (reanalyzeMode ? _reanalyze : _confirm),
-        style: ElevatedButton.styleFrom(
-          backgroundColor: AppColors.primaryLemonDark,
-          foregroundColor: Colors.white,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(14),
+  /// Sticky bottom action bar — pinned via `Scaffold.bottomNavigationBar`
+  /// so it never moves with the scrolling photo / food list / macro bars.
+  /// Label states (per spec):
+  ///   - Before analysis (failed/retry):       "Analyze Meal"
+  ///   - After analysis, no edits:             "Save Meal"
+  ///   - After edits:                          "Save Changes"
+  ///   - While loading (analyze/save/refresh): disabled spinner
+  Widget _buildStickyActionBar() {
+    final loading = _isAnalyzing || _isReanalyzing || _isConfirming;
+
+    String label;
+    String? loadingLabel;
+    VoidCallback? action;
+
+    if (_isAnalyzing) {
+      label = 'Analyze Meal';
+      loadingLabel = 'Analyzing…';
+    } else if (_isReanalyzing) {
+      label = 'Save Changes';
+      loadingLabel = 'Re-analyzing…';
+    } else if (_isConfirming) {
+      label = 'Save Meal';
+      loadingLabel = 'Saving…';
+    } else if (!_hasDraft) {
+      // Photo picked but analysis hasn't produced a draft (typically after
+      // an analyze error). Let the user retry.
+      label = 'Analyze Meal';
+      action = _analyze;
+    } else if (_hasFoodEdits()) {
+      label = 'Save Changes';
+      action = _saveWithReanalyze;
+    } else {
+      label = 'Save Meal';
+      action = _confirm;
+    }
+
+    return SafeArea(
+      top: false,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+        child: SizedBox(
+          height: 52,
+          child: ElevatedButton(
+            onPressed: loading ? null : action,
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppColors.primaryLemonDark,
+              foregroundColor: Colors.white,
+              disabledBackgroundColor:
+                  AppColors.primaryLemonDark.withValues(alpha: 0.55),
+              disabledForegroundColor: Colors.white,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(14),
+              ),
+              textStyle:
+                  const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+            ),
+            child: loading
+                ? Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      const SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(
+                          color: Colors.white,
+                          strokeWidth: 2.5,
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      Text(loadingLabel ?? label),
+                    ],
+                  )
+                : Text(label),
           ),
-          textStyle: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
         ),
-        child: _isConfirming
-            ? const SizedBox(
-                width: 22,
-                height: 22,
-                child: CircularProgressIndicator(
-                    color: Colors.white, strokeWidth: 2.5),
-              )
-            : Text(label),
       ),
     );
+  }
+
+  /// Save flow when the user has edited foods/portions/ingredients since
+  /// the last analysis: refresh the macro/level breakdown against the new
+  /// food list, then immediately persist the meal. Single tap, two steps.
+  Future<void> _saveWithReanalyze() async {
+    await _reanalyze();
+    if (!mounted) return;
+    if (_errorMessage != null) return;
+    await _confirm();
   }
 
   Widget _errorBanner(String message) {
