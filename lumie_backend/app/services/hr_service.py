@@ -1,9 +1,12 @@
 """Heart Rate service — sync ring readings and save manual measurement sessions."""
 import logging
+import shutil
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import List
 
 from bson import ObjectId
+from fastapi import HTTPException, UploadFile, status
 
 from ..core.database import get_database
 from ..models.hr import HrDataPoint, HrSyncResponse
@@ -15,6 +18,7 @@ from ..models.hr_session import (
     HrBucketResponse,
     HrSessionTimeseriesResponse,
 )
+from .dayprint_service import log_hr_logged, attach_graph_to_hr_logged_event
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +28,7 @@ _BUCKET_SECONDS = 5 * 60
 
 
 class HrService:
+    _upload_root = Path(__file__).resolve().parents[2] / "uploads" / "hr_sessions"
     # ── Ring background sync (existing) ──────────────────────────────────────
 
     async def sync_readings(
@@ -86,6 +91,16 @@ class HrService:
         }
         result = await db.hr_sessions.insert_one(session_doc)
         session_id = str(result.inserted_id)
+
+        await log_hr_logged(
+            user_id,
+            session_id=session_id,
+            avg_bpm=data.avg_bpm,
+            min_bpm=data.min_bpm,
+            max_bpm=data.max_bpm,
+            duration_seconds=duration,
+            reading_count=len(data.readings),
+        )
 
         if not data.readings:
             return HrSessionSaveResponse(
@@ -211,6 +226,71 @@ class HrService:
             )
 
         return HrSessionTimeseriesResponse(session_id=session_id, buckets=buckets)
+
+    async def attach_session_graph(
+        self,
+        user_id: str,
+        session_id: str,
+        graph_file: UploadFile,
+    ) -> dict:
+        """Persist an HR graph image and attach it to the session's dayprint event."""
+        db = get_database()
+        try:
+            oid = ObjectId(session_id)
+        except Exception:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Session not found",
+            )
+
+        session = await db.hr_sessions.find_one({"_id": oid, "user_id": user_id})
+        if session is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Session not found",
+            )
+
+        content_type = (graph_file.content_type or "").lower()
+        if not content_type.startswith("image/"):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Graph file must be an image",
+            )
+
+        ext = Path(graph_file.filename or "").suffix.strip().lower() or ".jpg"
+        if len(ext) > 10:
+            ext = ".jpg"
+
+        session_dir = self._upload_root / session_id
+        session_dir.mkdir(parents=True, exist_ok=True)
+        storage_name = f"graph{ext}"
+        storage_path = session_dir / storage_name
+
+        try:
+            with storage_path.open("wb") as out:
+                shutil.copyfileobj(graph_file.file, out)
+        finally:
+            await graph_file.close()
+
+        relative_path = f"hr_sessions/{session_id}/{storage_name}"
+        image_url = f"/api/v1/uploads/{relative_path}"
+
+        await db.hr_sessions.update_one(
+            {"_id": oid, "user_id": user_id},
+            {"$set": {
+                "graph_image_path": relative_path,
+                "graph_image_url": image_url,
+                "updated_at": datetime.utcnow(),
+            }},
+        )
+
+        await attach_graph_to_hr_logged_event(
+            user_id,
+            session_id=session_id,
+            image_url=image_url,
+        )
+
+        return {"session_id": session_id, "image_url": image_url}
 
 
 hr_service = HrService()

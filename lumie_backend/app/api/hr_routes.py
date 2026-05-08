@@ -1,6 +1,6 @@
 """Heart Rate API routes — ring sync and manual measurement sessions."""
 from typing import List
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, File, UploadFile
 
 from ..services.auth_service import get_current_user_id
 from ..services.hr_service import hr_service
@@ -70,3 +70,13 @@ async def get_session_timeseries(
     Reconstruct a timestamp: bucket_start + timedelta(seconds=t).
     """
     return await hr_service.get_session_timeseries(user_id, session_id)
+
+
+@router.post("/sessions/{session_id}/graph")
+async def attach_session_graph(
+    session_id: str,
+    graph_file: UploadFile = File(...),
+    user_id: str = Depends(get_current_user_id),
+):
+    """Attach HR chart image to an existing session and dayprint hr_logged event."""
+    return await hr_service.attach_session_graph(user_id, session_id, graph_file)

@@ -324,6 +324,73 @@ async def log_meal_logged(
         logger.warning(f"Dayprint log_meal_logged failed for {user_id}: {e}")
 
 
+async def log_hr_logged(
+    user_id: str,
+    *,
+    session_id: str,
+    avg_bpm: int,
+    min_bpm: int,
+    max_bpm: int,
+    duration_seconds: int,
+    reading_count: int,
+) -> None:
+    """Upsert today's hr_logged event for one HR session.
+
+    Mirrors meal logging's idempotent source-key upsert pattern so retries do
+    not create duplicate dayprint rows.
+    """
+    try:
+        db = get_database()
+        date = _today_utc_str()
+        await _upsert_dayprint(db, user_id, date)
+
+        source_key = f"hr_session:{session_id}"
+        now_iso = format_utc_datetime(datetime.now(timezone.utc))
+        data = {
+            "session_id": session_id,
+            "avg_bpm": avg_bpm,
+            "min_bpm": min_bpm,
+            "max_bpm": max_bpm,
+            "duration_seconds": duration_seconds,
+            "reading_count": reading_count,
+            "source_key": source_key,
+        }
+
+        result = await db.dayprints.update_one(
+            {
+                "user_id": user_id,
+                "date": date,
+                "events": {"$elemMatch": {"data.source_key": source_key}},
+            },
+            {"$set": {
+                "events.$[evt].data": data,
+                "events.$[evt].type": "hr_logged",
+            }},
+            array_filters=[{"evt.data.source_key": source_key}],
+        )
+        if getattr(result, "modified_count", 0):
+            return
+
+        event = {
+            "event_id": str(uuid.uuid4()),
+            "type": "hr_logged",
+            "timestamp": now_iso,
+            "data": data,
+        }
+        await db.dayprints.update_one(
+            {
+                "user_id": user_id,
+                "date": date,
+                "events": {
+                    "$not": {"$elemMatch": {"data.source_key": source_key}}
+                },
+            },
+            {"$push": {"events": event}},
+        )
+    except Exception as e:
+        logger.warning(f"Dayprint log_hr_logged failed for {user_id}: {e}")
+
+
 async def refresh_dayprint_event_for_meal(
     user_id: str,
     *,
@@ -391,6 +458,55 @@ async def refresh_dayprint_event_for_meal(
     except Exception as e:
         logger.warning(
             f"Dayprint refresh_dayprint_event_for_meal failed for {user_id}: {e}"
+        )
+
+
+async def attach_graph_to_hr_logged_event(
+    user_id: str,
+    *,
+    session_id: str,
+    image_url: str,
+) -> None:
+    """Attach/update graph image URL on an existing hr_logged dayprint event."""
+    try:
+        source_key = f"hr_session:{session_id}"
+        db = get_database()
+        doc = await db.dayprints.find_one(
+            {"user_id": user_id, "events.data.source_key": source_key},
+            {"date": 1, "events": 1},
+        )
+        if not doc:
+            return
+
+        target_event = None
+        for evt in doc.get("events", []):
+            data = evt.get("data") or {}
+            if data.get("source_key") == source_key:
+                target_event = evt
+                break
+        if not target_event:
+            return
+
+        new_data = dict(target_event.get("data") or {})
+        new_data["image_url"] = image_url
+
+        await db.dayprints.update_one(
+            {
+                "user_id": user_id,
+                "date": doc["date"],
+                "events.data.source_key": source_key,
+            },
+            {"$set": {
+                "events.$[evt].data": new_data,
+                "events.$[evt].type": "hr_logged",
+            }},
+            array_filters=[{"evt.data.source_key": source_key}],
+        )
+    except Exception as e:
+        logger.warning(
+            "Dayprint attach_graph_to_hr_logged_event failed for %s: %s",
+            user_id,
+            e,
         )
 
 

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../../../core/constants/api_constants.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/services/dayprint_service.dart';
 import '../../../shared/models/dayprint_models.dart';
@@ -348,19 +349,33 @@ class _EventTile extends StatelessWidget {
     final isTask = event.type == 'task_completed';
     final isChat = event.type == 'advisor_chat';
     final isInsight = event.type == 'important_insight';
+    final isMeal = event.type == 'meal_logged';
+    final isHr = event.type == 'hr_logged';
 
     final icon = isTask
         ? Icons.check_circle_outline_rounded
+        : isMeal
+        ? Icons.restaurant_rounded
+        : isHr
+        ? Icons.favorite_rounded
         : isInsight
         ? Icons.flag_rounded
         : Icons.chat_bubble_outline_rounded;
     final iconColor = isTask
         ? AppColors.success
+        : isMeal
+        ? const Color(0xFF8B5E34)
+        : isHr
+        ? const Color(0xFFDC2626)
         : isInsight
         ? AppColors.accentOrange
         : AppColors.primaryLemonDark;
     final iconBg = isTask
         ? const Color(0xFFDCFCE7)
+        : isMeal
+        ? const Color(0xFFFFF3E6)
+        : isHr
+        ? const Color(0xFFFEE2E2)
         : isInsight
         ? const Color(0xFFFFF7ED)
         : AppColors.primaryLemon;
@@ -371,6 +386,20 @@ class _EventTile extends StatelessWidget {
       title = event.data['task_name'] as String? ?? 'Task';
       final type = event.data['task_type'] as String? ?? '';
       subtitle = type.isNotEmpty ? type : null;
+    } else if (isMeal) {
+      title = event.data['food_preview'] as String? ?? 'Meal logged';
+      subtitle = 'Meal';
+    } else if (isHr) {
+      final avg = event.data['avg_bpm'];
+      final min = event.data['min_bpm'];
+      final max = event.data['max_bpm'];
+      final avgLabel = avg is num ? avg.round().toString() : '--';
+      title = 'HR session logged ($avgLabel bpm avg)';
+      if (min is num && max is num) {
+        subtitle = 'Range ${min.round()}-${max.round()} bpm';
+      } else {
+        subtitle = 'Heart rate measurement';
+      }
     } else if (isInsight) {
       title = event.data['summary'] as String? ?? 'Important insight';
       final cat = event.data['category'] as String? ?? '';
@@ -383,6 +412,7 @@ class _EventTile extends StatelessWidget {
     }
 
     final timeStr = _formatTimestamp(event.timestamp, dayDate);
+    final imageUrl = event.data['image_url'] as String?;
 
     return Padding(
       padding: const EdgeInsets.only(bottom: 10),
@@ -442,6 +472,21 @@ class _EventTile extends StatelessWidget {
               timeStr,
               style: const TextStyle(fontSize: 12, color: AppColors.textLight),
             ),
+            if (imageUrl != null && imageUrl.isNotEmpty) ...[
+              const SizedBox(height: 10),
+              ClipRRect(
+                borderRadius: BorderRadius.circular(10),
+                child: Image.network(
+                  imageUrl.startsWith('http')
+                      ? imageUrl
+                      : '${ApiConstants.baseUrl}$imageUrl',
+                  height: 140,
+                  width: double.infinity,
+                  fit: BoxFit.cover,
+                  errorBuilder: (_, __, ___) => const SizedBox.shrink(),
+                ),
+              ),
+            ],
           ],
         ),
       ),

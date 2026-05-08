@@ -11,6 +11,7 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 import '../../../core/constants/api_constants.dart';
 import '../../../core/services/auth_service.dart';
+import '../../../core/services/hr_session_service.dart';
 import '../../../core/services/task_service.dart';
 import '../../../shared/models/activity_models.dart';
 import '../../../shared/models/task_models.dart';
@@ -582,7 +583,9 @@ class _HeartRateScreenState extends State<HeartRateScreen>
           children: [
             Expanded(
               child: ElevatedButton.icon(
-                onPressed: isRingConnected ? () => _resumeMeasurement(hr) : null,
+                onPressed: isRingConnected
+                    ? () => _resumeMeasurement(hr)
+                    : null,
                 icon: const Icon(Icons.play_arrow_rounded),
                 label: const Text(
                   'Resume',
@@ -666,7 +669,10 @@ class _HeartRateScreenState extends State<HeartRateScreen>
               Center(
                 child: Text(
                   _formatElapsed(hr.timelineElapsed),
-                  style: TextStyle(fontSize: 13, color: AppColors.textSecondary),
+                  style: TextStyle(
+                    fontSize: 13,
+                    color: AppColors.textSecondary,
+                  ),
                 ),
               ),
               const SizedBox(height: 20),
@@ -895,7 +901,6 @@ class _HeartRateScreenState extends State<HeartRateScreen>
     final s = d.inSeconds.remainder(60).toString().padLeft(2, '0');
     return h > 0 ? '${h}h ${m}m ${s}s' : '${m}m ${s}s';
   }
-
 }
 
 // ─── Activity prompt bottom sheet ────────────────────────────────────────────
@@ -960,12 +965,16 @@ class _ActivityPromptSheetState extends State<_ActivityPromptSheet> {
         try {
           final renderObject = key!.currentContext!.findRenderObject();
           if (renderObject is RenderRepaintBoundary) {
-            final image = await renderObject.toImage(pixelRatio: 2.0).timeout(
-              const Duration(seconds: 3),
-              onTimeout: () => throw TimeoutException('Screenshot capture timed out'),
+            final image = await renderObject
+                .toImage(pixelRatio: 2.0)
+                .timeout(
+                  const Duration(seconds: 3),
+                  onTimeout: () =>
+                      throw TimeoutException('Screenshot capture timed out'),
+                );
+            final byteData = await image.toByteData(
+              format: ui.ImageByteFormat.png,
             );
-            final byteData =
-                await image.toByteData(format: ui.ImageByteFormat.png);
             if (byteData != null) {
               final compressed = await FlutterImageCompress.compressWithList(
                 byteData.buffer.asUint8List(),
@@ -988,15 +997,31 @@ class _ActivityPromptSheetState extends State<_ActivityPromptSheet> {
       }
 
       // Step 3: Fetch open exercise tasks
+      final saveFuture = HrSessionService().lastSaveSessionFuture;
+      if (screenshotFile != null && saveFuture != null) {
+        try {
+          final sessionId = await saveFuture.timeout(
+            const Duration(seconds: 8),
+          );
+          if (sessionId != null && sessionId.isNotEmpty) {
+            await HrSessionService().uploadSessionGraph(
+              sessionId: sessionId,
+              graphFile: screenshotFile,
+            );
+          }
+        } catch (_) {
+          // Graph upload is best-effort; activity flow should continue.
+        }
+      }
+
+      // Step 4: Fetch open exercise tasks
       List<Task> exerciseTasks = [];
       try {
         final taskService = TaskService();
         taskService.setToken(token);
         final taskResponse = await taskService.getTasks();
         exerciseTasks = taskResponse.tasks
-            .where((t) =>
-                t.taskType == TaskType.exercise &&
-                t.isPending)
+            .where((t) => t.taskType == TaskType.exercise && t.isPending)
             .toList();
       } catch (_) {
         // Network failure or auth issue — treat as no tasks
@@ -1004,7 +1029,7 @@ class _ActivityPromptSheetState extends State<_ActivityPromptSheet> {
 
       if (!mounted) return;
 
-      // Step 4: No matching tasks — just pop + snackbar
+      // Step 5: No matching tasks — just pop + snackbar
       if (exerciseTasks.isEmpty) {
         Navigator.pop(context);
         _showSavedSnackbar(
@@ -1015,7 +1040,7 @@ class _ActivityPromptSheetState extends State<_ActivityPromptSheet> {
         return;
       }
 
-      // Step 5: Pick task (if multiple, pick earliest closing)
+      // Step 6: Pick task (if multiple, pick earliest closing)
       final Task targetTask;
       if (exerciseTasks.length == 1) {
         targetTask = exerciseTasks.first;
@@ -1034,15 +1059,18 @@ class _ActivityPromptSheetState extends State<_ActivityPromptSheet> {
         targetTask = exerciseTasks.first;
       }
 
-      // Step 6: Show dialog
-      final confirmed = await showDialog<bool>(
-        context: context,
-        builder: (ctx) => _ExerciseTaskDialog(taskName: targetTask.taskName),
-      ) ?? false;
+      // Step 7: Show dialog
+      final confirmed =
+          await showDialog<bool>(
+            context: context,
+            builder: (ctx) =>
+                _ExerciseTaskDialog(taskName: targetTask.taskName),
+          ) ??
+          false;
 
       if (!mounted) return;
 
-      // Step 7: Handle user response
+      // Step 8: Handle user response
       if (confirmed) {
         try {
           // Upload screenshot if available
@@ -1120,17 +1148,17 @@ class _ActivityPromptSheetState extends State<_ActivityPromptSheet> {
         ),
         backgroundColor: AppColors.success,
         behavior: SnackBarBehavior.floating,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(12),
-        ),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       ),
     );
   }
 
   @override
   Widget build(BuildContext context) {
-    final durationMins =
-        widget.endedAt.difference(widget.startedAt).inMinutes.clamp(1, 9999);
+    final durationMins = widget.endedAt
+        .difference(widget.startedAt)
+        .inMinutes
+        .clamp(1, 9999);
 
     return Container(
       decoration: const BoxDecoration(
@@ -1207,8 +1235,9 @@ class _ActivityPromptSheetState extends State<_ActivityPromptSheet> {
                   child: Padding(
                     padding: const EdgeInsets.only(right: 8),
                     child: GestureDetector(
-                      onTap: () => setState(() => _selectedIntensity =
-                          isSelected ? null : level),
+                      onTap: () => setState(
+                        () => _selectedIntensity = isSelected ? null : level,
+                      ),
                       child: AnimatedContainer(
                         duration: const Duration(milliseconds: 150),
                         padding: const EdgeInsets.symmetric(vertical: 10),
@@ -1230,7 +1259,9 @@ class _ActivityPromptSheetState extends State<_ActivityPromptSheet> {
                               fontWeight: isSelected
                                   ? FontWeight.w600
                                   : FontWeight.normal,
-                              color: isSelected ? color : AppColors.textSecondary,
+                              color: isSelected
+                                  ? color
+                                  : AppColors.textSecondary,
                             ),
                           ),
                         ),
@@ -1262,12 +1293,13 @@ class _ActivityPromptSheetState extends State<_ActivityPromptSheet> {
                 Expanded(
                   flex: 2,
                   child: ElevatedButton(
-                    onPressed: (_selectedType == null || _saving) ? null : _save,
+                    onPressed: (_selectedType == null || _saving)
+                        ? null
+                        : _save,
                     style: ElevatedButton.styleFrom(
                       backgroundColor: AppColors.primaryLemon,
                       foregroundColor: AppColors.textOnYellow,
-                      disabledBackgroundColor:
-                          AppColors.backgroundPaper,
+                      disabledBackgroundColor: AppColors.backgroundPaper,
                       padding: const EdgeInsets.symmetric(vertical: 14),
                       shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(30),
