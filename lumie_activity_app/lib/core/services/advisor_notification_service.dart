@@ -6,7 +6,8 @@ import 'package:flutter/foundation.dart';
 import 'chat_history_service.dart';
 
 class AdvisorNotificationService {
-  static final AdvisorNotificationService _instance = AdvisorNotificationService._internal();
+  static final AdvisorNotificationService _instance =
+      AdvisorNotificationService._internal();
   factory AdvisorNotificationService() => _instance;
   AdvisorNotificationService._internal();
 
@@ -17,11 +18,13 @@ class AdvisorNotificationService {
 
   /// Stream of sessions that have new messages. Fired when a notification arrives.
   /// Not fired on navigation requests (requestNavigateTo uses a separate flow).
-  final StreamController<SessionSummary> _incomingStream = StreamController.broadcast();
+  final StreamController<SessionSummary> _incomingStream =
+      StreamController.broadcast();
   Stream<SessionSummary> get incoming => _incomingStream.stream;
 
   /// Stream of navigation requests. Fired when user taps a session to view it.
-  final StreamController<SessionSummary> _navStream = StreamController.broadcast();
+  final StreamController<SessionSummary> _navStream =
+      StreamController.broadcast();
   Stream<SessionSummary> get navigationRequests => _navStream.stream;
 
   /// Tracks the last known lastMessageAt per session.
@@ -90,7 +93,7 @@ class AdvisorNotificationService {
       // First poll: seed the baseline
       if (!_initialized) {
         _knownLastMessageAt = {
-          for (final s in sessions) s.sessionId: s.lastMessageAt
+          for (final s in sessions) s.sessionId: s.lastMessageAt,
         };
         _initialized = true;
         return;
@@ -99,6 +102,13 @@ class AdvisorNotificationService {
       // Detect new messages
       final newUnread = <SessionSummary>[];
       for (final session in sessions) {
+        // Collaboration records are view-only audit threads and should not
+        // trigger in-app notification banners.
+        if (session.isCollabThread) {
+          _knownLastMessageAt[session.sessionId] = session.lastMessageAt;
+          continue;
+        }
+
         // Skip the currently active session
         if (session.sessionId == _activeSessionId) continue;
 

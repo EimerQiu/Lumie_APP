@@ -219,19 +219,23 @@ class RingProvider extends ChangeNotifier with WidgetsBindingObserver {
     }
   }
 
-  /// Auto-reconnect on unexpected disconnect — retries every 30 s for up to
-  /// 5 minutes (10 attempts) before giving up and showing "disconnected".
-  /// First attempt fires after a 5 s stabilisation delay so the BLE stack
-  /// has time to notice the disconnect before we try again.
+  /// Auto-reconnect on unexpected disconnect — uses exponential backoff so we
+  /// don't hammer the BLE scanner when the ring is genuinely unreachable
+  /// (out of range, rebooting, battery dead). Total wait across all attempts
+  /// is roughly 28 minutes before we give up and show "disconnected".
+  ///
+  /// Schedule (seconds): 5, 10, 30, 60, 120, 300, 300, 300, 300, 300.
+  static const List<int> _reconnectBackoffSeconds = [
+    5, 10, 30, 60, 120, 300, 300, 300, 300, 300,
+  ];
+
   Future<void> _autoReconnectWithRetry() async {
     if (_autoReconnectLoopRunning) {
       dlog('RING', 'auto-reconnect loop skipped: already running');
       return;
     }
     _autoReconnectLoopRunning = true;
-    const maxAttempts = 10;
-    const firstDelay = Duration(seconds: 5);
-    const retryInterval = Duration(seconds: 30);
+    final maxAttempts = _reconnectBackoffSeconds.length;
 
     try {
       for (var attempt = 1; attempt <= maxAttempts; attempt++) {
@@ -241,9 +245,15 @@ class RingProvider extends ChangeNotifier with WidgetsBindingObserver {
         if (bleDeviceName == null && bleDeviceId == null) return;
         if (_bleService.isConnected) return; // Already reconnected
 
-        final delay = attempt == 1 ? firstDelay : retryInterval;
+        final delay = Duration(
+          seconds: _reconnectBackoffSeconds[attempt - 1],
+        );
         debugPrint(
           '[Ring] Auto-reconnect attempt $attempt/$maxAttempts in ${delay.inSeconds}s',
+        );
+        dlog(
+          'RING',
+          'auto-reconnect attempt $attempt/$maxAttempts — waiting ${delay.inSeconds}s',
         );
         await Future.delayed(delay);
 
@@ -256,7 +266,8 @@ class RingProvider extends ChangeNotifier with WidgetsBindingObserver {
           return;
         }
         if (attempt == maxAttempts) {
-          debugPrint('[Ring] All reconnect attempts exhausted after 5 min');
+          debugPrint('[Ring] All reconnect attempts exhausted');
+          dlog('RING', 'auto-reconnect exhausted after $maxAttempts attempts');
           _ringInfo = _ringInfo?.copyWith(
             connectionStatus: RingConnectionStatus.disconnected,
           );

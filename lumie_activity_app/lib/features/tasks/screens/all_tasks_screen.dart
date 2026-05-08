@@ -11,6 +11,7 @@ import 'package:image_gallery_saver_plus/image_gallery_saver_plus.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:provider/provider.dart';
+import 'package:timezone/timezone.dart' as tz;
 import 'package:video_compress/video_compress.dart';
 import 'package:video_player/video_player.dart';
 import '../../../core/constants/api_constants.dart';
@@ -38,6 +39,44 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
   final Dio _dio = Dio();
   final AdvisorV2Service _advisorV2 = AdvisorV2Service();
   double _overscrollAccumulation = 0;
+
+  String _getDeviceTimezone() {
+    try {
+      final tzName = tz.local.name;
+      if (tzName.isNotEmpty && tzName != 'UTC') return tzName;
+      final offset = DateTime.now().timeZoneOffset.inHours;
+      final offsetMap = <int, String>{
+        -12: 'Etc/GMT+12',
+        -11: 'Etc/GMT+11',
+        -10: 'Etc/GMT+10',
+        -9: 'Etc/GMT+9',
+        -8: 'Etc/GMT+8',
+        -7: 'Etc/GMT+7',
+        -6: 'Etc/GMT+6',
+        -5: 'Etc/GMT+5',
+        -4: 'Etc/GMT+4',
+        -3: 'Etc/GMT+3',
+        -2: 'Etc/GMT+2',
+        -1: 'Etc/GMT+1',
+        0: 'UTC',
+        1: 'Etc/GMT-1',
+        2: 'Etc/GMT-2',
+        3: 'Etc/GMT-3',
+        4: 'Etc/GMT-4',
+        5: 'Etc/GMT-5',
+        6: 'Etc/GMT-6',
+        7: 'Etc/GMT-7',
+        8: 'Etc/GMT-8',
+        9: 'Etc/GMT-9',
+        10: 'Etc/GMT-10',
+        11: 'Etc/GMT-11',
+        12: 'Etc/GMT-12',
+      };
+      return offsetMap[offset] ?? 'UTC';
+    } catch (_) {
+      return 'UTC';
+    }
+  }
 
   @override
   void initState() {
@@ -576,6 +615,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
       if (targetEmail == null || targetEmail.isEmpty) {
         throw Exception('Could not resolve admin email for this team');
       }
+      final requesterTimezone = _getDeviceTimezone();
 
       final prompt =
           '''
@@ -586,6 +626,7 @@ task_id: ${task.taskId}
 task_name: ${task.rpttaskName}
 open_datetime: ${task.openDatetime}
 close_datetime: ${task.closeDatetime}
+requester_timezone: $requesterTimezone
 reason: $reason
 ''';
 
@@ -1399,7 +1440,10 @@ class _AdminTaskCard extends StatelessWidget {
               onTap: onOpenLinkedMeal,
               borderRadius: BorderRadius.circular(12),
               child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 6,
+                ),
                 decoration: BoxDecoration(
                   color: AppColors.primaryLemon.withValues(alpha: 0.25),
                   borderRadius: BorderRadius.circular(12),

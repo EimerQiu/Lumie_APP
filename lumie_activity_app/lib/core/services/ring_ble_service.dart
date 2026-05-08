@@ -1037,19 +1037,31 @@ class RingBleService {
       dlog('HR_BLE', 'startHrStreaming SKIPPED — notifyChar=null');
       return const Stream.empty();
     }
+
+    // Tear down any prior wiring BEFORE constructing the new controller/sub.
+    // We swap the fields to null first so any in-flight callback from the old
+    // listener can't push into the new controller (it sees null and returns).
+    final hadPrev = _hrStreamController != null || _hrStreamSub != null;
+    final prevSub = _hrStreamSub;
+    final prevCtrl = _hrStreamController;
+    _hrStreamSub = null;
+    _hrStreamController = null;
+    if (prevSub != null) {
+      unawaited(prevSub.cancel());
+    }
+    if (prevCtrl != null && !prevCtrl.isClosed) {
+      unawaited(prevCtrl.close());
+    }
+
     debugPrint('[Ring BLE] startHrStreaming: starting 0x19 only (experimental)');
     dlog(
       'HR_BLE',
-      'startHrStreaming begin (0x19-only) '
-          '(prev_controller=${_hrStreamController == null ? "null" : "alive"}, '
-          'prev_sub=${_hrStreamSub == null ? "null" : "alive"})',
+      'startHrStreaming begin (0x19-only) had_prev=$hadPrev',
     );
 
-    _hrStreamController?.close();
     _hrStreamController = StreamController<int>.broadcast();
 
     final notifyChar = _notifyChar!;
-    _hrStreamSub?.cancel();
     _hrStreamSub = notifyChar.onValueReceived.listen(
       (data) {
         // Generic packet trace — only first/last byte to keep logs small.

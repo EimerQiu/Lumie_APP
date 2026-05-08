@@ -34,13 +34,17 @@ class HrSessionChart extends StatelessWidget {
     final yMin = ((minBpm - 10).clamp(30, 200)).toDouble();
     final yMax = ((maxBpm + 10).clamp(50, 250)).toDouble();
     final totalSecs = spots.last.x;
+    double maxGapSec = 0;
+    for (var i = 1; i < spots.length; i++) {
+      final gap = spots[i].x - spots[i - 1].x;
+      if (gap > maxGapSec) maxGapSec = gap;
+    }
+    final hasLargeTimeGap = maxGapSec >= 20;
 
     final verticalAnnotations = backfillRanges
         .map((range) {
-          final x1 =
-              range.start.difference(origin).inMilliseconds / 1000.0;
-          final x2 =
-              range.end.difference(origin).inMilliseconds / 1000.0;
+          final x1 = range.start.difference(origin).inMilliseconds / 1000.0;
+          final x2 = range.end.difference(origin).inMilliseconds / 1000.0;
           return VerticalRangeAnnotation(
             x1: x1.clamp(0, totalSecs > 0 ? totalSecs : 1),
             x2: x2.clamp(0, totalSecs > 0 ? totalSecs : 1),
@@ -84,10 +88,7 @@ class HrSessionChart extends StatelessWidget {
               interval: (yMax - yMin) / 3,
               getTitlesWidget: (value, _) => Text(
                 '${value.toInt()}',
-                style: TextStyle(
-                  fontSize: 10,
-                  color: AppColors.textSecondary,
-                ),
+                style: TextStyle(fontSize: 10, color: AppColors.textSecondary),
               ),
             ),
           ),
@@ -122,8 +123,12 @@ class HrSessionChart extends StatelessWidget {
         lineBarsData: [
           LineChartBarData(
             spots: spots,
-            isCurved: true,
+            // Cubic curve can overshoot on sparse/uneven points (looks like loops).
+            // Fall back to polyline when large gaps exist.
+            isCurved: !hasLargeTimeGap,
             curveSmoothness: 0.3,
+            preventCurveOverShooting: true,
+            preventCurveOvershootingThreshold: 8,
             color: Colors.redAccent,
             barWidth: 2,
             dotData: const FlDotData(show: false),

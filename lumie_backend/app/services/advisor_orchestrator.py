@@ -28,7 +28,6 @@ from . import skill_credential_service
 from . import execution_service
 from . import advisor_cross_message_service
 from . import chat_history_service
-from . import notification_service
 from .llm_client import chat_completion
 from .skill_registry_service import skill_registry, SkillIndexItem
 
@@ -447,6 +446,29 @@ def _extract_labeled_value(text: str, label: str) -> str:
         if line.lower().startswith(prefix):
             return line[len(prefix):].strip()
     return ""
+
+
+def _format_utc_window_to_user_local(
+    open_utc_str: str,
+    close_utc_str: str,
+    user_timezone: str,
+) -> tuple[str, str]:
+    """Convert stored UTC task window strings to user-local display strings."""
+    if not open_utc_str or not close_utc_str:
+        return open_utc_str or "Unknown", close_utc_str or "Unknown"
+    try:
+        tz = ZoneInfo(user_timezone or "UTC")
+    except Exception:
+        tz = ZoneInfo("UTC")
+    try:
+        open_utc = datetime.strptime(open_utc_str, "%Y-%m-%d %H:%M").replace(tzinfo=ZoneInfo("UTC"))
+        close_utc = datetime.strptime(close_utc_str, "%Y-%m-%d %H:%M").replace(tzinfo=ZoneInfo("UTC"))
+        return (
+            open_utc.astimezone(tz).strftime("%Y-%m-%d %-I:%M %p"),
+            close_utc.astimezone(tz).strftime("%Y-%m-%d %-I:%M %p"),
+        )
+    except Exception:
+        return open_utc_str, close_utc_str
 
 
 async def _post_collab_audit(
@@ -1118,11 +1140,13 @@ async def _initiate_cross_advisor_request(
         idempotency_key = f"tasks_complete:{requester_user_id}:{target_user_id}:{task_id}"
         task_detail = await _load_cross_task_details(task_id, requester_user_id)
         reason_fallback = _extract_labeled_value(message, "reason")
+        requester_tz_fallback = _extract_labeled_value(message, "requester_timezone")
         enriched_action_params = {
             "task_id": task_id,
             "task_name": task_detail.get("task_name") or cross_action_params.get("task_name"),
             "open_datetime": task_detail.get("open_datetime") or cross_action_params.get("open_datetime"),
             "close_datetime": task_detail.get("close_datetime") or cross_action_params.get("close_datetime"),
+            "requester_timezone": cross_action_params.get("requester_timezone") or requester_tz_fallback,
             "reason": cross_action_params.get("reason") or reason_fallback or task_detail.get("task_info") or "",
         }
     else:
@@ -1234,12 +1258,22 @@ async def _process_incoming_cross_request(message_doc: dict) -> None:
         else:
             # Task completion request
             task_name = action_params.get("task_name") or "Unknown"
-            open_time = action_params.get("open_datetime") or "Unknown"
-            close_time = action_params.get("close_datetime") or "Unknown"
+            open_time_raw = action_params.get("open_datetime") or ""
+            close_time_raw = action_params.get("close_datetime") or ""
+            requester_tz = (
+                action_params.get("requester_timezone")
+                or (await _get_user_context(requester_user_id)).get("timezone")
+                or "UTC"
+            )
+            open_time, close_time = _format_utc_window_to_user_local(
+                open_time_raw,
+                close_time_raw,
+                requester_tz,
+            )
             reason = action_params.get("reason") or "Not provided"
             question = (
                 f"**{requester_name} wants to mark \"{task_name}\" as done**\n\n"
-                f"They completed it between {open_time} and {close_time} with the note: \"{reason}\"\n\n"
+                f"They completed it between {open_time} and {close_time} ({requester_tz}) with the note: \"{reason}\"\n\n"
                 "Can you approve this? (Reply **yes** or **no**)"
             )
     else:
@@ -1297,15 +1331,7 @@ async def _process_incoming_cross_request(message_doc: dict) -> None:
 
     await advisor_cross_message_service.mark_processed(message_doc["message_id"])
 
-    # Queue push notification to alert the receiving user
-    notification_body = (
-        question[:500] + "…" if len(question) > 500 else question
-    )
-    await notification_service.queue_important_insight_notification(
-        user_id=approver_user_id,
-        summary=notification_body,
-        category="other",
-    )
+    # No push notifications for advisor collaboration records.
 
 
 async def _resume_cross_advisor_after_user_reply(
@@ -1551,13 +1577,19 @@ async def _resume_cross_advisor_after_user_reply(
     )
 
     history_summary = _summarize_history(history) if history else ""
+    execution_user_ctx = dict(ctx or {})
+    execution_user_ctx["timezone"] = (
+        action_params.get("requester_timezone")
+        or execution_user_ctx.get("timezone")
+        or "UTC"
+    )
     asyncio.create_task(
         execution_service.run_execution_job(
             job_id=job_id,
             skill=skill,
             skill_full_text=skill_full_text,
             credential=credential,
-            user_context=ctx,
+            user_context=execution_user_ctx,
             history_summary=history_summary,
         )
     )
@@ -1754,15 +1786,7 @@ async def _process_incoming_cross_health_concern(message_doc: dict, requester_ct
 
     await advisor_cross_message_service.mark_processed(message_doc["message_id"])
 
-    # Queue push notification to alert the receiving user
-    notification_body = (
-        question[:500] + "…" if len(question) > 500 else question
-    )
-    await notification_service.queue_important_insight_notification(
-        user_id=receiver_user_id,
-        summary=notification_body,
-        category="health_concern",
-    )
+    # No push notifications for advisor collaboration records.
 
 
 async def _resume_target_user_ambiguity(

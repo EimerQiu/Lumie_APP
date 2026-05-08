@@ -44,6 +44,10 @@ class RingSyncService extends ChangeNotifier {
   static const _lastSyncKey = 'ring_last_sync_at';
   static const _lastIncompleteKey = 'ring_last_sync_incomplete';
 
+  /// Skip a major sync if the last successful one finished within this window.
+  /// Prevents reconnect storms from slamming the ring with 7+ fetches each time.
+  static const Duration _minSyncInterval = Duration(minutes: 30);
+
   /// Load persisted sync timestamp from SharedPreferences on app start.
   Future<void> init() async {
     final prefs = await SharedPreferences.getInstance();
@@ -73,8 +77,20 @@ class RingSyncService extends ChangeNotifier {
     Future<List<HrDataPoint>> Function()? fetchHrDetails,
     Future<List<RingRawTemperatureRecord>> Function()? fetchTemperature,
     Future<List<RingRawSpo2Record>> Function()? fetchSpo2,
+    bool force = false,
   }) {
     if (_syncing) return;
+    if (!force) {
+      final lastSync = _status.lastSyncAt;
+      if (lastSync != null &&
+          DateTime.now().difference(lastSync) < _minSyncInterval) {
+        debugPrint(
+          '[RingSync] ⏭ Skipping sync — last completed ${DateTime.now().difference(lastSync).inMinutes}m ago '
+          '(min interval ${_minSyncInterval.inMinutes}m)',
+        );
+        return;
+      }
+    }
     _runSync(
       fetchSleep: fetchSleep,
       fetchHr: fetchHr,

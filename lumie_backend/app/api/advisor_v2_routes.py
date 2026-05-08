@@ -53,7 +53,7 @@ async def _is_session_readonly(user_id: str, session_id: str) -> bool:
     """Read-only guard for advisor_collab threads (§13.5).
 
     Returns True when the session's most recent message has
-    ``metadata.readonly = true`` or ``metadata.channel = 'advisor_collab'``.
+    ``metadata.readonly = true``.
     """
     if not session_id:
         return False
@@ -66,8 +66,6 @@ async def _is_session_readonly(user_id: str, session_id: str) -> bool:
         return False
     metadata = latest.get("metadata") or {}
     if metadata.get("readonly") is True:
-        return True
-    if metadata.get("channel") == "advisor_collab":
         return True
     return False
 

@@ -45,12 +45,18 @@ class HeartRateProvider extends ChangeNotifier {
   static const Duration _gapEdgeTrim = Duration(seconds: 1);
   static const Duration _backfillQueryLookback = Duration(seconds: 90);
 
+  /// How many consecutive realtime readings we need after (re)connect before
+  /// allowing a backfill query. Prevents slamming the ring with 0x54/0x55
+  /// fetches while the live 0x18 stream is still re-establishing.
+  static const int _stableReadingsBeforeBackfill = 3;
+
   final List<_HrRange> _pendingBackfillRanges = [];
   final List<_HrRange> _attemptedBackfillRanges = [];
   bool _backfillInProgress = false;
   DateTime? _lastRealtimePointTime;
   DateTime? _measurementStartedAt;
   bool _lastRingConnected = false;
+  int _stableReadingsCount = 0;
 
   // Diagnostic counters: emit a periodic summary line so we can detect a
   // ramping rebuild rate, leaked stream subscriptions, or stuck backfill.
@@ -151,8 +157,10 @@ class HeartRateProvider extends ChangeNotifier {
           dlog('HR_PROV', 'stream error after reconnect: $e');
         },
       );
+      // Backfill is deferred until the realtime stream is producing readings
+      // again — see _onRawReading. Just enqueue the gap so we don't lose it.
+      _stableReadingsCount = 0;
       _enqueueGapsFromSession();
-      _kickBackfillIfNeeded();
     } else if (_measureState == HrMeasureState.done) {
       // Stop was tapped while disconnected — send stop commands to the ring now.
       ring.stopHrStreaming().catchError(
@@ -335,6 +343,7 @@ class HeartRateProvider extends ChangeNotifier {
     _measurementStartedAt = DateTime.now();
     _lastRealtimePointTime = null;
     _lastRingConnected = _ringProvider?.isConnected ?? false;
+    _stableReadingsCount = 0;
     _measureState = HrMeasureState.measuring;
     notifyListeners();
 
@@ -397,6 +406,18 @@ class HeartRateProvider extends ChangeNotifier {
         ),
       );
       _lastRealtimePointTime = now;
+
+      // Track post-(re)connect stability. Once the live stream has produced a
+      // few readings in a row we let backfill run — earlier than that, the BLE
+      // link is too fragile to handle the extra 0x54/0x55 query traffic.
+      if (_stableReadingsCount < _stableReadingsBeforeBackfill) {
+        _stableReadingsCount++;
+        if (_stableReadingsCount == _stableReadingsBeforeBackfill &&
+            _pendingBackfillRanges.isNotEmpty) {
+          dlog('HR_PROV', 'stream stable — draining deferred backfill');
+          _kickBackfillIfNeeded();
+        }
+      }
     }
     _notifyListenersSinceLastSummary++;
     notifyListeners();
@@ -467,6 +488,10 @@ class HeartRateProvider extends ChangeNotifier {
     final ring = _ringProvider;
     if (ring == null || !ring.isConnected) return;
     if (_pendingBackfillRanges.isEmpty) return;
+    if (_stableReadingsCount < _stableReadingsBeforeBackfill) {
+      // Defer until the realtime stream has stabilized — see _onRawReading.
+      return;
+    }
     _runBackfill();
   }
 
@@ -626,6 +651,7 @@ class HeartRateProvider extends ChangeNotifier {
       onError: (e) => debugPrint('[HR] stream error after resume: $e'),
     );
     _lastRingConnected = _ringProvider?.isConnected ?? false;
+    _stableReadingsCount = 0;
 
     _elapsedTimer = Timer.periodic(const Duration(seconds: 1), (_) {
       _elapsed += const Duration(seconds: 1);
@@ -718,6 +744,7 @@ class HeartRateProvider extends ChangeNotifier {
     _emaValue = 0.0;
     _previousRaw = 0;
     _stabilityCounter = 0;
+    _stableReadingsCount = 0;
     _elapsed = Duration.zero;
     notifyListeners();
   }
