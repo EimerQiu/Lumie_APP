@@ -166,7 +166,10 @@ class RingProvider extends ChangeNotifier with WidgetsBindingObserver {
         debugPrint(
           '[Ring] Preferred reconnect failed ($directError) — trying scan fallback',
         );
-        dlog('RING', 'preferred reconnect failed: $directError → scan fallback');
+        dlog(
+          'RING',
+          'preferred reconnect failed: $directError → scan fallback',
+        );
         if (bleDeviceId != null) {
           await _bleService.scanAndReconnect(bleDeviceId);
         } else if (bleDeviceName != null && bleDeviceName.isNotEmpty) {
@@ -206,7 +209,7 @@ class RingProvider extends ChangeNotifier with WidgetsBindingObserver {
       dlog('RING', 'reconnect succeeded — battery=$battery');
       notifyListeners();
       if (runBackgroundSyncAfterConnect) {
-        _syncSleepInBackground();
+        _syncRingDataInBackground();
       }
     } catch (e) {
       debugPrint('[Ring] Reconnect failed: $e');
@@ -226,7 +229,16 @@ class RingProvider extends ChangeNotifier with WidgetsBindingObserver {
   ///
   /// Schedule (seconds): 5, 10, 30, 60, 120, 300, 300, 300, 300, 300.
   static const List<int> _reconnectBackoffSeconds = [
-    5, 10, 30, 60, 120, 300, 300, 300, 300, 300,
+    5,
+    10,
+    30,
+    60,
+    120,
+    300,
+    300,
+    300,
+    300,
+    300,
   ];
 
   Future<void> _autoReconnectWithRetry() async {
@@ -245,9 +257,7 @@ class RingProvider extends ChangeNotifier with WidgetsBindingObserver {
         if (bleDeviceName == null && bleDeviceId == null) return;
         if (_bleService.isConnected) return; // Already reconnected
 
-        final delay = Duration(
-          seconds: _reconnectBackoffSeconds[attempt - 1],
-        );
+        final delay = Duration(seconds: _reconnectBackoffSeconds[attempt - 1]);
         debugPrint(
           '[Ring] Auto-reconnect attempt $attempt/$maxAttempts in ${delay.inSeconds}s',
         );
@@ -280,14 +290,13 @@ class RingProvider extends ChangeNotifier with WidgetsBindingObserver {
     }
   }
 
-  // ─── Background sleep sync ────────────────────────────────────────────────
+  // ─── Background ring sync ─────────────────────────────────────────────────
 
   /// Triggered automatically after every successful connect / reconnect.
-  /// Fetches sleep records (0x53) and HR history (0x55) from the ring, then
-  /// uploads to the backend.  Retries the sleep fetch once if the first
-  /// attempt times out before the end-of-data marker is received.
+  /// Runs full ring-data sync (sleep/HR/steps/HRV/temperature/SpO2) from ring
+  /// to backend using per-type breakpoints in RingSyncService.
   /// All errors are caught — this must never disrupt the connection flow.
-  void _syncSleepInBackground() {
+  void _syncRingDataInBackground() {
     if (!isConnected) return;
     if (_heartRateMeasurementInProgress) {
       debugPrint('[RCMD] Sync skipped: heart-rate measurement in progress');
@@ -295,13 +304,15 @@ class RingProvider extends ChangeNotifier with WidgetsBindingObserver {
     }
     unawaited(_writeUserInfoToRing());
     RingSyncService().triggerSync(
-      fetchSleep: () => _bleService.fetchSleepHistory(),
-      fetchHr: () => _bleService.fetchHrHistory(),
-      fetchSteps: () => _bleService.fetchStepHistory(),
-      fetchHrv: () => _bleService.fetchHrvHistory(),
-      fetchHrDetails: () => _bleService.fetchHrDetails(),
-      fetchTemperature: () => _bleService.fetchTemperatureHistory(),
-      fetchSpo2: () => _bleService.fetchSpo2History(),
+      fetchSleep: (since) => _bleService.fetchSleepHistory(since: since),
+      fetchHr: (since) => _bleService.fetchHrHistory(since: since),
+      fetchSteps: (since) => _bleService.fetchStepHistory(since: since),
+      fetchHrv: (since) => _bleService.fetchHrvHistory(since: since),
+      fetchHrDetails: (since) => _bleService.fetchHrDetails(since: since),
+      fetchTemperature: (since) =>
+          _bleService.fetchTemperatureHistory(since: since),
+      fetchSpo2: (since) => _bleService.fetchSpo2History(since: since),
+      shouldPause: () => _heartRateMeasurementInProgress,
     );
     RingCommandService().checkAndExecute(_bleService);
   }
@@ -388,6 +399,9 @@ class RingProvider extends ChangeNotifier with WidgetsBindingObserver {
       );
     } finally {
       _heartRateMeasurementInProgress = false;
+      // Resume background sync from persisted breakpoints after real-time HR
+      // measurement yields the BLE channel.
+      _syncRingDataInBackground();
     }
   }
 
@@ -421,8 +435,14 @@ class RingProvider extends ChangeNotifier with WidgetsBindingObserver {
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
-      _syncSleepInBackground();
+      unawaited(_resumeRingWorkflowsOnForeground());
     }
+  }
+
+  Future<void> _resumeRingWorkflowsOnForeground() async {
+    if (!isPaired) return;
+    await _tryReconnect();
+    _syncRingDataInBackground();
   }
 
   @override

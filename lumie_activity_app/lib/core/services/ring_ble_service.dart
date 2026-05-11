@@ -396,12 +396,51 @@ class RingBleService {
     await _connectionStateSub?.cancel();
     _connectionStateSub = null;
 
-    await device.connect(
-      autoConnect: false,
-      timeout: const Duration(seconds: 10),
-    );
+    try {
+      final state = await device.connectionState.first.timeout(
+        const Duration(seconds: 2),
+        onTimeout: () => BluetoothConnectionState.disconnected,
+      );
+      if (state == BluetoothConnectionState.connected) {
+        debugPrint(
+          '[Ring BLE] Device already connected at OS layer, reattaching',
+        );
+        await _bindConnectedDevice(device, runTimeSync: false);
+        return;
+      }
+    } catch (_) {
+      // Ignore probe errors and continue normal reconnect path.
+    }
+
+    try {
+      await device.connect(
+        autoConnect: false,
+        timeout: const Duration(seconds: 10),
+      );
+      debugPrint('[Ring BLE] BLE reconnected to $deviceId');
+    } catch (e) {
+      debugPrint('[Ring BLE] reconnect connect() failed: $e');
+      // Common edge case after long background: OS keeps BLE link alive, but
+      // a fresh connect call fails. Try reattaching to the existing link.
+      final state = await device.connectionState.first.timeout(
+        const Duration(seconds: 2),
+        onTimeout: () => BluetoothConnectionState.disconnected,
+      );
+      if (state != BluetoothConnectionState.connected) rethrow;
+      debugPrint(
+        '[Ring BLE] connect() failed but state is connected, reattaching',
+      );
+    }
+    await _bindConnectedDevice(device, runTimeSync: true);
+  }
+
+  Future<void> _bindConnectedDevice(
+    BluetoothDevice device, {
+    required bool runTimeSync,
+  }) async {
     _connectedDevice = device;
-    debugPrint('[Ring BLE] BLE reconnected to $deviceId');
+    _writeChar = null;
+    _notifyChar = null;
 
     final services = await device.discoverServices();
     BluetoothService? lumieService;
@@ -433,10 +472,14 @@ class RingBleService {
 
     await _notifyChar!.setNotifyValue(true);
     _subscribeRawNotifyLog();
-    final timeSynced = await setTime();
-    debugPrint(
-      '[Ring BLE] Reconnect complete, time sync ${timeSynced ? "ok" : "failed"}',
-    );
+    if (runTimeSync) {
+      final timeSynced = await setTime();
+      debugPrint(
+        '[Ring BLE] Reconnect complete, time sync ${timeSynced ? "ok" : "failed"}',
+      );
+    } else {
+      debugPrint('[Ring BLE] Reattach complete (skipped time sync)');
+    }
     _subscribeToConnectionState(device);
     _startKeepAlive();
   }
@@ -444,7 +487,7 @@ class RingBleService {
   // ─── Heart Rate ───────────────────────────────────────────────────────────
 
   /// Command 0x55 — Fetch stored HR history from the ring with timestamp filter.
-  Future<List<HrDataPoint>> fetchHrHistory() async {
+  Future<List<HrDataPoint>> fetchHrHistory({DateTime? since}) async {
     if (_notifyChar == null) {
       debugPrint('[Ring BLE] fetchHrHistory: not connected');
       return [];
@@ -452,7 +495,7 @@ class RingBleService {
 
     // Get last sync timestamp or use epoch
     final lastSync =
-        await _ringService.loadLastSyncAt() ?? DateTime(2000, 1, 1);
+        since ?? await _ringService.loadLastSyncAt() ?? DateTime(2000, 1, 1);
     debugPrint(
       '[Ring BLE] fetchHrHistory: last sync at $lastSync, sending 0x55',
     );
@@ -490,10 +533,11 @@ class RingBleService {
       payload[0] = 0x55;
       payload[1] = 0x00; // First request (AA=0x00)
 
-      // Encode timestamp as BCD at bytes [3-8]
+      // Protocol layout is: CMD AA 00 00 YY MM DD HH mm SS ...
+      // so BCD timestamp must start at byte[4].
       final bcdTs = _encodeBcdTimestamp(lastSync);
       for (var i = 0; i < 6; i++) {
-        payload[3 + i] = bcdTs[i];
+        payload[4 + i] = bcdTs[i];
       }
 
       await _writeCommand(payload);
@@ -550,14 +594,14 @@ class RingBleService {
   }
 
   /// Command 0x56 — Fetch stored HRV / stress / blood pressure history with timestamp filter.
-  Future<List<RingRawHrvRecord>> fetchHrvHistory() async {
+  Future<List<RingRawHrvRecord>> fetchHrvHistory({DateTime? since}) async {
     if (_notifyChar == null) {
       debugPrint('[Ring BLE] fetchHrvHistory: not connected');
       return [];
     }
 
     final lastSync =
-        await _ringService.loadLastSyncAt() ?? DateTime(2000, 1, 1);
+        since ?? await _ringService.loadLastSyncAt() ?? DateTime(2000, 1, 1);
     debugPrint(
       '[Ring BLE] fetchHrvHistory: last sync at $lastSync, sending 0x56',
     );
@@ -610,7 +654,7 @@ class RingBleService {
 
       final bcdTs = _encodeBcdTimestamp(lastSync);
       for (var i = 0; i < 6; i++) {
-        payload[3 + i] = bcdTs[i];
+        payload[4 + i] = bcdTs[i];
       }
 
       await _writeCommand(payload);
@@ -637,14 +681,14 @@ class RingBleService {
   }
 
   /// Command 0x54 — Fetch detailed HR history with timestamp filter.
-  Future<List<HrDataPoint>> fetchHrDetails() async {
+  Future<List<HrDataPoint>> fetchHrDetails({DateTime? since}) async {
     if (_notifyChar == null) {
       debugPrint('[Ring BLE] fetchHrDetails: not connected');
       return [];
     }
 
     final lastSync =
-        await _ringService.loadLastSyncAt() ?? DateTime(2000, 1, 1);
+        since ?? await _ringService.loadLastSyncAt() ?? DateTime(2000, 1, 1);
     debugPrint(
       '[Ring BLE] fetchHrDetails: last sync at $lastSync, sending 0x54',
     );
@@ -686,7 +730,7 @@ class RingBleService {
 
       final bcdTs = _encodeBcdTimestamp(lastSync);
       for (var i = 0; i < 6; i++) {
-        payload[3 + i] = bcdTs[i];
+        payload[4 + i] = bcdTs[i];
       }
 
       await _writeCommand(payload);
@@ -878,14 +922,16 @@ class RingBleService {
   }
 
   /// Command 0x62 — Fetch temperature history with timestamp filter.
-  Future<List<RingRawTemperatureRecord>> fetchTemperatureHistory() async {
+  Future<List<RingRawTemperatureRecord>> fetchTemperatureHistory({
+    DateTime? since,
+  }) async {
     if (_notifyChar == null) {
       debugPrint('[Ring BLE] fetchTemperatureHistory: not connected');
       return [];
     }
 
     final lastSync =
-        await _ringService.loadLastSyncAt() ?? DateTime(2000, 1, 1);
+        since ?? await _ringService.loadLastSyncAt() ?? DateTime(2000, 1, 1);
     debugPrint(
       '[Ring BLE] fetchTemperatureHistory: last sync at $lastSync, sending 0x62',
     );
@@ -933,7 +979,7 @@ class RingBleService {
 
       final bcdTs = _encodeBcdTimestamp(lastSync);
       for (var i = 0; i < 6; i++) {
-        payload[3 + i] = bcdTs[i];
+        payload[4 + i] = bcdTs[i];
       }
 
       await _writeCommand(payload);
@@ -960,14 +1006,14 @@ class RingBleService {
   }
 
   /// Command 0x66 — Fetch SpO2 (blood oxygen) history with timestamp filter.
-  Future<List<RingRawSpo2Record>> fetchSpo2History() async {
+  Future<List<RingRawSpo2Record>> fetchSpo2History({DateTime? since}) async {
     if (_notifyChar == null) {
       debugPrint('[Ring BLE] fetchSpo2History: not connected');
       return [];
     }
 
     final lastSync =
-        await _ringService.loadLastSyncAt() ?? DateTime(2000, 1, 1);
+        since ?? await _ringService.loadLastSyncAt() ?? DateTime(2000, 1, 1);
     debugPrint(
       '[Ring BLE] fetchSpo2History: last sync at $lastSync, sending 0x66',
     );
@@ -1003,7 +1049,7 @@ class RingBleService {
 
       final bcdTs = _encodeBcdTimestamp(lastSync);
       for (var i = 0; i < 6; i++) {
-        payload[3 + i] = bcdTs[i];
+        payload[4 + i] = bcdTs[i];
       }
 
       await _writeCommand(payload);
@@ -1053,11 +1099,10 @@ class RingBleService {
       unawaited(prevCtrl.close());
     }
 
-    debugPrint('[Ring BLE] startHrStreaming: starting 0x19 only (experimental)');
-    dlog(
-      'HR_BLE',
-      'startHrStreaming begin (0x19-only) had_prev=$hadPrev',
+    debugPrint(
+      '[Ring BLE] startHrStreaming: starting 0x19 only (experimental)',
     );
+    dlog('HR_BLE', 'startHrStreaming begin (0x19-only) had_prev=$hadPrev');
 
     _hrStreamController = StreamController<int>.broadcast();
 
@@ -1112,12 +1157,14 @@ class RingBleService {
     exercisePayload[0] = 0x19;
     exercisePayload[1] = 0x01; // start
     exercisePayload[2] = 0x09; // mode
-    _writeCommand(exercisePayload).then((_) {
-      dlog('HR_BLE', '→ 0x19 start (exercise) ok');
-    }).catchError((e) {
-      debugPrint('[Ring BLE] startHrStreaming 0x19 error: $e');
-      dlog('HR_BLE', '→ 0x19 start error: $e');
-    });
+    _writeCommand(exercisePayload)
+        .then((_) {
+          dlog('HR_BLE', '→ 0x19 start (exercise) ok');
+        })
+        .catchError((e) {
+          debugPrint('[Ring BLE] startHrStreaming 0x19 error: $e');
+          dlog('HR_BLE', '→ 0x19 start error: $e');
+        });
 
     dlog('HR_BLE', 'startHrStreaming wiring complete');
     return _hrStreamController!.stream;
@@ -1153,21 +1200,23 @@ class RingBleService {
 
   /// Command 0x53 — Fetch stored sleep sessions with timestamp filter.
   Future<({List<RingRawSleepRecord> records, bool isComplete})>
-  fetchSleepHistory() async {
+  fetchSleepHistory({DateTime? since}) async {
     if (_notifyChar == null) {
       debugPrint('[Ring BLE] fetchSleepHistory: not connected');
       return (records: <RingRawSleepRecord>[], isComplete: false);
     }
 
     final lastSync =
-        await _ringService.loadLastSyncAt() ?? DateTime(2000, 1, 1);
+        since ?? await _ringService.loadLastSyncAt() ?? DateTime(2000, 1, 1);
     debugPrint(
       '[Ring BLE] fetchSleepHistory: last sync at $lastSync, sending 0x53',
     );
 
     // Dedup map: key = "id1-id2-timestamp"
     final Map<String, RingRawSleepRecord> dedup = {};
-    bool isComplete = false;
+    // Consider the transfer complete once the stream goes quiet for a while.
+    // Some firmware versions do not reliably emit the 0xFF terminal marker.
+    bool isComplete = true;
     final completer = Completer<void>();
     StreamSubscription<List<int>>? sub;
     Timer? inactivityTimer;
@@ -1186,7 +1235,6 @@ class RingBleService {
 
       if (data.length >= 2 && data[1] == 0xFF) {
         debugPrint('[Ring BLE] Sleep end marker received');
-        isComplete = true;
         finish();
         return;
       }
@@ -1215,7 +1263,7 @@ class RingBleService {
 
       final bcdTs = _encodeBcdTimestamp(lastSync);
       for (var i = 0; i < 6; i++) {
-        payload[3 + i] = bcdTs[i];
+        payload[4 + i] = bcdTs[i];
       }
 
       await _writeCommand(payload);
@@ -1224,6 +1272,11 @@ class RingBleService {
       await completer.future;
       final records = dedup.values.toList()
         ..sort((a, b) => a.sessionStart.compareTo(b.sessionStart));
+      for (final rec in records) {
+        debugPrint(
+          '[Ring BLE] Sleep candidate: ${rec.sessionStart} total=${rec.totalSleepMinutes}m',
+        );
+      }
       debugPrint(
         '[Ring BLE] fetchSleepHistory done — ${records.length} segment(s), complete=$isComplete',
       );
@@ -1315,10 +1368,6 @@ class RingBleService {
           awake++;
       }
       final sessionEnd = sessionStart.add(Duration(minutes: n));
-      debugPrint(
-        '[Ring BLE] Sleep segment: $sessionStart N=$n '
-        'deep=${deep}m light=${light}m rem=${rem}m awake=${awake}m',
-      );
       return RingRawSleepRecord(
         sessionStart: sessionStart,
         sessionEnd: sessionEnd,
@@ -1344,7 +1393,7 @@ class RingBleService {
   /// buffer is parsed into fixed 27-byte records.
   ///
   /// ID=0 is today (resets at midnight on the ring), ID=1 yesterday, etc.
-  Future<List<RingRawDailySteps>> fetchStepHistory() async {
+  Future<List<RingRawDailySteps>> fetchStepHistory({DateTime? since}) async {
     if (_notifyChar == null) {
       debugPrint('[Ring BLE] fetchStepHistory: not connected');
       return [];

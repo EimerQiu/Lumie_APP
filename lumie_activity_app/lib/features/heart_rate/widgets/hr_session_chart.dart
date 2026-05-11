@@ -11,11 +11,13 @@ import '../../../shared/models/heart_rate_models.dart';
 class HrSessionChart extends StatelessWidget {
   final List<HrSessionPoint> readings;
   final List<HrBackfillRange> backfillRanges;
+  final double xOffsetSeconds;
 
   const HrSessionChart({
     super.key,
     required this.readings,
     this.backfillRanges = const [],
+    this.xOffsetSeconds = 0,
   });
 
   @override
@@ -24,7 +26,8 @@ class HrSessionChart extends StatelessWidget {
 
     final origin = readings.first.time;
     final spots = readings.map((p) {
-      final secs = p.time.difference(origin).inSeconds.toDouble();
+      final secs =
+          xOffsetSeconds + p.time.difference(origin).inSeconds.toDouble();
       return FlSpot(secs, p.smoothedBpm);
     }).toList();
 
@@ -33,7 +36,9 @@ class HrSessionChart extends StatelessWidget {
     final maxBpm = bpms.reduce((a, b) => a > b ? a : b);
     final yMin = ((minBpm - 10).clamp(30, 200)).toDouble();
     final yMax = ((maxBpm + 10).clamp(50, 250)).toDouble();
-    final totalSecs = spots.last.x;
+    final minX = xOffsetSeconds;
+    final maxX = spots.last.x;
+    final visibleSpanSecs = maxX - minX;
     double maxGapSec = 0;
     for (var i = 1; i < spots.length; i++) {
       final gap = spots[i].x - spots[i - 1].x;
@@ -46,8 +51,14 @@ class HrSessionChart extends StatelessWidget {
           final x1 = range.start.difference(origin).inMilliseconds / 1000.0;
           final x2 = range.end.difference(origin).inMilliseconds / 1000.0;
           return VerticalRangeAnnotation(
-            x1: x1.clamp(0, totalSecs > 0 ? totalSecs : 1),
-            x2: x2.clamp(0, totalSecs > 0 ? totalSecs : 1),
+            x1: (xOffsetSeconds + x1).clamp(
+              minX,
+              maxX > minX ? maxX : minX + 1,
+            ),
+            x2: (xOffsetSeconds + x2).clamp(
+              minX,
+              maxX > minX ? maxX : minX + 1,
+            ),
             color: Colors.amber.withValues(alpha: 0.12),
           );
         })
@@ -58,8 +69,8 @@ class HrSessionChart extends StatelessWidget {
       LineChartData(
         minY: yMin,
         maxY: yMax,
-        minX: 0,
-        maxX: totalSecs > 0 ? totalSecs : 1,
+        minX: minX,
+        maxX: maxX > minX ? maxX : minX + 1,
         rangeAnnotations: RangeAnnotations(
           verticalRangeAnnotations: verticalAnnotations,
         ),
@@ -96,12 +107,13 @@ class HrSessionChart extends StatelessWidget {
             sideTitles: SideTitles(
               showTitles: true,
               reservedSize: 22,
-              interval: _xInterval(totalSecs),
+              interval: _xInterval(visibleSpanSecs > 0 ? visibleSpanSecs : 1),
               getTitlesWidget: (value, meta) {
-                final interval = _xInterval(totalSecs);
+                final interval = _xInterval(
+                  visibleSpanSecs > 0 ? visibleSpanSecs : 1,
+                );
                 // Prevent crowded right-edge labels like "6:00" and "6:06".
-                if (value < totalSecs &&
-                    (totalSecs - value) < (interval * 0.6)) {
+                if (value < maxX && (maxX - value) < (interval * 0.6)) {
                   return const SizedBox.shrink();
                 }
                 final m = (value ~/ 60).toString();

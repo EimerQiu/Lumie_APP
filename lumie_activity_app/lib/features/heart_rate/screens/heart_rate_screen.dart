@@ -118,9 +118,49 @@ class _HeartRateScreenState extends State<HeartRateScreen>
     provider.pauseMeasurement();
   }
 
-  void _resumeMeasurement(HeartRateProvider provider) {
+  Future<void> _resumeMeasurement(HeartRateProvider provider) async {
+    final ring = _ringProvider;
+    if (ring == null) return;
+
+    if (!ring.isConnected) {
+      // Reattach first, then fallback reconnect path is handled in RingBleService.
+      await ring.tryReconnect();
+      if (!mounted) return;
+    }
+
+    if (!ring.isConnected) {
+      final shouldStop = await _showReconnectFailedStopPrompt();
+      if (!mounted) return;
+      if (shouldStop == true) {
+        _stopMeasurement(provider);
+      }
+      return;
+    }
+
     _pulseController.repeat(reverse: true);
-    provider.resumeMeasurement();
+    await provider.resumeMeasurement();
+  }
+
+  Future<bool?> _showReconnectFailedStopPrompt() {
+    return showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Ring Unavailable'),
+        content: const Text(
+          'Unable to reconnect to your ring right now.\n\nDo you want to stop this heart-rate session?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Keep Trying'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Stop Session'),
+          ),
+        ],
+      ),
+    );
   }
 
   void _stopMeasurement(HeartRateProvider provider) {
@@ -447,6 +487,7 @@ class _HeartRateScreenState extends State<HeartRateScreen>
               : HrSessionChart(
                   readings: hr.sessionReadings,
                   backfillRanges: hr.attemptedBackfillRanges,
+                  xOffsetSeconds: hr.chartTimeOffsetSeconds,
                 ),
         ),
         const SizedBox(height: 8),
@@ -569,6 +610,7 @@ class _HeartRateScreenState extends State<HeartRateScreen>
               : HrSessionChart(
                   readings: hr.sessionReadings,
                   backfillRanges: hr.attemptedBackfillRanges,
+                  xOffsetSeconds: hr.chartTimeOffsetSeconds,
                 ),
         ),
         const SizedBox(height: 8),
