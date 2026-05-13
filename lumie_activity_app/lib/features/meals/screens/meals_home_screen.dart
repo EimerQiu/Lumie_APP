@@ -11,11 +11,15 @@
 // Pull-to-refresh refetches both the meal history and the trend.
 
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:provider/provider.dart';
 
 import '../../../core/theme/app_colors.dart';
 import '../../../shared/models/meal_models.dart';
+import '../../meals/utils/food_input_split.dart'
+    show splitFoodInput, deriveMealNameFromFoods;
 import '../providers/meal_provider.dart';
+import '../screens/meal_log_screen.dart';
 import '../widgets/date_tab_strip.dart';
 import '../widgets/meal_row_item.dart';
 import '../widgets/weekly_trend_chart.dart';
@@ -69,16 +73,146 @@ class _MealsHomeScreenState extends State<MealsHomeScreen> {
     ]);
   }
 
-  Future<void> _openLogMeal() async {
-    await Navigator.of(context).pushNamed('/meals/log');
-    // Provider already prepended any newly-confirmed meal; trend was invalidated
-    // by confirmDraft, so a passive next-visit fetch will refresh it.
-    if (mounted) {
-      // Touch trend refresh in case the user crossed midnight or logged on
-      // another day via a custom meal_time.
-      // ignore: use_build_context_synchronously
-      context.read<MealProvider>().loadTrend(refresh: true);
+  // ─── Entry sheet ───────────────────────────────────────────────────
+
+  /// Refresh the trend chart and return to the home date after any log flow.
+  void _afterLog() {
+    if (!mounted) return;
+    // Select today so the user immediately sees the meal they just logged.
+    setState(() => _selectedDate = _stripTime(DateTime.now()));
+    context.read<MealProvider>().loadTrend(refresh: true);
+  }
+
+  Future<void> _openLogMeal() => _showEntrySheet();
+
+  /// Show the four-option entry bottom sheet and route to the chosen path.
+  Future<void> _showEntrySheet() async {
+    final choice = await showModalBottomSheet<_EntryChoice>(
+      context: context,
+      backgroundColor: AppColors.cardBackground,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (_) => const _EntrySheet(),
+    );
+    if (!mounted || choice == null) return;
+    switch (choice) {
+      case _EntryChoice.camera:
+        await _pushLog(MealLogScreen(autoPickSource: ImageSource.camera));
+      case _EntryChoice.library:
+        await _pushLog(MealLogScreen(autoPickSource: ImageSource.gallery));
+      case _EntryChoice.recentMeals:
+        await _showRecentMealsPicker();
+      case _EntryChoice.typeInMeal:
+        await _showTypeInMealDialog();
     }
+  }
+
+  Future<void> _pushLog(MealLogScreen screen) async {
+    await Navigator.of(context).push<bool>(
+      MaterialPageRoute(builder: (_) => screen),
+    );
+    _afterLog();
+  }
+
+  /// Show a scrollable list of recent unique meals. Tapping one pre-fills
+  /// a fresh log session with the same items and runs a background
+  /// re-analysis to get up-to-date Nutrition Level / Advisor insight.
+  Future<void> _showRecentMealsPicker() async {
+    final meals = context.read<MealProvider>().myMeals;
+    final recent = _recentUniqueMeals(meals);
+    if (recent.isEmpty) {
+      // Fall back to the camera if there's no history yet.
+      await _pushLog(MealLogScreen(autoPickSource: ImageSource.camera));
+      return;
+    }
+    if (!mounted) return;
+    final selected = await showModalBottomSheet<Meal>(
+      context: context,
+      backgroundColor: AppColors.cardBackground,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (_) => _RecentMealsPicker(meals: recent),
+    );
+    if (!mounted || selected == null) return;
+    await _pushLog(
+      MealLogScreen(
+        textOnly: true,
+        prefillFoodItems: selected.foodItems,
+        prefillMealName: selected.mealName ?? selected.displayName,
+        prefillMealType: selected.mealType,
+      ),
+    );
+  }
+
+  /// Show a text-input dialog. The typed items are comma-split, then passed
+  /// to the log screen which runs the full structuring analysis pipeline
+  /// (same as the photo path — no photo required).
+  Future<void> _showTypeInMealDialog() async {
+    final controller = TextEditingController();
+    final input = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text(
+          'Type your meal',
+          style: TextStyle(fontWeight: FontWeight.w700),
+        ),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          maxLines: 3,
+          textCapitalization: TextCapitalization.sentences,
+          decoration: const InputDecoration(
+            hintText: 'e.g. Rice, tuna in water, kimchi, seaweed',
+            border: OutlineInputBorder(),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () =>
+                Navigator.pop(ctx, controller.text.trim()),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppColors.primaryLemonDark,
+              foregroundColor: Colors.white,
+            ),
+            child: const Text('Analyze'),
+          ),
+        ],
+      ),
+    );
+    if (!mounted || input == null || input.isEmpty) return;
+    final names = splitFoodInput(input);
+    if (names.isEmpty) return;
+    final foodItems = names.map((n) => FoodItem(name: n)).toList();
+    await _pushLog(
+      MealLogScreen(
+        textOnly: true,
+        prefillFoodItems: foodItems,
+        prefillMealName: deriveMealNameFromFoods(names),
+      ),
+    );
+  }
+
+  /// Return the most recently logged unique meals (by display name), newest
+  /// first, capped at 10 entries. De-duplication is case-insensitive on the
+  /// display name so the same dish logged multiple times shows only once.
+  static List<Meal> _recentUniqueMeals(List<Meal> meals) {
+    final seen = <String>{};
+    final result = <Meal>[];
+    for (final meal in meals) {
+      final key = meal.displayName.toLowerCase().trim();
+      if (seen.add(key)) {
+        result.add(meal);
+        if (result.length >= 10) break;
+      }
+    }
+    return result;
   }
 
   Future<void> _openDetail(Meal meal) async {
@@ -110,13 +244,15 @@ class _MealsHomeScreenState extends State<MealsHomeScreen> {
         child: Consumer<MealProvider>(
           builder: (context, provider, _) {
             final mealsToday = _mealsForSelectedDate(provider.myMeals);
+            final datesWithMeals = provider.myMeals
+                .map((m) => _stripTime(m.effectiveTime.toLocal()))
+                .toSet();
             return Column(
               children: [
                 DateTabStrip(
                   selectedDate: _selectedDate,
-                  onDateChanged: (d) {
-                    setState(() => _selectedDate = d);
-                  },
+                  onDateChanged: (d) => setState(() => _selectedDate = d),
+                  datesWithMeals: datesWithMeals,
                 ),
                 Expanded(
                   child: RefreshIndicator(
@@ -299,6 +435,221 @@ class _MealsHomeScreenState extends State<MealsHomeScreen> {
             ),
           ),
         ),
+      ),
+    );
+  }
+}
+
+// ─── Entry sheet types ────────────────────────────────────────────────────────
+
+enum _EntryChoice { camera, library, recentMeals, typeInMeal }
+
+class _EntrySheet extends StatelessWidget {
+  const _EntrySheet();
+
+  @override
+  Widget build(BuildContext context) {
+    return SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(0, 8, 0, 8),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // Drag handle
+            Container(
+              width: 36,
+              height: 4,
+              margin: const EdgeInsets.only(bottom: 16),
+              decoration: BoxDecoration(
+                color: AppColors.surfaceLight,
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+            const Padding(
+              padding: EdgeInsets.fromLTRB(20, 0, 20, 12),
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  'Log a meal',
+                  style: TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.w700,
+                    color: AppColors.textPrimary,
+                  ),
+                ),
+              ),
+            ),
+            _EntryTile(
+              icon: Icons.camera_alt_outlined,
+              label: 'Take Photo',
+              onTap: () => Navigator.pop(context, _EntryChoice.camera),
+            ),
+            _EntryTile(
+              icon: Icons.photo_library_outlined,
+              label: 'Choose from Library',
+              onTap: () => Navigator.pop(context, _EntryChoice.library),
+            ),
+            _EntryTile(
+              icon: Icons.history_outlined,
+              label: 'Recent Meals',
+              onTap: () => Navigator.pop(context, _EntryChoice.recentMeals),
+            ),
+            _EntryTile(
+              icon: Icons.edit_outlined,
+              label: 'Type in Meal',
+              onTap: () => Navigator.pop(context, _EntryChoice.typeInMeal),
+            ),
+            const SizedBox(height: 4),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _EntryTile extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final VoidCallback onTap;
+
+  const _EntryTile({
+    required this.icon,
+    required this.label,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return ListTile(
+      leading: Container(
+        width: 40,
+        height: 40,
+        decoration: BoxDecoration(
+          color: AppColors.primaryLemonLight,
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: Icon(icon, color: AppColors.primaryLemonDark, size: 20),
+      ),
+      title: Text(
+        label,
+        style: const TextStyle(
+          fontSize: 15,
+          fontWeight: FontWeight.w600,
+          color: AppColors.textPrimary,
+        ),
+      ),
+      trailing: const Icon(
+        Icons.chevron_right,
+        color: AppColors.textLight,
+        size: 20,
+      ),
+      onTap: onTap,
+    );
+  }
+}
+
+// ─── Recent meals picker ──────────────────────────────────────────────────────
+
+class _RecentMealsPicker extends StatelessWidget {
+  final List<Meal> meals;
+
+  const _RecentMealsPicker({required this.meals});
+
+  static const _months = [
+    'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+    'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+  ];
+
+  String _formatDate(DateTime dt) {
+    final local = dt.toLocal();
+    return '${_months[local.month - 1]} ${local.day}';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return DraggableScrollableSheet(
+      expand: false,
+      initialChildSize: 0.55,
+      minChildSize: 0.35,
+      maxChildSize: 0.85,
+      builder: (_, scrollController) => Column(
+        children: [
+          // Drag handle + header
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 12, 20, 8),
+            child: Column(
+              children: [
+                Container(
+                  width: 36,
+                  height: 4,
+                  margin: const EdgeInsets.only(bottom: 16),
+                  decoration: BoxDecoration(
+                    color: AppColors.surfaceLight,
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
+                const Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    'Recent meals',
+                    style: TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.w700,
+                      color: AppColors.textPrimary,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          Expanded(
+            child: ListView.builder(
+              controller: scrollController,
+              padding: const EdgeInsets.fromLTRB(12, 4, 12, 16),
+              itemCount: meals.length,
+              itemBuilder: (_, i) {
+                final meal = meals[i];
+                final type = meal.mealType?.displayName ?? 'Meal';
+                final date = _formatDate(meal.effectiveTime);
+                return ListTile(
+                  contentPadding:
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  leading: Container(
+                    width: 44,
+                    height: 44,
+                    decoration: BoxDecoration(
+                      color: AppColors.primaryLemonLight,
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: const Icon(
+                      Icons.restaurant_outlined,
+                      color: AppColors.primaryLemonDark,
+                      size: 20,
+                    ),
+                  ),
+                  title: Text(
+                    meal.mealName ?? meal.displayName,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                      color: AppColors.textPrimary,
+                    ),
+                  ),
+                  subtitle: Text(
+                    '$type · $date',
+                    style: const TextStyle(
+                      fontSize: 12,
+                      color: AppColors.textSecondary,
+                    ),
+                  ),
+                  onTap: () => Navigator.pop(context, meal),
+                );
+              },
+            ),
+          ),
+        ],
       ),
     );
   }

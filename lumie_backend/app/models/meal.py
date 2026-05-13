@@ -105,13 +105,24 @@ class MealAnalyzeResponse(BaseModel):
     advisor_insight: Optional[str] = Field(None, description="Short, curiosity-driven Advisor paragraph (1–2 sentences)")
     processing_level: Optional[MacroLevel] = Field(None, description="How processed the foods are (low=whole, high=ultra-processed)")
     added_sugar: Optional[MacroLevel] = Field(None, description="Added-sugar load (low=none, high=heavily sweetened); natural fruit sugar does NOT count")
+    is_packaged: bool = Field(False, description="True when the LLM detected a branded/packaged product and used its actual ingredient list for grading")
+    detected_brand: Optional[str] = Field(None, description="Identified brand name, e.g. 'RX Bar'")
+    detected_product: Optional[str] = Field(None, description="Identified product name, e.g. 'Chocolate Sea Salt RX Bar'")
 
 
 # ============ Create / Update / Read ============
 
+class MealAnalyzeTextRequest(BaseModel):
+    """POST /meals/analyze-text — structured analysis from typed food items only;
+    no photo required. The backend runs the same LLM structuring layer as the
+    photo path and returns a new meal_id the client uses to confirm via
+    POST /meals."""
+    food_items: List[FoodItem] = Field(..., min_length=1)
+
+
 class MealCreate(BaseModel):
     """Confirm a previously-analyzed meal (or create one bridged from a task)."""
-    meal_id: str = Field(..., description="meal_id returned by /meals/analyze")
+    meal_id: str = Field(..., description="meal_id returned by /meals/analyze or /meals/analyze-text")
     food_items: List[FoodItem] = Field(..., min_length=1)
     macro_ratio: MacroRatio
     structure: Optional[MealStructure] = Field(
@@ -119,6 +130,16 @@ class MealCreate(BaseModel):
         description="Multi-item vs single-item-with-ingredients; defaults to multi_item",
     )
     note: Optional[str] = Field(None, description="Free-form user note; no char cap (PRD §11)")
+    text_only: bool = Field(
+        False,
+        description="True when the meal was created without a photo (typed or recent-meal path). Skips the image-presence check on the server.",
+    )
+    is_packaged: Optional[bool] = Field(
+        None,
+        description="Pass through from the analyze response; persisted on the meal document.",
+    )
+    detected_brand: Optional[str] = Field(None, description="Brand name from packaged food detection")
+    detected_product: Optional[str] = Field(None, description="Product name from packaged food detection")
     visibility: MealVisibility = MealVisibility.PRIVATE
     team_id: Optional[str] = Field(None, description="Required when visibility='team'")
     linked_task_id: Optional[str] = Field(None, description="Set internally when bridged from a Nutrition Task")
@@ -158,6 +179,9 @@ class MealResponse(BaseModel):
     food_items: List[FoodItem]
     macro_ratio: MacroRatio
     structure: MealStructure = MealStructure.MULTI_ITEM
+    is_packaged: bool = False
+    detected_brand: Optional[str] = None
+    detected_product: Optional[str] = None
     note: Optional[str] = None
     visibility: MealVisibility
     team_id: Optional[str] = None

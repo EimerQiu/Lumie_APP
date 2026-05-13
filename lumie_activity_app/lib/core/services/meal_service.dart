@@ -285,10 +285,41 @@ class MealService {
   static String _snippet(String s, int max) =>
       s.length <= max ? s : '${s.substring(0, max)}…';
 
+  // ============ Text-only analysis ============
+
+  /// Structured analysis from typed food items — no photo required.
+  ///
+  /// Runs the same LLM structuring layer as the photo path and returns a new
+  /// [MealAnalyzeResult] with a fresh [mealId]. Pass this [mealId] to
+  /// [createMeal] (with `textOnly: true`) to persist the meal.
+  ///
+  /// Used by the "Type in Meal" and "Recent Meals" entry paths.
+  Future<MealAnalyzeResult> analyzeText({
+    required List<FoodItem> foodItems,
+  }) async {
+    if (_token == null) throw Exception('Not authenticated');
+    final response = await http.post(
+      Uri.parse('${ApiConstants.baseUrl}/meals/analyze-text'),
+      headers: _headers,
+      body: json.encode({
+        'food_items': foodItems.map((f) => f.toJson()).toList(),
+      }),
+    );
+    if (response.statusCode == 200) {
+      return MealAnalyzeResult.fromJson(
+        json.decode(response.body) as Map<String, dynamic>,
+      );
+    }
+    _handleError(response, 'analyze text meal');
+  }
+
   // ============ CRUD ============
 
   /// Confirm a previously-analyzed meal. The [mealId] must come from a prior
-  /// [analyzeMealImages] call so the backend can locate the saved images.
+  /// [analyzeMealImages] or [analyzeText] call.
+  ///
+  /// Set [textOnly] to true when the meal was created via [analyzeText] (no
+  /// photo). This tells the backend to skip its image-presence check.
   ///
   /// V2 fields (mealName / mealType / mealTime / nutritionLevel / advisorInsight)
   /// are pass-through from the analyze result. Server derives sensible defaults
@@ -309,6 +340,10 @@ class MealService {
     MacroLevel? processingLevel,
     MacroLevel? addedSugar,
     String? timezone,
+    bool textOnly = false,
+    bool isPackaged = false,
+    String? detectedBrand,
+    String? detectedProduct,
   }) async {
     if (_token == null) throw Exception('Not authenticated');
 
@@ -328,6 +363,10 @@ class MealService {
       if (processingLevel != null) 'processing_level': processingLevel.apiValue,
       if (addedSugar != null) 'added_sugar': addedSugar.apiValue,
       if (timezone != null) 'timezone': timezone,
+      if (textOnly) 'text_only': true,
+      if (isPackaged) 'is_packaged': true,
+      if (detectedBrand != null) 'detected_brand': detectedBrand,
+      if (detectedProduct != null) 'detected_product': detectedProduct,
     };
 
     final response = await http.post(
