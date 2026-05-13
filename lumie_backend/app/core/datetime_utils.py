@@ -8,7 +8,7 @@ from datetime import datetime
 from typing import Optional
 
 
-def format_utc_datetime(dt: datetime) -> str:
+def format_utc_datetime(dt) -> str:
     """
     Format a datetime to ISO 8601 string with Z suffix.
 
@@ -16,7 +16,7 @@ def format_utc_datetime(dt: datetime) -> str:
     All UTC datetimes should use this function for API responses.
 
     Args:
-        dt: A datetime object (naive or aware). If naive, assumed to be UTC.
+        dt: A datetime object (naive or aware), or an ISO 8601 string. If naive, assumed to be UTC.
 
     Returns:
         ISO 8601 formatted string with Z suffix, e.g. "2026-04-11T04:46:33Z"
@@ -32,6 +32,11 @@ def format_utc_datetime(dt: datetime) -> str:
         >>> format_utc_datetime(now_tz)
         '2026-04-11T04:46:33Z'
     """
+    if isinstance(dt, str):
+        parsed = parse_utc_datetime(dt)
+        if parsed is None:
+            raise ValueError(f"Cannot parse datetime string: {dt!r}")
+        dt = parsed
     return dt.strftime("%Y-%m-%dT%H:%M:%S") + "Z"
 
 

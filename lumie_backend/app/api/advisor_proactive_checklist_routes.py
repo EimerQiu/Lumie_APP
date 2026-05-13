@@ -34,11 +34,11 @@ class ProactiveChecklistReplaceRequest(BaseModel):
 
 
 class ProactiveChecklistCreateItemRequest(BaseModel):
-    text: str = Field(..., min_length=1, max_length=240)
+    text: str = Field(..., min_length=1, max_length=500)
 
 
 class ProactiveChecklistUpdateItemRequest(BaseModel):
-    text: str = Field(..., min_length=1, max_length=240)
+    text: str = Field(..., min_length=1, max_length=500)
 
 
 def _normalize_manual_items(raw_items: list) -> list[dict]:

@@ -1,15 +1,13 @@
-"""Proactive Advisor Service — skill-driven execution architecture.
+"""Proactive Advisor Service — checklist-driven execution architecture.
 
 New design (v3):
-  1. All proactive-eligible assessment skills run in parallel each round via execution service.
-  2. Skills are executed dynamically by reading markdown and generating code — no hardcoded assessments.
-  3. Raw execution results are persisted in proactive_information_rounds collection.
-  4. A proactive checklist is assembled before decision: manual priorities + today's dayprint + enabled skills.
+  1. Manual checklist items are executed first via advisor orchestration flow.
+  2. Manual execution may trigger skills when needed (tool-call path in orchestrator).
+  3. Manual execution outputs are normalized into current-round assessment data.
+  4. Raw round data is persisted in proactive_information_rounds collection.
   5. LLM gets: current round results + last round results + today's dayprint + last nudge + proactive checklist.
-  5. LLM decides whether to nudge (no deterministic guardrails, no hardcoded scores).
-  6. Audit records persisted for observability.
-
-Skills are flat and unsorted by domain — all assessment skills run, sorted by priority.
+  6. LLM decides whether to nudge (no deterministic guardrails, no hardcoded scores).
+  7. Audit records persisted for observability.
 """
 
 import asyncio
@@ -24,288 +22,15 @@ from zoneinfo import ZoneInfo
 from ..core.config import settings
 from ..core.datetime_utils import format_utc_datetime, format_utc_datetime_with_ms
 from ..core.database import get_database
-from ..core.credential_utils import resolve_credential_key
 from ..models.proactive import ProactiveSkillData
-from ..services.capability_service import get_user_enabled_capability_ids
 from ..services.chat_history_service import save_message
 from ..services.notification_service import queue_checkin_notification
-from ..services.skill_registry_service import skill_registry, SkillIndexItem
 from . import proactive_audit_service as audit
 from .llm_client import chat_completion
-from .proactive_skill_selector import select_proactive_skills
 
 logger = logging.getLogger(__name__)
 
 _DECISION_MODEL = settings.PALEBLUEDOT_MODEL
-
-# Capabilities whose data we can assess directly from MongoDB
-_INTERNAL_CAP_ID = "lumie_internal_data"
-
-
-# ── Skill execution ────────────────────────────────────────────────────────
-
-async def _load_proactive_credential(db, user_id: str, skill: SkillIndexItem) -> dict | None:
-    """Load credential for a skill from the database.
-
-    For lumie_internal_data skills, credentials are auto-generated on capability enable.
-    Returns None if credential is missing or has no ping token.
-    """
-    if not skill.requires_credentials:
-        return None
-
-    # Resolve the credential key (handles shared_credential_id)
-    credential_key = resolve_credential_key(skill)
-
-    # Look up credential by user_id + credential key
-    cred = await db.advisor_skill_credentials.find_one(
-        {"user_id": user_id, "skill_id": credential_key},
-        {"_id": 0}
-    )
-
-    if not cred:
-        logger.warning("Skill %s requires credential but none found for user %s", skill.skill_id, user_id)
-        return None
-
-    # For skills that require ping validation, ensure ping exists
-    if cred.get("ping"):
-        return cred
-
-    # Credential exists but no ping - cannot execute
-    logger.warning("Skill %s has credential but missing ping for user %s", skill.skill_id, user_id)
-    return None
-
-
-async def _run_skill_for_proactive(
-    db,
-    user_id: str,
-    skill: SkillIndexItem,
-    user_context: dict,
-) -> ProactiveSkillData:
-    """Run one skill via execution service, return raw data."""
-    from .execution_service import create_execution_job, run_execution_job
-
-    try:
-        skill_full_text = skill_registry.load_skill_full_text(skill.skill_id)
-        credential = await _load_proactive_credential(db, user_id, skill)
-
-        # If credential is required but missing, skip execution
-        if skill.requires_credentials and not credential:
-            logger.info("Skill %s skipped: required credential not found or missing ping", skill.skill_id)
-            return ProactiveSkillData(
-                skill_id=skill.skill_id,
-                domain=skill.proactive_domain or "unknown",
-                priority=skill.proactive_priority,
-                execution_status="no_data",
-                summary="Credential not configured",
-            )
-
-        job_id = await create_execution_job(
-            user_id=user_id,
-            session_id="proactive",
-            skill=skill,
-            prompt=f"[Proactive check] {skill.summary}",
-        )
-
-        await run_execution_job(
-            job_id=job_id,
-            skill=skill,
-            skill_full_text=skill_full_text or "",
-            credential=credential,
-            user_context=user_context,
-        )
-
-        job_doc = await db.execution_jobs.find_one({"job_id": job_id}, {"_id": 0})
-        if not job_doc:
-            return ProactiveSkillData(
-                skill_id=skill.skill_id,
-                domain=skill.proactive_domain or "unknown",
-                priority=skill.proactive_priority,
-                execution_status="failed",
-                summary="Job record not found",
-            )
-
-        result = job_doc.get("result") or {}
-        status = job_doc.get("status", "failed")
-
-        return ProactiveSkillData(
-            skill_id=skill.skill_id,
-            domain=skill.proactive_domain or "unknown",
-            priority=skill.proactive_priority,
-            execution_status=status,
-            data=result.get("data") or {},
-            summary=result.get("summary", ""),
-        )
-    except Exception as e:
-        logger.error("Skill %s failed for user=%s: %s", skill.skill_id, user_id, e, exc_info=True)
-        return ProactiveSkillData(
-            skill_id=skill.skill_id,
-            domain=skill.proactive_domain or "unknown",
-            priority=skill.proactive_priority,
-            execution_status="failed",
-            summary=f"Execution error: {str(e)[:100]}",
-        )
-
-
-async def _run_all_skills_for_proactive(
-    db, user_id: str, skills: list[SkillIndexItem], user_context: dict
-) -> list[ProactiveSkillData]:
-    """Run all selected skills concurrently with fault isolation."""
-    tasks = [_run_skill_for_proactive(db, user_id, skill, user_context) for skill in skills]
-    results = await asyncio.gather(*tasks, return_exceptions=True)
-    out = []
-    for skill, result in zip(skills, results):
-        if isinstance(result, Exception):
-            logger.error("Skill %s exception: %s", skill.skill_id, result)
-            out.append(ProactiveSkillData(
-                skill_id=skill.skill_id,
-                domain=skill.proactive_domain or "unknown",
-                priority=skill.proactive_priority,
-                execution_status="failed",
-                summary=f"Exception: {str(result)[:100]}",
-            ))
-        else:
-            out.append(result)
-    return out
-
-
-async def _run_skills_with_dependencies(
-    db,
-    user_id: str,
-    skills: list[SkillIndexItem],
-    user_context: dict,
-) -> list[ProactiveSkillData]:
-    """Run skills respecting DAG dependencies.
-
-    Skills with dependencies are organized into tiers:
-    - Tier 0: Skills with no dependencies (run in parallel)
-    - Tier N: Skills whose all dependencies are in tiers 0..N-1
-
-    Returns: List of ProactiveSkillData (one per original skill)
-    """
-    from .execution_service import _build_skill_dag, _topological_sort
-
-    # Build DAG and compute tiers
-    try:
-        dag = await _build_skill_dag(skills)
-        tiers = await _topological_sort(dag)
-    except ValueError as e:
-        logger.error("DAG error: %s", e)
-        # Fall back to parallel execution (ignore dependencies)
-        return await _run_all_skills_for_proactive(db, user_id, skills, user_context)
-
-    results_by_skill_id = {}
-    all_results = []
-
-    # Execute each tier
-    for tier_idx, tier_skill_ids in enumerate(tiers):
-        tier_skills = [s for s in skills if s.skill_id in tier_skill_ids]
-        logger.info(f"Proactive[{user_id}]: Tier {tier_idx} ({len(tier_skills)} skills)")
-
-        # Run all skills in tier in parallel
-        tasks = [
-            _run_skill_for_proactive_with_context(
-                db, user_id, skill, user_context,
-                context=results_by_skill_id,
-            )
-            for skill in tier_skills
-        ]
-        tier_results = await asyncio.gather(*tasks, return_exceptions=True)
-
-        # Collect results
-        for skill, result in zip(tier_skills, tier_results):
-            if isinstance(result, Exception):
-                logger.error("Skill %s exception in tier %d: %s", skill.skill_id, tier_idx, result)
-                result_data = ProactiveSkillData(
-                    skill_id=skill.skill_id,
-                    domain=skill.proactive_domain or "unknown",
-                    priority=skill.proactive_priority,
-                    execution_status="failed",
-                    summary=f"Exception: {str(result)[:100]}",
-                )
-            else:
-                result_data = result
-
-            results_by_skill_id[skill.skill_id] = result_data
-            all_results.append(result_data)
-
-    return all_results
-
-
-async def _run_skill_for_proactive_with_context(
-    db,
-    user_id: str,
-    skill: SkillIndexItem,
-    user_context: dict,
-    context: dict = None,
-) -> ProactiveSkillData:
-    """Run one skill via execution service with access to previous results.
-
-    Args:
-        context: Dict of skill_id -> ProactiveSkillData from prior tiers.
-    """
-    from .execution_service import create_execution_job, run_execution_job
-
-    try:
-        skill_full_text = skill_registry.load_skill_full_text(skill.skill_id)
-        credential = await _load_proactive_credential(db, user_id, skill)
-
-        # If credential is required but missing, skip execution
-        if skill.requires_credentials and not credential:
-            logger.info("Skill %s skipped: required credential not found or missing ping", skill.skill_id)
-            return ProactiveSkillData(
-                skill_id=skill.skill_id,
-                domain=skill.proactive_domain or "unknown",
-                priority=skill.proactive_priority,
-                execution_status="no_data",
-                summary="Credential not configured",
-            )
-
-        job_id = await create_execution_job(
-            user_id=user_id,
-            session_id="proactive",
-            skill=skill,
-            prompt=f"[Proactive check] {skill.summary}",
-        )
-
-        await run_execution_job(
-            job_id=job_id,
-            skill=skill,
-            skill_full_text=skill_full_text or "",
-            credential=credential,
-            user_context=user_context,
-            previous_results=context,  # ← Pass previous tier results
-        )
-
-        job_doc = await db.execution_jobs.find_one({"job_id": job_id}, {"_id": 0})
-        if not job_doc:
-            return ProactiveSkillData(
-                skill_id=skill.skill_id,
-                domain=skill.proactive_domain or "unknown",
-                priority=skill.proactive_priority,
-                execution_status="failed",
-                summary="Job record not found",
-            )
-
-        result = job_doc.get("result") or {}
-        status = job_doc.get("status", "failed")
-
-        return ProactiveSkillData(
-            skill_id=skill.skill_id,
-            domain=skill.proactive_domain or "unknown",
-            priority=skill.proactive_priority,
-            execution_status=status,
-            data=result.get("data") or {},
-            summary=result.get("summary", ""),
-        )
-    except Exception as e:
-        logger.error("Skill %s failed for user=%s: %s", skill.skill_id, user_id, e, exc_info=True)
-        return ProactiveSkillData(
-            skill_id=skill.skill_id,
-            domain=skill.proactive_domain or "unknown",
-            priority=skill.proactive_priority,
-            execution_status="failed",
-            summary=f"Execution error: {str(e)[:100]}",
-        )
 
 
 def _canonicalize(text: str) -> str:
@@ -393,7 +118,6 @@ async def _read_manual_checklist_items(db, user_id: str, profile: dict) -> list[
 def _build_checklist(
     manual_items: list[dict],
     today_dayprint: dict | None,
-    selected_skills: list[SkillIndexItem],
     manual_instruction_results: list[dict] | None = None,
 ) -> dict:
     """Build normalized proactive checklist payload for this run."""
@@ -404,15 +128,6 @@ def _build_checklist(
             "summary": (today_dayprint or {}).get("summary", ""),
             "events_count": len((today_dayprint or {}).get("events", [])),
         } if today_dayprint else None,
-        "enabled_skills": [
-            {
-                "skill_id": s.skill_id,
-                "domain": s.proactive_domain or "unknown",
-                "priority": s.proactive_priority,
-                "title": s.title,
-            }
-            for s in selected_skills
-        ],
         "manual_instruction_results": manual_instruction_results or [],
     }
 
@@ -505,6 +220,12 @@ async def _execute_manual_checklist_instructions(
         text = str(item.get("text", "")).strip()
         if not text:
             continue
+        proactive_message = (
+            "[Proactive checklist execution]\n"
+            "Interpret quoted phrases as literal task/template names by default. "
+            "Only treat a person/member target as intended when the instruction explicitly asks about a specific person/member.\n\n"
+            f"{text}"
+        )
 
         logger.info("Proactive[%s]: executing manual checklist item %s", user_id, item_id)
         result_doc = {
@@ -524,10 +245,26 @@ async def _execute_manual_checklist_instructions(
         try:
             result = await advisor_orchestrator.handle_chat(
                 user_id=user_id,
-                message=text,
+                message=proactive_message,
                 history=[],
                 session_id="proactive",
             )
+            first_reply = result.get("reply") or ""
+            if result.get("type") != "execution":
+                logger.info(
+                    "Proactive[%s]: manual checklist item %s non-execution first turn; sending auto-confirmation",
+                    user_id,
+                    item_id,
+                )
+                result = await advisor_orchestrator.handle_chat(
+                    user_id=user_id,
+                    message="Yes, please proceed now and execute it.",
+                    history=[
+                        {"role": "user", "content": proactive_message},
+                        {"role": "assistant", "content": first_reply},
+                    ],
+                    session_id="proactive",
+                )
             result_doc["result_type"] = result.get("type")
             result_doc["summary"] = (result.get("reply") or "")[:240]
 
@@ -536,8 +273,10 @@ async def _execute_manual_checklist_instructions(
                 result_doc["job_id"] = job_id
                 job = await _wait_for_execution_job_terminal(db, job_id, timeout_seconds=180)
                 result_doc["status"] = job.get("status", "failed")
+                result_doc["executed_skill_id"] = job.get("skill_id")
                 if job.get("status") == "success":
                     result_doc["summary"] = ((job.get("result") or {}).get("summary") or result_doc["summary"])[:240]
+                    result_doc["execution_result_data"] = (job.get("result") or {}).get("data") or {}
                 else:
                     result_doc["summary"] = (job.get("error") or result_doc["summary"] or "execution_failed")[:240]
             else:
@@ -575,6 +314,77 @@ async def _execute_manual_checklist_instructions(
     return updated_items, instruction_results
 
 
+def _build_skill_data_from_manual_instruction_results(
+    manual_instruction_results: list[dict],
+) -> list[ProactiveSkillData]:
+    """Normalize manual checklist execution outputs into proactive skill-style records."""
+    out: list[ProactiveSkillData] = []
+    for r in manual_instruction_results or []:
+        item_id = str(r.get("item_id") or uuid.uuid4())
+        status = str(r.get("status") or "failed")
+        execution_status = "success" if status == "success" else "failed"
+        source_skill_id = (r.get("executed_skill_id") or "").strip()
+        summary = str(r.get("summary") or "").strip()
+        text = str(r.get("text") or "").strip()
+        domain = "manual_checklist"
+        if source_skill_id:
+            if "task" in source_skill_id:
+                domain = "tasks"
+            elif "health" in source_skill_id or "hr" in source_skill_id or "spo2" in source_skill_id:
+                domain = "health"
+
+        out.append(
+            ProactiveSkillData(
+                skill_id=f"manual_item:{item_id}",
+                domain=domain,
+                priority=100,
+                execution_status=execution_status,
+                data={
+                    "manual_item_text": text,
+                    "source_skill_id": source_skill_id or None,
+                    "result_type": r.get("result_type"),
+                    "execution_result_data": r.get("execution_result_data") or {},
+                },
+                summary=summary,
+            )
+        )
+    return out
+
+
+def _build_prompt_checklist_payload(proactive_checklist: dict | None) -> dict | None:
+    """Build a deduplicated prompt payload so each manual item text appears once."""
+    if not proactive_checklist:
+        return None
+
+    manual_items = proactive_checklist.get("manual_items") or []
+    manual_results = proactive_checklist.get("manual_instruction_results") or []
+
+    # Keep full manual text only in manual_items.
+    compact_results = []
+    for r in manual_results:
+        compact_results.append({
+            "item_id": r.get("item_id"),
+            "status": r.get("status"),
+            "result_type": r.get("result_type"),
+            "summary": r.get("summary"),
+            "must_preserve": bool(r.get("must_preserve")),
+            "executed_skill_id": r.get("executed_skill_id"),
+        })
+
+    return {
+        "manual_items": [
+            {
+                "item_id": i.get("item_id"),
+                "text": i.get("text"),
+                "status": i.get("status"),
+            }
+            for i in manual_items
+        ],
+        "today_dayprint": proactive_checklist.get("today_dayprint"),
+        "manual_instruction_results": compact_results,
+    }
+
+
 # ── LLM decision prompt ────────────────────────────────────────────────────
 
 def _build_decision_prompt(
@@ -600,13 +410,16 @@ def _build_decision_prompt(
     # Serialize current round skill data with priority embedded
     current_results_for_llm = []
     for s in skill_data:
+        data_for_prompt = dict(s.data or {})
+        # Text already exists in checklist.manual_items; avoid repeating it here.
+        data_for_prompt.pop("manual_item_text", None)
         current_results_for_llm.append({
             "skill_id": s.skill_id,
             "domain": s.domain,
             "priority": s.priority,
             "execution_status": s.execution_status,
             "summary": s.summary,
-            "data": s.data,
+            "data": data_for_prompt,
         })
 
     condition_str = f" with condition code {icd10}" if icd10 else ""
@@ -657,9 +470,10 @@ def _build_decision_prompt(
         }
         user_parts.append(json.dumps(dayprint_summary, indent=2))
 
-    if proactive_checklist:
+    prompt_checklist = _build_prompt_checklist_payload(proactive_checklist)
+    if prompt_checklist:
         user_parts.append("\n=== PROACTIVE CHECKLIST ===\n")
-        user_parts.append(json.dumps(proactive_checklist, indent=2))
+        user_parts.append(json.dumps(prompt_checklist, indent=2))
 
     user_parts.append("\n\nBased on these assessments and context, should I reach out to the user?\n\n"
                       "GUIDANCE FOR YOUR MESSAGE:\n"
@@ -684,9 +498,10 @@ async def run_proactive_check(user_id: str) -> dict:
     """Run a proactive advisor check for a single user.
 
     New architecture:
-    - All proactive-eligible assessment skills run in parallel
+    - Manual checklist items are handled first (may trigger skills via orchestrator)
+    - Current-round assessment data comes from manual execution outputs
     - Information rounds are persisted for trend analysis
-    - A proactive checklist (manual priorities + today's dayprint + enabled skills)
+    - A proactive checklist (manual priorities + today's dayprint)
       is assembled before decision.
     - LLM gets current round + last round + today's dayprint + last nudge + checklist
     - No deterministic guardrails; LLM decides everything
@@ -728,17 +543,7 @@ async def run_proactive_check(user_id: str) -> dict:
         icd10 or "none",
     )
 
-    # ── 2. Enabled capabilities ─────────────────────────────────────────────
-    enabled_cap_ids = await get_user_enabled_capability_ids(user_id)
-    if not enabled_cap_ids:
-        logger.info("Proactive[%s]: no enabled capabilities — skip", user_id)
-        return {"nudged": False, "message": None, "reason": "no_enabled_capabilities"}
-
-    if _INTERNAL_CAP_ID not in enabled_cap_ids:
-        logger.info("Proactive[%s]: lumie_internal_data not enabled — skip", user_id)
-        return {"nudged": False, "message": None, "reason": "no_internal_data_capability"}
-
-    logger.info("Proactive[%s]: run_id=%s round_id=%s capabilities=%s", user_id, run_id, round_id, sorted(enabled_cap_ids))
+    logger.info("Proactive[%s]: run_id=%s round_id=%s", user_id, run_id, round_id)
 
     # ── 2.5 Build proactive checklist context ─────────────────────────────
     manual_items = await _read_manual_checklist_items(db, user_id, profile)
@@ -751,18 +556,6 @@ async def run_proactive_check(user_id: str) -> dict:
     )
     if today_dayprint:
         logger.info("Proactive[%s]: found today's dayprint with %d events", user_id, len(today_dayprint.get("events", [])))
-
-    # ── 3. Select and run proactive skills (enabled capabilities only) ──
-    selected_skills = select_proactive_skills(enabled_cap_ids)
-    if not selected_skills:
-        logger.warning("Proactive[%s]: no proactive skills selected", user_id)
-        return {"nudged": False, "message": None, "reason": "no_proactive_skills_selected"}
-
-    logger.info(
-        "Proactive[%s]: selected proactive skills=%s",
-        user_id,
-        [(s.skill_id, s.proactive_domain, s.proactive_priority) for s in selected_skills],
-    )
 
     manual_items_updated, manual_instruction_results = await _execute_manual_checklist_instructions(
         db=db,
@@ -790,39 +583,24 @@ async def run_proactive_check(user_id: str) -> dict:
     proactive_checklist = _build_checklist(
         manual_items=manual_items_updated or manual_items,
         today_dayprint=today_dayprint,
-        selected_skills=selected_skills,
         manual_instruction_results=manual_instruction_results,
     )
     logger.info(
-        "Proactive[%s]: checklist built manual=%d dayprint=%s enabled_skills=%d",
+        "Proactive[%s]: checklist built manual=%d dayprint=%s manual_results=%d",
         user_id,
         len(proactive_checklist.get("manual_items") or []),
         "yes" if proactive_checklist.get("today_dayprint") else "no",
-        len(proactive_checklist.get("enabled_skills") or []),
+        len(proactive_checklist.get("manual_instruction_results") or []),
     )
 
-    # Build user context for execution
-    user_context = {
-        "name": user_name,
-        "role": role,
-        "icd10_code": icd10,
-        "timezone": user_timezone,
-        "advisor_name": "Lumie",
-    }
-
-    # Run all skills with DAG dependency resolution (fault-isolated)
-    skill_data = await _run_skills_with_dependencies(db, user_id, selected_skills, user_context)
+    # Build assessment data from manual checklist execution outputs.
+    skill_data = _build_skill_data_from_manual_instruction_results(manual_instruction_results)
 
     logger.info(
-        "Proactive[%s]: %d skill results: %s",
+        "Proactive[%s]: %d manual assessment results",
         user_id,
         len(skill_data),
-        [(s.skill_id, s.execution_status) for s in skill_data],
     )
-
-    if not skill_data:
-        logger.warning("Proactive[%s]: all skills failed — skip", user_id)
-        return {"nudged": False, "message": None, "reason": "all_skills_failed"}
 
     # ── 3.5. Save information round for this proactive run ─────────────────
     logger.info("Proactive[%s]: saving information round round_id=%s", user_id, round_id)
@@ -888,7 +666,11 @@ async def run_proactive_check(user_id: str) -> dict:
                 "status": r.get("execution_status"),
                 "priority": r.get("priority"),
                 "summary": r.get("summary"),
-                "data": r.get("data"),
+                "data": {
+                    k: v
+                    for k, v in (r.get("data") or {}).items()
+                    if k != "manual_item_text"
+                },
             }
             for r in last_round_doc.get("skill_data", [])
         ]

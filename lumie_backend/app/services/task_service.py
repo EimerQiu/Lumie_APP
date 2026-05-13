@@ -196,8 +196,8 @@ class TaskService:
             associations=doc.get("associations", []),
             completed_at=format_utc_datetime(doc["completed_at"]) if doc.get("completed_at") else None,
             extension_count=doc.get("extension_count", 0),
-            created_at=format_utc_datetime(doc["created_at"]),
-            updated_at=format_utc_datetime(doc["updated_at"]),
+            created_at=format_utc_datetime(doc.get("created_at") or "2024-01-01T00:00:00Z"),
+            updated_at=format_utc_datetime(doc.get("updated_at") or doc.get("created_at") or "2024-01-01T00:00:00Z"),
         )
 
     async def analyze_nutrition_uploads(self, files: List[UploadFile]) -> str:

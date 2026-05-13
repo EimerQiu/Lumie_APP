@@ -63,6 +63,7 @@ The primary skill for all task and medication queries — whether the user wants
 # Connector Rules
 - Allowed connector: `lumie_db_connector`
 - Query from: `tasks`
+- **READ-ONLY. NEVER insert, update, or delete any document. Do NOT create reminder tasks, placeholder tasks, or any other records.**
 
 # Data Model
 

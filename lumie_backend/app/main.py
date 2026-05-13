@@ -1,5 +1,6 @@
 """Lumie API - FastAPI application."""
 import logging
+import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -36,14 +37,17 @@ from .api.workout_routes import router as workout_router
 from .api.meal_routes import router as meal_router
 
 # Configure logging
+_LOG_LEVEL_NAME = os.getenv("LOG_LEVEL", "INFO").upper()
+_LOG_LEVEL = getattr(logging, _LOG_LEVEL_NAME, logging.INFO)
 logging.basicConfig(
-    level=logging.INFO,
+    level=_LOG_LEVEL,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
         logging.StreamHandler()
     ]
 )
 logger = logging.getLogger(__name__)
+logger.info("Logging configured level=%s", _LOG_LEVEL_NAME if hasattr(logging, _LOG_LEVEL_NAME) else "INFO")
 
 
 @asynccontextmanager
