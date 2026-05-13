@@ -85,6 +85,81 @@ def _looks_like_schedule_detail(message: str) -> bool:
     return any(re.search(p, text) for p in patterns)
 
 
+def _is_planner_message(message: str) -> bool:
+    return (message or "").lstrip().startswith("[Planner execution]")
+
+
+def _should_use_planner_for_request(
+    *,
+    message: str,
+    should_execute_skill: bool,
+    selected_skill_id: str,
+    is_write_operation_task: bool,
+    session_id: Optional[str],
+) -> bool:
+    """Heuristic for escalating complex requests to planner orchestration."""
+    if not should_execute_skill:
+        return False
+    if _is_planner_message(message):
+        return False
+    if session_id == "proactive":
+        return False
+
+    text = (message or "").lower()
+    multi_step_markers = [
+        " if ",
+        " then ",
+        " and if ",
+        "including",
+        "first ",
+        "then ",
+    ]
+    likely_multi_step = any(m in text for m in multi_step_markers)
+    task_skills = {"tasks_create", "task_keyword_search", "tasks_query"}
+    if selected_skill_id in task_skills and likely_multi_step:
+        return True
+    if is_write_operation_task and likely_multi_step:
+        return True
+    return False
+
+
+async def _run_planner_for_chat(
+    *,
+    user_id: str,
+    session_id: Optional[str],
+    message: str,
+) -> dict:
+    from .planner_service import run_planner_session
+
+    db = get_database()
+    planner = await run_planner_session(
+        db=db,
+        user_id=user_id,
+        source="chat",
+        goal_text=message,
+        session_id=session_id or "default",
+        max_steps=5,
+        auto_confirm=True,
+    )
+    status = planner.get("status")
+    summary = planner.get("final_summary") or "Planner session completed."
+    if status == "done":
+        return {
+            "type": "direct",
+            "reply": summary,
+            "reply_class": "executed",
+            "is_write_operation_task": True,
+            "planner_session_id": planner.get("planner_session_id"),
+        }
+    return {
+        "type": "guidance",
+        "reply": summary,
+        "reply_class": "failed",
+        "is_write_operation_task": True,
+        "planner_session_id": planner.get("planner_session_id"),
+    }
+
+
 async def _get_pending_task_create_action(user_id: str, session_id: Optional[str]) -> Optional[dict]:
     db = get_database()
     if db is None:
@@ -800,6 +875,18 @@ async def handle_chat(
                     "reply_class": "clarification_needed",
                     "is_write_operation_task": is_write_operation_task,
                 }
+            if _should_use_planner_for_request(
+                message=message,
+                should_execute_skill=should_execute_skill,
+                selected_skill_id=skill_id,
+                is_write_operation_task=is_write_operation_task,
+                session_id=session_id,
+            ):
+                return await _run_planner_for_chat(
+                    user_id=user_id,
+                    session_id=session_id,
+                    message=message,
+                )
             return await _handle_skill_execution(
                 user_id=user_id,
                 session_id=session_id,

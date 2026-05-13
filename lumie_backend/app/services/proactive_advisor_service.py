@@ -10,7 +10,6 @@ New design (v3):
   7. Audit records persisted for observability.
 """
 
-import asyncio
 import hashlib
 import json
 import logging
@@ -185,31 +184,13 @@ def _ensure_checklist_preserved_in_message(
     return out
 
 
-async def _wait_for_execution_job_terminal(
-    db,
-    job_id: str,
-    timeout_seconds: int = 180,
-) -> dict:
-    """Poll one execution job until terminal state or timeout."""
-    deadline = datetime.now(timezone.utc) + timedelta(seconds=timeout_seconds)
-    while datetime.now(timezone.utc) < deadline:
-        job = await db.execution_jobs.find_one({"job_id": job_id}, {"_id": 0})
-        if not job:
-            return {"status": "failed", "error": "job_not_found"}
-        status = job.get("status")
-        if status in {"success", "failed", "cancelled"}:
-            return job
-        await asyncio.sleep(2)
-    return {"status": "timeout", "error": f"job_timeout_after_{timeout_seconds}s"}
-
-
 async def _execute_manual_checklist_instructions(
     db,
     user_id: str,
     manual_items: list[dict],
 ) -> tuple[list[dict], list[dict]]:
-    """Execute each manual checklist item through advisor orchestrator flow."""
-    from . import advisor_orchestrator
+    """Execute each manual checklist item through planner service."""
+    from .planner_service import run_planner_session
 
     now_str = format_utc_datetime(datetime.now(timezone.utc))
     updated_items: list[dict] = []
@@ -220,13 +201,6 @@ async def _execute_manual_checklist_instructions(
         text = str(item.get("text", "")).strip()
         if not text:
             continue
-        proactive_message = (
-            "[Proactive checklist execution]\n"
-            "Interpret quoted phrases as literal task/template names by default. "
-            "Only treat a person/member target as intended when the instruction explicitly asks about a specific person/member.\n\n"
-            f"{text}"
-        )
-
         logger.info("Proactive[%s]: executing manual checklist item %s", user_id, item_id)
         result_doc = {
             "item_id": item_id,
@@ -243,45 +217,24 @@ async def _execute_manual_checklist_instructions(
         }
 
         try:
-            result = await advisor_orchestrator.handle_chat(
+            planner_result = await run_planner_session(
+                db=db,
                 user_id=user_id,
-                message=proactive_message,
-                history=[],
+                source="proactive",
+                goal_text=text,
                 session_id="proactive",
+                max_steps=4,
+                auto_confirm=True,
             )
-            first_reply = result.get("reply") or ""
-            if result.get("type") != "execution":
-                logger.info(
-                    "Proactive[%s]: manual checklist item %s non-execution first turn; sending auto-confirmation",
-                    user_id,
-                    item_id,
-                )
-                result = await advisor_orchestrator.handle_chat(
-                    user_id=user_id,
-                    message="Yes, please proceed now and execute it.",
-                    history=[
-                        {"role": "user", "content": proactive_message},
-                        {"role": "assistant", "content": first_reply},
-                    ],
-                    session_id="proactive",
-                )
-            result_doc["result_type"] = result.get("type")
-            result_doc["summary"] = (result.get("reply") or "")[:240]
+            result_doc["planner_session_id"] = planner_result.get("planner_session_id")
+            result_doc["status"] = "success" if planner_result.get("status") == "done" else "failed"
+            result_doc["summary"] = (planner_result.get("final_summary") or "")[:240]
 
-            if result.get("type") == "execution" and result.get("job_id"):
-                job_id = result.get("job_id")
-                result_doc["job_id"] = job_id
-                job = await _wait_for_execution_job_terminal(db, job_id, timeout_seconds=180)
-                result_doc["status"] = job.get("status", "failed")
-                result_doc["executed_skill_id"] = job.get("skill_id")
-                if job.get("status") == "success":
-                    result_doc["summary"] = ((job.get("result") or {}).get("summary") or result_doc["summary"])[:240]
-                    result_doc["execution_result_data"] = (job.get("result") or {}).get("data") or {}
-                else:
-                    result_doc["summary"] = (job.get("error") or result_doc["summary"] or "execution_failed")[:240]
-            else:
-                # direct/guidance is still a completed instruction-handling turn
-                result_doc["status"] = "success" if result.get("type") in {"direct", "guidance"} else "failed"
+            steps = planner_result.get("steps") or []
+            last_step = steps[-1] if steps else {}
+            result_doc["result_type"] = last_step.get("advisor_response_type")
+            result_doc["job_id"] = last_step.get("job_id")
+            result_doc["executed_skill_id"] = last_step.get("executed_skill_id")
         except Exception as e:
             result_doc["status"] = "failed"
             result_doc["summary"] = f"instruction_error: {str(e)[:180]}"
