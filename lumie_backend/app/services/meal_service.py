@@ -39,6 +39,7 @@ from ..core.datetime_utils import format_utc_datetime
 from ..models.meal import (
     MacroLevel,
     MacroRatio,
+    MacroScores,
     MealVisibility,
     MealType,
     MealStructure,
@@ -395,6 +396,7 @@ class MealService:
             is_packaged=parsed.get("is_packaged", False),
             detected_brand=parsed.get("detected_brand"),
             detected_product=parsed.get("detected_product"),
+            macro_scores=MacroScores(**parsed["macro_scores"]) if parsed.get("macro_scores") else None,
             meal_name=parsed.get("meal_name")
                 or self._derive_meal_name_from_items(parsed["food_items"]),
             nutrition_level=(
@@ -455,6 +457,7 @@ class MealService:
             is_packaged=parsed.get("is_packaged", False),
             detected_brand=parsed.get("detected_brand"),
             detected_product=parsed.get("detected_product"),
+            macro_scores=MacroScores(**parsed["macro_scores"]) if parsed.get("macro_scores") else None,
             meal_name=parsed.get("meal_name")
                 or self._derive_meal_name_from_items(food_dumps),
             nutrition_level=(
@@ -765,6 +768,43 @@ class MealService:
         if is_packaged and not detected_brand:
             is_packaged = False
 
+        # Continuous macro scores (0.0–1.0). Parse LLM output; fall back to
+        # centre-of-range values so legacy data always has a usable score.
+        def _level_to_score(lvl: Optional[str]) -> float:
+            return {"low": 0.17, "moderate": 0.50, "high": 0.83}.get(lvl or "", 0.50)
+
+        def _coerce_score(v: Any) -> Optional[float]:
+            if isinstance(v, bool):
+                return None
+            if isinstance(v, (int, float)):
+                return float(max(0.0, min(1.0, v)))
+            if isinstance(v, str):
+                try:
+                    return float(max(0.0, min(1.0, float(v))))
+                except Exception:
+                    pass
+            return None
+
+        scores_raw = data.get("macro_scores") if isinstance(data, dict) else None
+        if isinstance(scores_raw, dict):
+            macro_scores = {
+                "protein": _coerce_score(scores_raw.get("protein")) or _level_to_score(meal_ratio.get("protein")),
+                "carbs": _coerce_score(scores_raw.get("carbs")) or _level_to_score(meal_ratio.get("carbs")),
+                "fat": _coerce_score(scores_raw.get("fat")) or _level_to_score(meal_ratio.get("fat")),
+                "fiber": _coerce_score(scores_raw.get("fiber")) or _level_to_score(meal_ratio.get("fiber")),
+                "processing_level": _coerce_score(scores_raw.get("processing_level")) or _level_to_score(processing_level),
+                "added_sugar": _coerce_score(scores_raw.get("added_sugar")) or _level_to_score(added_sugar),
+            }
+        else:
+            macro_scores = {
+                "protein": _level_to_score(meal_ratio.get("protein")),
+                "carbs": _level_to_score(meal_ratio.get("carbs")),
+                "fat": _level_to_score(meal_ratio.get("fat")),
+                "fiber": _level_to_score(meal_ratio.get("fiber")),
+                "processing_level": _level_to_score(processing_level),
+                "added_sugar": _level_to_score(added_sugar),
+            }
+
         return {
             "food_items": food_items,
             "macro_ratio": meal_ratio,
@@ -777,6 +817,7 @@ class MealService:
             "is_packaged": is_packaged,
             "detected_brand": detected_brand,
             "detected_product": detected_product,
+            "macro_scores": macro_scores,
         }
 
     # ============ CRUD ============
@@ -819,6 +860,22 @@ class MealService:
             inferred = self._infer_structure_from_items(food_items_raw)
             structure_raw = inferred or MealStructure.MULTI_ITEM.value
 
+        # Continuous macro scores — read from document or derive from levels.
+        _lvl_score = {"low": 0.17, "moderate": 0.50, "high": 0.83}
+        scores_doc = doc.get("macro_scores")
+        if isinstance(scores_doc, dict) and scores_doc:
+            macro_scores_obj = MacroScores(**scores_doc)
+        else:
+            mr = macro_ratio_raw or {}
+            macro_scores_obj = MacroScores(
+                protein=_lvl_score.get(mr.get("protein", "moderate"), 0.5),
+                carbs=_lvl_score.get(mr.get("carbs", "moderate"), 0.5),
+                fat=_lvl_score.get(mr.get("fat", "moderate"), 0.5),
+                fiber=_lvl_score.get(mr.get("fiber", "moderate"), 0.5),
+                processing_level=_lvl_score.get(proc_raw, 0.5),
+                added_sugar=_lvl_score.get(sugar_raw, 0.5),
+            )
+
         return MealResponse(
             meal_id=doc["meal_id"],
             user_id=doc["user_id"],
@@ -827,6 +884,7 @@ class MealService:
             food_items=[FoodItem(**fi) for fi in food_items_raw],
             macro_ratio=MacroRatio(**macro_ratio_raw),
             structure=MealStructure(structure_raw),
+            macro_scores=macro_scores_obj,
             is_packaged=bool(doc.get("is_packaged", False)),
             detected_brand=doc.get("detected_brand"),
             detected_product=doc.get("detected_product"),
@@ -1209,12 +1267,27 @@ class MealService:
             source_type_value = "nutrition_task"
             source_task_id_value = data.linked_task_id
 
+        # Derive macro scores for persistence.
+        _lvl_score2 = {"low": 0.17, "moderate": 0.50, "high": 0.83}
+        if data.macro_scores is not None:
+            scores_to_store = data.macro_scores.model_dump()
+        else:
+            scores_to_store = {
+                "protein": _lvl_score2.get(macro_ratio_dump.get("protein", "moderate"), 0.5),
+                "carbs": _lvl_score2.get(macro_ratio_dump.get("carbs", "moderate"), 0.5),
+                "fat": _lvl_score2.get(macro_ratio_dump.get("fat", "moderate"), 0.5),
+                "fiber": _lvl_score2.get(macro_ratio_dump.get("fiber", "moderate"), 0.5),
+                "processing_level": _lvl_score2.get(processing_level_value, 0.5),
+                "added_sugar": _lvl_score2.get(added_sugar_value, 0.5),
+            }
+
         doc = {
             "meal_id": data.meal_id,
             "user_id": user_id,
             "images": images,
             "food_items": food_items_dump,
             "macro_ratio": macro_ratio_dump,
+            "macro_scores": scores_to_store,
             "structure": structure_value,
             "is_packaged": bool(data.is_packaged) if data.is_packaged is not None else False,
             "detected_brand": (data.detected_brand or "").strip() or None,
@@ -2144,6 +2217,7 @@ class MealService:
             "is_packaged": bool(structured.get("is_packaged", False)),
             "detected_brand": structured.get("detected_brand"),
             "detected_product": structured.get("detected_product"),
+            "macro_scores": structured.get("macro_scores"),
             "bridge_note_hash": note_hash,
             "updated_at": now,
         }
@@ -2212,6 +2286,69 @@ class MealService:
                     meal.get("meal_id"), exc,
                 )
         return meal["meal_id"]
+
+    async def _load_health_context(self, user_id: str) -> str:
+        """Build a personalised health-condition block for the structuring prompt.
+
+        Reads the user's ICD-10 code from their profile and injects a concise
+        instruction block so the LLM can weight the advisor_insight and
+        nutrition_level for their specific condition. Returns an empty string
+        when no condition is recorded (most users) so the prompt is unchanged.
+        """
+        if not user_id:
+            return ""
+        try:
+            from .icd10_service import ICD10_CODES
+            db = get_database()
+            profile = await db.profiles.find_one({"user_id": user_id})
+            if not profile:
+                return ""
+            code = (profile.get("icd10_code") or "").strip()
+            if not code:
+                return ""
+            # Resolve human-readable label (exact or prefix match)
+            label: Optional[str] = None
+            for entry in ICD10_CODES:
+                if entry.code == code:
+                    label = entry.description
+                    break
+            if not label:
+                prefix = code.split(".")[0]
+                for entry in ICD10_CODES:
+                    if entry.code == prefix:
+                        label = entry.description
+                        break
+            display = f"{label} ({code})" if label else code
+            return (
+                f"\n\nUSER HEALTH CONDITION: {display}.\n"
+                "Personalise BOTH advisor_insight AND nutrition_level for this "
+                "condition:\n"
+                "  • Use your dietary/medical knowledge to identify the specific "
+                "macro or ingredient concern most relevant to this condition "
+                "(e.g. sodium for hypertension, fast-acting carbs and added sugar "
+                "for diabetes, saturated fat for heart disease, "
+                "phosphorus/potassium/sodium for kidney disease, fibre for "
+                "digestive conditions).\n"
+                "  • Be direct and clear in the insight about anything that "
+                "matters for this condition — do NOT soften condition-relevant "
+                "concerns to the point they are missed.\n"
+                "  • When a meal aspect is particularly problematic for this "
+                "condition, lower nutrition_level by one tier (see CONDITION-"
+                "WEIGHTED SCORING above).\n"
+                "  • Tone: caring and empowering — a trusted friend who knows "
+                "the user's health context. Not a clinical warning. End the "
+                "insight constructively. Example for hypertension + high-sodium "
+                "meal: 'This meal is quite high in sodium — given your blood "
+                "pressure, it's worth keeping an eye on how often you're having "
+                "meals like this. Enjoy it today but try to balance with lower "
+                "sodium choices for the rest of the day'."
+            )
+        except Exception as exc:
+            logger.warning(
+                "Could not load health context for meal insight user_id=%s: %s",
+                user_id, exc,
+            )
+            return ""
 
     async def _build_history_context(self, user_id: str) -> Optional[str]:
         """Compact 14-day-history summary, injected into the structuring prompt
@@ -2288,6 +2425,7 @@ class MealService:
         )
         correction_hint = ""
         history_block = ""
+        health_block = ""
         if user_id:
             try:
                 correction_hint = await self._load_correction_hints(user_id)
@@ -2304,6 +2442,9 @@ class MealService:
                     "Structure 14-day history injected len=%d",
                     len(history_context),
                 )
+            health_block = await self._load_health_context(user_id)
+            if health_block:
+                logger.info("Structure health context injected len=%d", len(health_block))
 
         system = (
             "You convert a short food description into structured meal data. "
@@ -2319,23 +2460,36 @@ class MealService:
             "high=heavily sweetened like desserts, sodas, candy), "
             "advisor_insight (1–2 short sentences, curious/observational tone, "
             "never judgmental, never numeric). "
-            "\n\nADVISOR TONE RULES:\n"
-            "- One-off treat in an otherwise balanced 2-week history: warm, "
-            "permissive, celebratory. Example: \"A sweet treat every now and "
-            "then is completely fine — you've been nourishing yourself really "
-            "well\".\n"
-            "- Occasional processed meal in a good history: light and gentle. "
-            "Example: \"A little convenience food here and there is part of "
-            "real life — aim to balance it out with some whole foods when you "
-            "can\".\n"
-            "- Frequent processed or high-added-sugar meals over the past 14 "
-            "days: warm but direct. Example: \"You've been reaching for "
-            "processed foods quite a bit lately — your body would really "
-            "benefit from some more whole, nourishing meals this week\".\n"
-            "- Consistently nutritious history: celebrate it. Example: "
-            "\"You've been fuelling yourself really well — keep it up\".\n"
-            "- Few or no recent meals: analyse this single meal only, no "
-            "historical framing.\n"
+            "\n\nADVISOR TONE RULES — honest, caring, and informative:\n"
+            "The insight is from a knowledgeable friend who tells the truth in "
+            "a caring way. It is NOT empty praise and it is NOT a warning label. "
+            "It informs and suggests — it does not shame.\n"
+            "ALWAYS structure the insight:\n"
+            "  1. What is good or neutral about the meal (be specific).\n"
+            "  2. What to be aware of — honest, clear, and specific. Do NOT "
+            "sugarcoat real concerns to the point they are missed.\n"
+            "  3. A brief constructive suggestion or neutral close. The insight "
+            "MUST end on a constructive or neutral note — never on a warning.\n"
+            "Examples of the RIGHT tone:\n"
+            "- Solid meal: \"This is a solid breakfast — the eggs and whole wheat "
+            "bread give you a good protein and fibre base. The peanut butter adds "
+            "some healthy fat, just be mindful of portion size if you're watching "
+            "your sodium intake\"\n"
+            "- Treat with concern: \"Enjoy the treat — acai bowls can be nutritious "
+            "but this one looks fairly heavy on granola which adds up in sugar. "
+            "Worth balancing it out with a lighter next meal\"\n"
+            "- Processed meal: \"This meal is quite processed and high in sodium — "
+            "fine occasionally but something to keep in mind if you're eating this "
+            "regularly\"\n"
+            "History context rules:\n"
+            "- One-off treat in an otherwise balanced history: warm, permissive "
+            "— one honest note if there's something worth mentioning.\n"
+            "- Frequent processed/high-sugar meals over 14 days: honest and direct "
+            "but caring. Example: \"You've been reaching for processed foods quite "
+            "a bit lately — your body would really benefit from some more whole, "
+            "nourishing meals this week\".\n"
+            "- Consistently nutritious history: celebrate it.\n"
+            "- Few or no recent meals: analyse this meal only, no historical framing.\n"
             "\nNUTRITION LEVEL GRADING — be PERMISSIVE, not punishing.\n"
             "A meal does NOT need to be perfect to be Nutritious. Default "
             "UPWARD: any meal that is reasonably balanced AND minimally "
@@ -2368,6 +2522,14 @@ class MealService:
             "history clearly supports it.\n"
             "\nA single indulgent meal in an otherwise nutritious 14-day "
             "history must NOT be scored Limited — context-shift upward.\n"
+            "\nCONDITION-WEIGHTED SCORING — when a USER HEALTH CONDITION is "
+            "specified (see the block injected below), a meal aspect that is "
+            "especially problematic for that condition (e.g. high sodium for "
+            "hypertension, fast-acting carbs/added sugar for diabetes, saturated "
+            "fat for heart disease) should lower nutrition_level by ONE tier "
+            "compared to the standard grading above. Apply only when clearly "
+            "relevant — do not lower the score for conditions where the meal "
+            "presents no additional risk.\n"
             "\nFORBIDDEN WORDS — never use any form of: bad, unhealthy, "
             "wrong, junk, guilty, cheat, failure, warning, avoid, restrict, "
             "or anything that could trigger food anxiety. Tone is always a "
@@ -2450,6 +2612,22 @@ class MealService:
             "every component into its `ingredients` array, each with a "
             "`portion_weight` reflecting how much of the dish that "
             "component takes up.\n"
+            "NATURAL LANGUAGE INGREDIENT PARSING — when a description "
+            "lists ingredients as a continuous space-separated sequence "
+            "after 'with' or as a final 'and X' clause (with NO commas "
+            "between individual items), parse EACH word or multi-word "
+            "phrase as a separate ingredient. Multi-word ingredient names "
+            "(peanut butter, cocoa butter, cream cheese, almond butter, "
+            "coconut flakes, etc.) stay together as one ingredient. "
+            "Example: 'Acai bowl with mango strawberry banana blueberry "
+            "granola peanut butter and cocoa butter' → "
+            "structure=single_item_with_ingredients, food_items=[{"
+            "name:'Acai bowl', ingredients:[{name:'Mango'}, "
+            "{name:'Strawberry'}, {name:'Banana'}, {name:'Blueberry'}, "
+            "{name:'Granola'}, {name:'Peanut butter'}, "
+            "{name:'Cocoa butter'}]}]. Apply the same parsing whenever "
+            "you see 'X bowl with A B C and D', 'X salad with A B C', "
+            "or any similar natural language composite-dish pattern.\n"
             "If the structure is genuinely ambiguous, default to "
             "multi_item. Set the top-level `structure` field accordingly.\n"
             "\nPORTION-AWARE MACRO WEIGHTING — the meal-level `macro_ratio` "
@@ -2462,8 +2640,49 @@ class MealService:
             "whole-food item dominates, highlight that positively; if a "
             "less nutritious item dominates after user adjustment, gently "
             "note the balance and suggest keeping whole-food portions "
-            "generous — never judgmental, never use forbidden words."
+            "generous — never judgmental, never use forbidden words.\n"
+            "\nQUANTITY-AWARE ADDED SUGAR AND NUTRITION LEVEL:\n"
+            "Extract any quantity cues embedded in ingredient names — "
+            "e.g. '1 tbsp granola', '30g granola', 'a small handful of "
+            "granola', 'a drizzle of honey', '1 serving peanut butter'. "
+            "Use that quantity to weight the ingredient's contribution "
+            "to added_sugar and nutrition_level.\n"
+            "  • Natural fruits (mango, strawberry, banana, blueberry, "
+            "raspberry, cherry, peach, apple, pear, and all other whole "
+            "fresh fruit) contribute NATURAL SUGAR ONLY. They MUST NOT "
+            "raise the added_sugar rating regardless of quantity.\n"
+            "  • Conditionally-high-sugar ingredients (granola, "
+            "sweetened nut butter, flavoured yogurt, dried fruit, "
+            "chocolate, sauces, dressings, honey, maple syrup):\n"
+            "    – Small amount (1 serving or less; quantity cues like "
+            "'small', '1 tbsp', 'a sprinkle', 'a drizzle', '30g or "
+            "less'; OR a small portion-bar segment): contributes AT MOST "
+            "'moderate' to added_sugar — does NOT prevent Good or "
+            "Nutritious nutrition_level.\n"
+            "    – Large amount (multiple servings; quantity cues like "
+            "'large', 'generous', 'heaping', 'a lot', '>30g'; OR a "
+            "dominant portion-bar segment): contributes 'high' to "
+            "added_sugar and lowers nutrition_level accordingly.\n"
+            "  • No single ingredient automatically determines "
+            "added_sugar or nutrition_level regardless of its typical "
+            "sugar content. Every ingredient's contribution is weighted "
+            "by how much of it is in the meal relative to all other "
+            "ingredients. A trace or small amount of a sugary ingredient "
+            "in a largely whole-food meal MUST NOT penalise the whole "
+            "meal."
             f"{history_block}"
+            f"{health_block}"
+            "\nCONTINUOUS MACRO SCORES — alongside the categorical labels, "
+            "output a `macro_scores` object with a precise float (0.0–1.0) "
+            "for each macro field. These give the exact position within the "
+            "range so a smooth visual bar can fill accordingly. Guide:\n"
+            "  0.05 = extremely low  ·  0.17 = solidly low\n"
+            "  0.25 = low trending toward moderate\n"
+            "  0.50 = solidly moderate\n"
+            "  0.65 = high moderate almost reaching high\n"
+            "  0.83 = solidly high  ·  0.98 = extremely high\n"
+            "The score must be CONSISTENT with the categorical label: "
+            "low→0.00–0.33, moderate→0.34–0.66, high→0.67–1.00.\n"
             "\nOutput strict JSON only matching this schema: "
             '{"is_packaged":false,"detected_brand":"string|null",'
             '"detected_product":"string|null",'
@@ -2476,6 +2695,8 @@ class MealService:
             '"fat":"low|moderate|high","fiber":"low|moderate|high"},'
             '"meal_name":"string","nutrition_level":"Limited|Fair|Good|Nutritious",'
             '"processing_level":"low|moderate|high","added_sugar":"low|moderate|high",'
+            '"macro_scores":{"protein":0.5,"carbs":0.5,"fat":0.5,"fiber":0.5,'
+            '"processing_level":0.5,"added_sugar":0.5},'
             '"advisor_insight":"string"}. '
             "Omit `ingredients` (or set it to null) when structure is "
             "multi_item. Set detected_brand and detected_product to null "
@@ -2495,7 +2716,7 @@ class MealService:
                     {"role": "system", "content": system},
                     {"role": "user", "content": text},
                 ],
-                "max_tokens": 600,
+                "max_tokens": 700,
                 "temperature": 0.1,
                 "response_format": {"type": "json_object"},
             }
@@ -2555,7 +2776,7 @@ class MealService:
         response = await chat_completion(
             messages=[{"role": "user", "content": text}],
             system=system,
-            max_tokens=600,
+            max_tokens=700,
             temperature=0.1,
         )
         parsed = self._parse_analysis_json(response.text or "")

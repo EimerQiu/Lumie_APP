@@ -208,6 +208,7 @@ class MealProvider extends ChangeNotifier {
       isPackaged: draft.isPackaged,
       detectedBrand: draft.detectedBrand,
       detectedProduct: draft.detectedProduct,
+      macroScores: draft.macroScores,
     );
     // Prepend the new meal, then dedupe by canonical identity. If a stale
     // server row for the same nutrition task is already in `_myMeals` (the

@@ -19,6 +19,7 @@ from fastapi import APIRouter, Depends, File, Form, Query, UploadFile, status
 from ..models.meal import (
     MacroLevel,
     MacroRatio,
+    MacroScores,
     MealAnalyzeResponse,
     MealAnalyzeTextRequest,
     MealCreate,
@@ -94,9 +95,11 @@ async def restructure_meal_draft(
     parsed = await meal_service.restructure_food_list(user_id, data.food_items)
     macro_dump = parsed.get("macro_ratio") or {}
     food_dumps = parsed.get("food_items") or []
+    scores_raw = parsed.get("macro_scores")
     return MealRestructureResponse(
         food_items=[FoodItem(**fi) for fi in food_dumps],
         macro_ratio=MacroRatio(**macro_dump),
+        macro_scores=MacroScores(**scores_raw) if isinstance(scores_raw, dict) else None,
         meal_name=parsed.get("meal_name") or None,
         nutrition_level=NutritionLevel(parsed["nutrition_level"])
             if parsed.get("nutrition_level") else None,

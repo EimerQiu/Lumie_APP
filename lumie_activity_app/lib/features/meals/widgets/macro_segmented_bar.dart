@@ -1,13 +1,19 @@
-// MacroSegmentedBar — three-segment bar for a single macro (Low | Moderate | High).
+// MacroContinuousBar — smooth continuous fill bar for the Nutrition Breakdown.
 //
-// Slice 7A §2: fill is CUMULATIVE from the left:
-//   Low      → segment 1 filled
-//   Moderate → segments 1 + 2 filled
-//   High     → all 3 segments filled
+// The fill runs from the left edge to the position given by [score] (0.0–1.0).
+// Three zone labels — Low · Moderate · High — are shown below the bar as
+// reference markers so the user can still read the general zone.
 //
-// Slice 7A §3: filled segments use the meal's NutritionLevel colour (passed in
-// via [fillColor]) so all six breakdown rows share a single warm hue derived
-// from the overall meal tier.
+// The level label (Low / Moderate / High) is shown on the right side of the
+// header row in the same colour as the fill, unchanged from the previous design.
+//
+// Score-to-visual mapping (from the spec):
+//   0.0–0.33  Low
+//   0.34–0.66 Moderate
+//   0.67–1.0  High
+//
+// When [score] is null the widget derives an approximate position from [level]:
+//   low → 0.17  ·  moderate → 0.50  ·  high → 0.83
 
 import 'package:flutter/material.dart';
 
@@ -18,33 +24,46 @@ class MacroSegmentedBar extends StatelessWidget {
   /// Macro label shown on the left (e.g. "Protein").
   final String label;
 
-  /// Current rating of this macro (Low / Moderate / High).
+  /// Current categorical rating (Low / Moderate / High) — still shown as
+  /// the text label on the right and used as a fallback when [score] is null.
   final MacroLevel level;
 
-  /// Colour used for the filled segments. Defaults to the gold accent. The
-  /// detail-screen breakdown passes the meal's `nutritionLevel.color` so the
-  /// six rows visually align with the overall meal tier (Slice 7A §3).
-  final Color? fillColor;
+  /// Continuous fill position on a 0.0–1.0 scale. When provided the bar fills
+  /// to this exact fraction; when null it falls back to the centre of [level].
+  final double? score;
 
-  /// Optional callback — when set, the user can tap a segment to override
-  /// the level (used in the detail-screen edit mode).
-  final ValueChanged<MacroLevel>? onLevelChanged;
+  /// Fill and label colour — pass the meal's `nutritionLevel.color` so all
+  /// six rows share the warm hue derived from the overall meal tier.
+  final Color? fillColor;
 
   const MacroSegmentedBar({
     super.key,
     required this.label,
     required this.level,
+    this.score,
     this.fillColor,
-    this.onLevelChanged,
   });
+
+  double get _effectiveScore {
+    final s = score;
+    if (s != null) return s.clamp(0.0, 1.0);
+    return const {
+      MacroLevel.low: 0.17,
+      MacroLevel.moderate: 0.50,
+      MacroLevel.high: 0.83,
+    }[level]!;
+  }
 
   @override
   Widget build(BuildContext context) {
     final activeColor = fillColor ?? AppColors.primaryLemonDark;
+    final fill = _effectiveScore;
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       mainAxisSize: MainAxisSize.min,
       children: [
+        // Header: label left, categorical level right
         Row(
           children: [
             Text(
@@ -67,61 +86,69 @@ class MacroSegmentedBar extends StatelessWidget {
           ],
         ),
         const SizedBox(height: 8),
-        _SegmentRow(
-          level: level,
-          fillColor: activeColor,
-          onLevelChanged: onLevelChanged,
+        // Continuous fill track
+        LayoutBuilder(
+          builder: (context, constraints) {
+            final trackWidth = constraints.maxWidth;
+            final fillWidth = (trackWidth * fill).clamp(0.0, trackWidth);
+            return ClipRRect(
+              borderRadius: BorderRadius.circular(4),
+              child: SizedBox(
+                height: 8,
+                child: Stack(
+                  children: [
+                    // Empty track
+                    Container(
+                      width: trackWidth,
+                      color: AppColors.surfaceLight,
+                    ),
+                    // Filled portion
+                    Container(
+                      width: fillWidth,
+                      color: activeColor,
+                    ),
+                  ],
+                ),
+              ),
+            );
+          },
+        ),
+        const SizedBox(height: 4),
+        // Zone reference markers below the track
+        const Row(
+          children: [
+            Text(
+              'Low',
+              style: TextStyle(
+                fontSize: 9.5,
+                fontWeight: FontWeight.w500,
+                color: AppColors.textLight,
+                letterSpacing: 0.2,
+              ),
+            ),
+            Spacer(),
+            Text(
+              'Moderate',
+              style: TextStyle(
+                fontSize: 9.5,
+                fontWeight: FontWeight.w500,
+                color: AppColors.textLight,
+                letterSpacing: 0.2,
+              ),
+            ),
+            Spacer(),
+            Text(
+              'High',
+              style: TextStyle(
+                fontSize: 9.5,
+                fontWeight: FontWeight.w500,
+                color: AppColors.textLight,
+                letterSpacing: 0.2,
+              ),
+            ),
+          ],
         ),
       ],
-    );
-  }
-}
-
-class _SegmentRow extends StatelessWidget {
-  final MacroLevel level;
-  final Color fillColor;
-  final ValueChanged<MacroLevel>? onLevelChanged;
-
-  const _SegmentRow({
-    required this.level,
-    required this.fillColor,
-    this.onLevelChanged,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      children: [
-        Expanded(child: _segment(MacroLevel.low, isFirst: true)),
-        const SizedBox(width: 4),
-        Expanded(child: _segment(MacroLevel.moderate)),
-        const SizedBox(width: 4),
-        Expanded(child: _segment(MacroLevel.high, isLast: true)),
-      ],
-    );
-  }
-
-  Widget _segment(MacroLevel segment, {bool isFirst = false, bool isLast = false}) {
-    // Cumulative fill: a segment is active if its position is <= the current
-    // level's position. Enum is declared low → moderate → high so .index works.
-    final active = segment.index <= level.index;
-    final radius = BorderRadius.horizontal(
-      left: isFirst ? const Radius.circular(8) : Radius.zero,
-      right: isLast ? const Radius.circular(8) : Radius.zero,
-    );
-    final inner = Container(
-      height: 8,
-      decoration: BoxDecoration(
-        color: active ? fillColor : AppColors.surfaceLight,
-        borderRadius: radius,
-      ),
-    );
-    final tap = onLevelChanged;
-    if (tap == null) return inner;
-    return InkWell(
-      onTap: () => tap(segment),
-      borderRadius: radius,
-      child: inner,
     );
   }
 }

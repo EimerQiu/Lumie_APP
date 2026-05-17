@@ -13,8 +13,11 @@ from ..models.workout import (
     TemplateCreate,
     TemplateUpdate,
     SessionCreate,
+    AdvisorSessionCreate,
     SessionUpdate,
     OverloadSuggestion,
+    WorkoutSource,
+    SessionCreatedBy,
 )
 
 logger = logging.getLogger(__name__)
@@ -347,6 +350,10 @@ class WorkoutService:
             "duration_seconds": data.duration_seconds,
             "exercises": [e.model_dump() for e in data.exercises],
             "total_sets": total_sets,
+            "source": getattr(data, "source", WorkoutSource.USER_MANUAL),
+            "created_by": SessionCreatedBy.USER,
+            "creator_id": user_id,
+            "advisor_notes": None,
             "total_reps": total_reps,
             "total_volume": total_volume,
             "prs": prs,
@@ -397,15 +404,92 @@ class WorkoutService:
             update["total_volume"] = total_volume
         if data.notes is not None:
             update["notes"] = data.notes
+        if data.advisor_notes is not None:
+            update["advisor_notes"] = data.advisor_notes
         if not update:
             return await self.get_session(session_id)
+        # Allow the session owner OR the original advisor-creator to edit
         result = await db.workout_sessions.update_one(
-            {"session_id": session_id, "user_id": user_id},
+            {
+                "session_id": session_id,
+                "$or": [{"user_id": user_id}, {"creator_id": user_id}],
+            },
             {"$set": update},
         )
         if result.matched_count == 0:
             return None
         return await self.get_session(session_id)
+
+    async def create_session_for_user(
+        self,
+        advisor_id: str,
+        target_user_id: str,
+        data: AdvisorSessionCreate,
+    ) -> dict:
+        """Advisor logs a workout on behalf of a user.
+
+        Verifies the advisor has an active team membership with the target user
+        before writing the session.
+        """
+        db = get_database()
+
+        # Verify advisor is an active team member with the target user
+        shared_team = await db.team_members.find_one({
+            "user_id": advisor_id,
+            "status": "member",
+            "team_id": {
+                "$in": await self._get_user_team_ids(target_user_id),
+            },
+        })
+        if not shared_team:
+            raise PermissionError("Advisor does not have access to this user")
+
+        now = datetime.utcnow()
+        total_sets = total_reps = 0
+        total_volume = 0.0
+        for ex in data.exercises:
+            for s in ex.sets:
+                total_sets += 1
+                total_reps += s.actual_reps
+                total_volume += (s.actual_weight or 0) * s.actual_reps
+
+        session_id = f"sess_{uuid.uuid4().hex[:12]}"
+        prs = await self._detect_prs(target_user_id, session_id, data.exercises)
+
+        doc = {
+            "session_id": session_id,
+            "user_id": target_user_id,
+            "template_id": data.template_id,
+            "template_name": data.template_name,
+            "started_at": datetime.fromisoformat(data.started_at),
+            "ended_at": datetime.fromisoformat(data.ended_at),
+            "duration_seconds": data.duration_seconds,
+            "exercises": [e.model_dump() for e in data.exercises],
+            "total_sets": total_sets,
+            "total_reps": total_reps,
+            "total_volume": total_volume,
+            "prs": prs,
+            "heart_rate_avg": None,
+            "heart_rate_max": None,
+            "notes": data.notes,
+            "source": WorkoutSource.ADVISOR_ADDED,
+            "created_by": SessionCreatedBy.ADVISOR,
+            "creator_id": advisor_id,
+            "advisor_notes": data.advisor_notes,
+            "created_at": now,
+        }
+        await db.workout_sessions.insert_one(doc)
+        doc.pop("_id", None)
+        return doc
+
+    async def _get_user_team_ids(self, user_id: str) -> list[str]:
+        """Return all team_ids the user belongs to as an active member."""
+        db = get_database()
+        cursor = db.team_members.find(
+            {"user_id": user_id, "status": "member"}, {"team_id": 1}
+        )
+        docs = await cursor.to_list(length=200)
+        return [d["team_id"] for d in docs]
 
     # ── Personal Records ───────────────────────────────────────────────────────
 

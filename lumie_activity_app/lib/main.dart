@@ -73,6 +73,8 @@ import 'features/workout/providers/workout_template_provider.dart';
 import 'features/workout/providers/active_session_provider.dart';
 import 'features/workout/screens/exercise_library_screen.dart';
 import 'features/workout/screens/split_builder_screen.dart';
+import 'features/strength/providers/workout_history_provider.dart';
+import 'features/strength/screens/strength_home_screen.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -123,6 +125,7 @@ class LumieActivityApp extends StatelessWidget {
         ChangeNotifierProvider(create: (_) => ExerciseLibraryProvider()),
         ChangeNotifierProvider(create: (_) => WorkoutTemplateProvider()),
         ChangeNotifierProvider(create: (_) => ActiveSessionProvider()),
+        ChangeNotifierProvider(create: (_) => WorkoutHistoryProvider()),
       ],
       child: MaterialApp(
         title: 'Lumie Activity',
@@ -155,6 +158,7 @@ class LumieActivityApp extends StatelessWidget {
           '/workout/split-builder': (context) => const SplitBuilderScreen(),
           '/meals': (context) => const MealsHomeScreen(),
           '/meals/log': (context) => const MealLogScreen(),
+          '/strength': (context) => const StrengthHomeScreen(),
         },
         onGenerateRoute: (settings) {
           // Handle routes with arguments
@@ -405,6 +409,7 @@ class _MainNavigationScreenState extends State<MainNavigationScreen>
         context.read<ExerciseLibraryProvider>().setToken(token);
         context.read<WorkoutTemplateProvider>().setToken(token);
         context.read<ActiveSessionProvider>().setToken(token);
+        context.read<WorkoutHistoryProvider>().setToken(token);
         // Pre-load workout templates
         context.read<WorkoutTemplateProvider>().loadTemplates();
       }
@@ -1476,6 +1481,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       title: 'Ring Settings',
                       onTap: () => Navigator.pushNamed(context, '/ring/manage'),
                     ),
+                    _SettingsItem(
+                      icon: Icons.fitness_center_outlined,
+                      title: 'Strength',
+                      onTap: () => Navigator.pushNamed(context, '/strength'),
+                    ),
 
                     const Divider(height: 24),
 
@@ -1542,6 +1552,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
               context.read<TasksProvider>().reset();
               context.read<TeamsProvider>().reset();
               context.read<MealProvider>().clearOnLogout();
+              context.read<WorkoutHistoryProvider>().reset();
               context.read<AuthProvider>().logout();
             },
             style: TextButton.styleFrom(foregroundColor: AppColors.error),

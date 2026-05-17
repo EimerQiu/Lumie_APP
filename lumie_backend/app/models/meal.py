@@ -57,6 +57,28 @@ class MealStructure(str, Enum):
     SINGLE_ITEM_WITH_INGREDIENTS = "single_item_with_ingredients"
 
 
+class MacroScores(BaseModel):
+    """Continuous score (0.0–1.0) for each macro field.
+
+    Drives the smooth visual fill position of the breakdown bar — values are
+    more precise than the three-point Low/Moderate/High categorical labels.
+
+    Ranges:
+      0.00–0.33  Low
+      0.34–0.66  Moderate
+      0.67–1.00  High
+
+    Fallback derivation when LLM omits scores:
+      low → 0.17, moderate → 0.50, high → 0.83
+    """
+    protein: float = Field(0.5, ge=0.0, le=1.0)
+    carbs: float = Field(0.5, ge=0.0, le=1.0)
+    fat: float = Field(0.5, ge=0.0, le=1.0)
+    fiber: float = Field(0.5, ge=0.0, le=1.0)
+    processing_level: float = Field(0.5, ge=0.0, le=1.0)
+    added_sugar: float = Field(0.5, ge=0.0, le=1.0)
+
+
 class MacroRatio(BaseModel):
     protein: MacroLevel
     carbs: MacroLevel
@@ -108,6 +130,7 @@ class MealAnalyzeResponse(BaseModel):
     is_packaged: bool = Field(False, description="True when the LLM detected a branded/packaged product and used its actual ingredient list for grading")
     detected_brand: Optional[str] = Field(None, description="Identified brand name, e.g. 'RX Bar'")
     detected_product: Optional[str] = Field(None, description="Identified product name, e.g. 'Chocolate Sea Salt RX Bar'")
+    macro_scores: Optional[MacroScores] = Field(None, description="Continuous 0–1 scores driving the smooth breakdown bar fill")
 
 
 # ============ Create / Update / Read ============
@@ -133,6 +156,9 @@ class MealCreate(BaseModel):
     text_only: bool = Field(
         False,
         description="True when the meal was created without a photo (typed or recent-meal path). Skips the image-presence check on the server.",
+    )
+    macro_scores: Optional[MacroScores] = Field(
+        None, description="Continuous 0–1 scores; passed back from the analyze result"
     )
     is_packaged: Optional[bool] = Field(
         None,
@@ -179,6 +205,7 @@ class MealResponse(BaseModel):
     food_items: List[FoodItem]
     macro_ratio: MacroRatio
     structure: MealStructure = MealStructure.MULTI_ITEM
+    macro_scores: Optional[MacroScores] = None
     is_packaged: bool = False
     detected_brand: Optional[str] = None
     detected_product: Optional[str] = None
@@ -248,6 +275,7 @@ class MealRestructureResponse(BaseModel):
     food_items: List[FoodItem]
     macro_ratio: MacroRatio
     structure: MealStructure = MealStructure.MULTI_ITEM
+    macro_scores: Optional[MacroScores] = None
     meal_name: Optional[str] = None
     nutrition_level: Optional[NutritionLevel] = None
     advisor_insight: Optional[str] = None

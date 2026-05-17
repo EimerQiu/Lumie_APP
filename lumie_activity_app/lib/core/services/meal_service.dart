@@ -11,7 +11,7 @@ import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
 
 import '../constants/api_constants.dart';
-import '../../shared/models/meal_models.dart';
+import '../../shared/models/meal_models.dart' show Meal, MealAnalyzeResult, MealAttachment, MacroLevel, MacroRatio, MacroScores, MealCorrectionResponse, MealListResponse, MealTrendResponse, MealType, MealVisibility, NutritionLevel, FoodItem;
 import 'task_service.dart';
 
 class MealService {
@@ -344,6 +344,7 @@ class MealService {
     bool isPackaged = false,
     String? detectedBrand,
     String? detectedProduct,
+    MacroScores? macroScores,
   }) async {
     if (_token == null) throw Exception('Not authenticated');
 
@@ -367,6 +368,7 @@ class MealService {
       if (isPackaged) 'is_packaged': true,
       if (detectedBrand != null) 'detected_brand': detectedBrand,
       if (detectedProduct != null) 'detected_product': detectedProduct,
+      if (macroScores != null) 'macro_scores': macroScores.toJson(),
     };
 
     final response = await http.post(

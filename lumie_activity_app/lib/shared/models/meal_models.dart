@@ -195,6 +195,80 @@ enum NutritionLevel {
   }
 }
 
+/// Continuous 0.0–1.0 scores for each of the six macro/quality fields.
+///
+/// Ranges: 0.0–0.33 = Low, 0.34–0.66 = Moderate, 0.67–1.0 = High.
+/// Used to fill the smooth breakdown bar. When scores are absent (legacy data),
+/// they are derived from the categorical [MacroLevel] labels.
+class MacroScores {
+  final double protein;
+  final double carbs;
+  final double fat;
+  final double fiber;
+  final double processingLevel;
+  final double addedSugar;
+
+  const MacroScores({
+    required this.protein,
+    required this.carbs,
+    required this.fat,
+    required this.fiber,
+    required this.processingLevel,
+    required this.addedSugar,
+  });
+
+  factory MacroScores.fromJson(Map<String, dynamic> json) {
+    double v(dynamic raw, double fallback) {
+      if (raw is double) return raw.clamp(0.0, 1.0);
+      if (raw is int) return raw.toDouble().clamp(0.0, 1.0);
+      if (raw is String) return (double.tryParse(raw) ?? fallback).clamp(0.0, 1.0);
+      return fallback;
+    }
+    return MacroScores(
+      protein: v(json['protein'], 0.5),
+      carbs: v(json['carbs'], 0.5),
+      fat: v(json['fat'], 0.5),
+      fiber: v(json['fiber'], 0.5),
+      processingLevel: v(json['processing_level'], 0.5),
+      addedSugar: v(json['added_sugar'], 0.5),
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+        'protein': protein,
+        'carbs': carbs,
+        'fat': fat,
+        'fiber': fiber,
+        'processing_level': processingLevel,
+        'added_sugar': addedSugar,
+      };
+
+  /// Derive approximate scores from categorical levels when the backend
+  /// hasn't supplied precise values (legacy meals).
+  static double scoreFromLevel(MacroLevel level) => const {
+        MacroLevel.low: 0.17,
+        MacroLevel.moderate: 0.50,
+        MacroLevel.high: 0.83,
+      }[level]!;
+
+  factory MacroScores.fromLevels({
+    required MacroLevel protein,
+    required MacroLevel carbs,
+    required MacroLevel fat,
+    required MacroLevel fiber,
+    required MacroLevel processingLevel,
+    required MacroLevel addedSugar,
+  }) =>
+      MacroScores(
+        protein: scoreFromLevel(protein),
+        carbs: scoreFromLevel(carbs),
+        fat: scoreFromLevel(fat),
+        fiber: scoreFromLevel(fiber),
+        processingLevel: scoreFromLevel(processingLevel),
+        addedSugar: scoreFromLevel(addedSugar),
+      );
+}
+
 class MacroRatio {
   final MacroLevel protein;
   final MacroLevel carbs;
@@ -410,6 +484,7 @@ class MealAnalyzeResult {
   final MacroLevel? processingLevel;
   final MacroLevel? addedSugar;
 
+  final MacroScores? macroScores;
   final bool isPackaged;
   final String? detectedBrand;
   final String? detectedProduct;
@@ -420,6 +495,7 @@ class MealAnalyzeResult {
     required this.foodItems,
     required this.macroRatio,
     this.structure = MealStructure.multiItem,
+    this.macroScores,
     this.mealName,
     this.nutritionLevel,
     this.advisorInsight,
@@ -445,6 +521,9 @@ class MealAnalyzeResult {
         (json['macro_ratio'] as Map<String, dynamic>?) ?? const {},
       ),
       structure: MealStructure.fromString(json['structure'] as String?),
+      macroScores: json['macro_scores'] is Map<String, dynamic>
+          ? MacroScores.fromJson(json['macro_scores'] as Map<String, dynamic>)
+          : null,
       isPackaged: (json['is_packaged'] as bool?) ?? false,
       detectedBrand: json['detected_brand'] as String?,
       detectedProduct: json['detected_product'] as String?,
@@ -485,6 +564,7 @@ class Meal {
   final DateTime createdAt;
   final DateTime updatedAt;
 
+  final MacroScores? macroScores;
   final bool isPackaged;
   final String? detectedBrand;
   final String? detectedProduct;
@@ -497,6 +577,7 @@ class Meal {
     required this.foodItems,
     required this.macroRatio,
     this.structure = MealStructure.multiItem,
+    this.macroScores,
     this.isPackaged = false,
     this.detectedBrand,
     this.detectedProduct,
@@ -541,6 +622,9 @@ class Meal {
         (json['macro_ratio'] as Map<String, dynamic>?) ?? const {},
       ),
       structure: MealStructure.fromString(json['structure'] as String?),
+      macroScores: json['macro_scores'] is Map<String, dynamic>
+          ? MacroScores.fromJson(json['macro_scores'] as Map<String, dynamic>)
+          : null,
       isPackaged: (json['is_packaged'] as bool?) ?? false,
       detectedBrand: json['detected_brand'] as String?,
       detectedProduct: json['detected_product'] as String?,

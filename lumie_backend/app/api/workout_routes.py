@@ -12,6 +12,7 @@ from ..models.workout import (
     TemplateCreate,
     TemplateUpdate,
     SessionCreate,
+    AdvisorSessionCreate,
     SessionUpdate,
 )
 from ..core.database import get_database
@@ -221,6 +222,23 @@ async def get_session(
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
     return session
+
+
+@router.post("/workout-sessions/for-user/{target_user_id}", status_code=201)
+async def create_session_for_user(
+    target_user_id: str,
+    data: AdvisorSessionCreate,
+    advisor_id: str = Depends(get_current_user_id),
+):
+    """Advisor logs a workout session on behalf of a user they work with."""
+    try:
+        return await workout_service.create_session_for_user(
+            advisor_id=advisor_id,
+            target_user_id=target_user_id,
+            data=data,
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc))
 
 
 @router.put("/workout-sessions/{session_id}")

@@ -26,8 +26,8 @@ import '../../advisor/screens/advisor_screen.dart';
 import '../../auth/providers/auth_provider.dart';
 import '../../teams/providers/teams_provider.dart';
 import '../providers/meal_provider.dart';
-import '../utils/food_input_split.dart' show splitFoodInput, deriveMealNameFromFoods;
-import '../widgets/drum_time_picker.dart';
+import '../utils/food_input_split.dart' show deriveMealNameFromFoods, isCompositeItemName, splitFoodInput, splitFoodInputWithContext;
+import '../widgets/drum_time_picker.dart' show showDrumDateTimePicker;
 import '../widgets/macro_segmented_bar.dart';
 import '../widgets/meal_card.dart' show mealImageUrl;
 import '../widgets/meal_pill_field.dart';
@@ -64,6 +64,7 @@ class _MealDetailScreenState extends State<MealDetailScreen> {
   DateTime? _mealTime;
   late MacroLevel _processingLevel;
   late MacroLevel _addedSugar;
+  MacroScores? _macroScores;
 
   // Snapshot for correction-tracking
   late List<FoodItem> _originalFoods;
@@ -103,6 +104,7 @@ class _MealDetailScreenState extends State<MealDetailScreen> {
     // legacy meals that pre-date the fields.
     _processingLevel = m?.processingLevel ?? MacroLevel.moderate;
     _addedSugar = m?.addedSugar ?? MacroLevel.low;
+    _macroScores = m?.macroScores;
   }
 
   /// Re-derive the meal name from the current food list unless the user has
@@ -390,27 +392,26 @@ class _MealDetailScreenState extends State<MealDetailScreen> {
 
   Future<void> _editMealTime() async {
     if (!_isOwner) return;
-    final initial = (_mealTime ?? DateTime.now()).toLocal();
-    final picked = await showDrumTimePicker(
+    final picked = await showDrumDateTimePicker(
       context: context,
-      initialTime: TimeOfDay.fromDateTime(initial),
+      initialDateTime: (_mealTime ?? DateTime.now()).toLocal(),
     );
     if (picked != null) {
-      setState(() {
-        _mealTime = DateTime(
-          initial.year,
-          initial.month,
-          initial.day,
-          picked.hour,
-          picked.minute,
-        ).toUtc();
-      });
+      setState(() => _mealTime = picked.toUtc());
     }
   }
 
   Future<void> _editFoodName(int index) async {
     if (!_isOwner) return;
     final controller = TextEditingController(text: _foodItems[index].name);
+    final originalName = index < _originalFoods.length
+        ? _originalFoods[index].name
+        : null;
+    final isComposite = originalName != null &&
+        isCompositeItemName(originalName);
+    final hint = isComposite
+        ? 'Refine this item — stays grouped as one'
+        : 'Food name (commas split into separate items)';
     final result = await showDialog<String>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -418,9 +419,7 @@ class _MealDetailScreenState extends State<MealDetailScreen> {
         content: TextField(
           controller: controller,
           autofocus: true,
-          decoration: const InputDecoration(
-            hintText: 'Food name (commas split into separate items)',
-          ),
+          decoration: InputDecoration(hintText: hint),
         ),
         actions: [
           TextButton(
@@ -435,7 +434,7 @@ class _MealDetailScreenState extends State<MealDetailScreen> {
       ),
     );
     if (result == null) return;
-    final pieces = splitFoodInput(result);
+    final pieces = splitFoodInputWithContext(result, originalName);
     if (pieces.isEmpty) return;
     setState(() {
       final next = [..._foodItems];
@@ -860,8 +859,6 @@ class _MealDetailScreenState extends State<MealDetailScreen> {
   Widget _buildTypeAndTimeRow() {
     final type = _mealType ?? MealType.snack;
     final time = (_mealTime ?? DateTime.now()).toLocal();
-    final hh = time.hour.toString().padLeft(2, '0');
-    final mm = time.minute.toString().padLeft(2, '0');
 
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16),
@@ -880,7 +877,7 @@ class _MealDetailScreenState extends State<MealDetailScreen> {
           Expanded(
             child: MealPillField(
               label: 'TIME',
-              value: '$hh:$mm',
+              value: _timePillLabel(time),
               icon: Icons.schedule_outlined,
               onTap: _isOwner ? _editMealTime : null,
               enabled: _isOwner,
@@ -889,6 +886,24 @@ class _MealDetailScreenState extends State<MealDetailScreen> {
         ],
       ),
     );
+  }
+
+  static String _timePillLabel(DateTime localDt) {
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final dateOnly = DateTime(localDt.year, localDt.month, localDt.day);
+    final hh = localDt.hour.toString().padLeft(2, '0');
+    final mm = localDt.minute.toString().padLeft(2, '0');
+    final timeStr = '$hh:$mm';
+    if (dateOnly == today) return timeStr;
+    if (dateOnly == today.subtract(const Duration(days: 1))) {
+      return 'Yesterday $timeStr';
+    }
+    const months = [
+      'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+    ];
+    return '${months[localDt.month - 1]} ${localDt.day}, $timeStr';
   }
 
   // ─── Items card ────────────────────────────────────────────────────
@@ -1039,36 +1054,42 @@ class _MealDetailScreenState extends State<MealDetailScreen> {
           MacroSegmentedBar(
             label: 'Protein',
             level: _macroRatio.protein,
+            score: _macroScores?.protein,
             fillColor: fill,
           ),
           const SizedBox(height: 16),
           MacroSegmentedBar(
             label: 'Carbs',
             level: _macroRatio.carbs,
+            score: _macroScores?.carbs,
             fillColor: fill,
           ),
           const SizedBox(height: 16),
           MacroSegmentedBar(
             label: 'Fat',
             level: _macroRatio.fat,
+            score: _macroScores?.fat,
             fillColor: fill,
           ),
           const SizedBox(height: 16),
           MacroSegmentedBar(
             label: 'Fiber',
             level: _macroRatio.fiber,
+            score: _macroScores?.fiber,
             fillColor: fill,
           ),
           const SizedBox(height: 16),
           MacroSegmentedBar(
             label: 'Processing Level',
             level: _processingLevel,
+            score: _macroScores?.processingLevel,
             fillColor: fill,
           ),
           const SizedBox(height: 16),
           MacroSegmentedBar(
             label: 'Added Sugar',
             level: _addedSugar,
+            score: _macroScores?.addedSugar,
             fillColor: fill,
           ),
         ],

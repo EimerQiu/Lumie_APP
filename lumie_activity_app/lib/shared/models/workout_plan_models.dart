@@ -551,6 +551,18 @@ class CompletedExercise {
   int get totalReps => sets.fold(0, (sum, s) => sum + s.actualReps);
 }
 
+enum WorkoutSource { userManual, advisorAdded, autoDetected, merged }
+
+WorkoutSource workoutSourceFromString(String? value) {
+  const map = {
+    'user_manual': WorkoutSource.userManual,
+    'advisor_added': WorkoutSource.advisorAdded,
+    'auto_detected': WorkoutSource.autoDetected,
+    'merged': WorkoutSource.merged,
+  };
+  return map[value] ?? WorkoutSource.userManual;
+}
+
 class WorkoutSession {
   final String sessionId;
   final String userId;
@@ -567,6 +579,11 @@ class WorkoutSession {
   final int? heartRateAvg;
   final int? heartRateMax;
   String? notes;
+  // Attribution
+  final WorkoutSource source;
+  final String createdBy;    // "user" or "advisor"
+  final String? creatorId;
+  String? advisorNotes;
 
   WorkoutSession({
     required this.sessionId,
@@ -584,7 +601,13 @@ class WorkoutSession {
     this.heartRateAvg,
     this.heartRateMax,
     this.notes,
+    this.source = WorkoutSource.userManual,
+    this.createdBy = 'user',
+    this.creatorId,
+    this.advisorNotes,
   }) : exercises = exercises ?? [];
+
+  bool get isAdvisorAdded => source == WorkoutSource.advisorAdded;
 
   factory WorkoutSession.fromJson(Map<String, dynamic> json) {
     return WorkoutSession(
@@ -610,6 +633,10 @@ class WorkoutSession {
       heartRateAvg: json['heart_rate_avg'] as int?,
       heartRateMax: json['heart_rate_max'] as int?,
       notes: json['notes'] as String?,
+      source: workoutSourceFromString(json['source'] as String?),
+      createdBy: (json['created_by'] as String?) ?? 'user',
+      creatorId: json['creator_id'] as String?,
+      advisorNotes: json['advisor_notes'] as String?,
     );
   }
 

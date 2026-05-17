@@ -22,8 +22,8 @@ import '../../../shared/models/task_models.dart';
 import '../../tasks/providers/tasks_provider.dart';
 import '../../teams/providers/teams_provider.dart';
 import '../providers/meal_provider.dart';
-import '../utils/food_input_split.dart';
-import '../widgets/drum_time_picker.dart';
+import '../utils/food_input_split.dart' show deriveMealNameFromFoods, isCompositeItemName, splitFoodInput, splitFoodInputWithContext;
+import '../widgets/drum_time_picker.dart' show showDrumDateTimePicker;
 import '../widgets/macro_segmented_bar.dart';
 import '../widgets/meal_pill_field.dart';
 import '../widgets/nutrition_level_slider.dart';
@@ -88,6 +88,7 @@ class _MealLogScreenState extends State<MealLogScreen> {
     fiber: MacroLevel.low,
   );
   MealStructure _structure = MealStructure.multiItem;
+  MacroScores? _macroScores;
   NutritionLevel _nutritionLevel = NutritionLevel.fair;
   MacroLevel _processingLevel = MacroLevel.moderate;
   MacroLevel _addedSugar = MacroLevel.low;
@@ -323,6 +324,7 @@ class _MealLogScreenState extends State<MealLogScreen> {
     _analyzedFoods = List.of(result.foodItems);
     _macroRatio = result.macroRatio;
     _structure = result.structure;
+    _macroScores = result.macroScores;
     _nutritionLevel = result.nutritionLevel ?? NutritionLevel.fair;
     _processingLevel = result.processingLevel ?? MacroLevel.moderate;
     _addedSugar = result.addedSugar ?? MacroLevel.low;
@@ -486,20 +488,13 @@ class _MealLogScreenState extends State<MealLogScreen> {
   }
 
   Future<void> _editMealTime() async {
-    final initial = _mealTime.toLocal();
-    final picked = await showDrumTimePicker(
+    final picked = await showDrumDateTimePicker(
       context: context,
-      initialTime: TimeOfDay.fromDateTime(initial),
+      initialDateTime: _mealTime.toLocal(),
     );
     if (picked != null) {
       setState(() {
-        _mealTime = DateTime(
-          initial.year,
-          initial.month,
-          initial.day,
-          picked.hour,
-          picked.minute,
-        );
+        _mealTime = picked;
         _userEditedMealTime = true;
       });
     }
@@ -507,6 +502,15 @@ class _MealLogScreenState extends State<MealLogScreen> {
 
   Future<void> _editFoodName(int index) async {
     final controller = TextEditingController(text: _foodItems[index].name);
+    // Look up the original detected name so the split can use it as context.
+    final originalName = index < _originalAiFoods.length
+        ? _originalAiFoods[index].name
+        : null;
+    final isComposite = originalName != null &&
+        isCompositeItemName(originalName);
+    final hint = isComposite
+        ? 'Refine this item — stays grouped as one'
+        : 'Food name (commas split into separate items)';
     final result = await showDialog<String>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -514,9 +518,7 @@ class _MealLogScreenState extends State<MealLogScreen> {
         content: TextField(
           controller: controller,
           autofocus: true,
-          decoration: const InputDecoration(
-            hintText: 'Food name (commas split into separate items)',
-          ),
+          decoration: InputDecoration(hintText: hint),
         ),
         actions: [
           TextButton(
@@ -531,14 +533,13 @@ class _MealLogScreenState extends State<MealLogScreen> {
       ),
     );
     if (result == null) return;
-    final pieces = splitFoodInput(result);
+    // Use context-aware split: composite originals keep their sub-components
+    // grouped as one chip; simple originals split on separators as normal.
+    final pieces = splitFoodInputWithContext(result, originalName);
     if (pieces.isEmpty) return;
     setState(() {
       final next = [..._foodItems];
       next[index] = next[index].copyWith(name: pieces.first);
-      // If the user typed a comma-separated list while editing, the extras
-      // become new items inserted right after this position so the list
-      // grows in the order they typed.
       for (var i = 1; i < pieces.length; i++) {
         next.insert(index + i, FoodItem(name: pieces[i]));
       }
@@ -1167,36 +1168,42 @@ class _MealLogScreenState extends State<MealLogScreen> {
               MacroSegmentedBar(
                 label: 'Protein',
                 level: _macroRatio.protein,
+                score: _macroScores?.protein,
                 fillColor: fill,
               ),
               const SizedBox(height: 16),
               MacroSegmentedBar(
                 label: 'Carbs',
                 level: _macroRatio.carbs,
+                score: _macroScores?.carbs,
                 fillColor: fill,
               ),
               const SizedBox(height: 16),
               MacroSegmentedBar(
                 label: 'Fat',
                 level: _macroRatio.fat,
+                score: _macroScores?.fat,
                 fillColor: fill,
               ),
               const SizedBox(height: 16),
               MacroSegmentedBar(
                 label: 'Fiber',
                 level: _macroRatio.fiber,
+                score: _macroScores?.fiber,
                 fillColor: fill,
               ),
               const SizedBox(height: 16),
               MacroSegmentedBar(
                 label: 'Processing Level',
                 level: _processingLevel,
+                score: _macroScores?.processingLevel,
                 fillColor: fill,
               ),
               const SizedBox(height: 16),
               MacroSegmentedBar(
                 label: 'Added Sugar',
                 level: _addedSugar,
+                score: _macroScores?.addedSugar,
                 fillColor: fill,
               ),
             ],
@@ -1263,9 +1270,6 @@ class _MealLogScreenState extends State<MealLogScreen> {
   }
 
   Widget _buildTypeAndTimeSection() {
-    final localTime = _mealTime.toLocal();
-    final hh = localTime.hour.toString().padLeft(2, '0');
-    final mm = localTime.minute.toString().padLeft(2, '0');
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -1284,7 +1288,7 @@ class _MealLogScreenState extends State<MealLogScreen> {
             Expanded(
               child: MealPillField(
                 label: 'TIME',
-                value: '$hh:$mm',
+                value: _timePillLabel(_mealTime.toLocal()),
                 icon: Icons.schedule_outlined,
                 onTap: _editMealTime,
               ),
@@ -1293,6 +1297,26 @@ class _MealLogScreenState extends State<MealLogScreen> {
         ),
       ],
     );
+  }
+
+  /// Short label for the time pill. Shows just `HH:MM` for today; prepends
+  /// "Yesterday" or a date abbreviation when the user has backdated.
+  static String _timePillLabel(DateTime localDt) {
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final dateOnly = DateTime(localDt.year, localDt.month, localDt.day);
+    final hh = localDt.hour.toString().padLeft(2, '0');
+    final mm = localDt.minute.toString().padLeft(2, '0');
+    final timeStr = '$hh:$mm';
+    if (dateOnly == today) return timeStr;
+    if (dateOnly == today.subtract(const Duration(days: 1))) {
+      return 'Yesterday $timeStr';
+    }
+    const months = [
+      'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+    ];
+    return '${months[localDt.month - 1]} ${localDt.day}, $timeStr';
   }
 
   Widget _buildNoteSection() {

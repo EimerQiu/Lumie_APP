@@ -76,6 +76,18 @@ class PrType(str, Enum):
     MAX_VOLUME = "max_volume"
 
 
+class WorkoutSource(str, Enum):
+    USER_MANUAL = "user_manual"
+    ADVISOR_ADDED = "advisor_added"
+    AUTO_DETECTED = "auto_detected"
+    MERGED = "merged"
+
+
+class SessionCreatedBy(str, Enum):
+    USER = "user"
+    ADVISOR = "advisor"
+
+
 # ── Exercise Library ───────────────────────────────────────────────────────────
 
 class ExerciseDefinition(BaseModel):
@@ -229,6 +241,11 @@ class WorkoutSession(BaseModel):
     heart_rate_avg: Optional[int] = None
     heart_rate_max: Optional[int] = None
     notes: Optional[str] = None
+    # Attribution fields
+    source: str = WorkoutSource.USER_MANUAL  # WorkoutSource value
+    created_by: str = SessionCreatedBy.USER  # "user" or "advisor"
+    creator_id: Optional[str] = None  # user_id of whoever created this
+    advisor_notes: Optional[str] = None  # advisor-only annotation
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
 
@@ -243,12 +260,26 @@ class SessionCreate(BaseModel):
     heart_rate_avg: Optional[int] = None
     heart_rate_max: Optional[int] = None
     notes: Optional[str] = None
+    source: str = WorkoutSource.USER_MANUAL
+
+
+class AdvisorSessionCreate(BaseModel):
+    """Request model for an advisor logging a session on behalf of a user."""
+    template_id: Optional[str] = None
+    template_name: str = ""
+    started_at: str  # ISO datetime string
+    ended_at: str
+    duration_seconds: int = 0
+    exercises: list[CompletedExercise] = Field(default_factory=list)
+    notes: Optional[str] = None
+    advisor_notes: Optional[str] = None
 
 
 class SessionUpdate(BaseModel):
     """Request model for editing a session (post-workout corrections)."""
     exercises: Optional[list[CompletedExercise]] = None
     notes: Optional[str] = None
+    advisor_notes: Optional[str] = None
 
 
 # ── Personal Records ───────────────────────────────────────────────────────────
