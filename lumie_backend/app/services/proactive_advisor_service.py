@@ -141,10 +141,8 @@ def _build_preserve_clause(summary: str) -> str:
     s = (summary or "").strip()
     if not s:
         return ""
-    # Keep first sentence only, avoid oversized message.
+    # Keep first sentence only.
     first = s.split(". ")[0].strip()
-    if len(first) > 96:
-        first = first[:96].rstrip() + "..."
     return first
 
 
@@ -179,7 +177,7 @@ def _ensure_checklist_preserved_in_message(
         else:
             # Replace tail to keep reminder present in capped length.
             room = max(0, 240 - len(out) - 5)
-            out = f"{out[:room].rstrip()} ... {clause[:80]}"
+            out = f"{out[:room].rstrip()} ... {clause}"
         out_tokens = _tokenize_for_match(out)
     return out
 
@@ -235,6 +233,21 @@ async def _execute_manual_checklist_instructions(
             result_doc["result_type"] = last_step.get("advisor_response_type")
             result_doc["job_id"] = last_step.get("job_id")
             result_doc["executed_skill_id"] = last_step.get("executed_skill_id")
+
+            # Detect whether any execution in this planner session was a write-operation job.
+            write_job_ids: list[str] = []
+            for st in steps:
+                jid = st.get("job_id")
+                if not jid:
+                    continue
+                job = await db.execution_jobs.find_one(
+                    {"job_id": jid},
+                    {"_id": 0, "job_id": 1, "is_write_operation_task": 1},
+                )
+                if job and bool(job.get("is_write_operation_task")):
+                    write_job_ids.append(jid)
+            result_doc["had_write_execution"] = bool(write_job_ids)
+            result_doc["write_execution_job_ids"] = write_job_ids
         except Exception as e:
             result_doc["status"] = "failed"
             result_doc["summary"] = f"instruction_error: {str(e)[:180]}"
@@ -313,15 +326,17 @@ def _build_prompt_checklist_payload(proactive_checklist: dict | None) -> dict | 
     manual_results = proactive_checklist.get("manual_instruction_results") or []
 
     # Keep full manual text only in manual_items.
+    # Do not repeat execution summaries here; summaries are already present in
+    # CURRENT ROUND ASSESSMENTS to reduce prompt duplication.
     compact_results = []
     for r in manual_results:
         compact_results.append({
             "item_id": r.get("item_id"),
             "status": r.get("status"),
             "result_type": r.get("result_type"),
-            "summary": r.get("summary"),
             "must_preserve": bool(r.get("must_preserve")),
             "executed_skill_id": r.get("executed_skill_id"),
+            "had_write_execution": bool(r.get("had_write_execution")),
         })
 
     return {
@@ -362,10 +377,17 @@ def _build_decision_prompt(
     """
     # Serialize current round skill data with priority embedded
     current_results_for_llm = []
+    manual_summary_by_item: dict[str, str] = {}
     for s in skill_data:
         data_for_prompt = dict(s.data or {})
         # Text already exists in checklist.manual_items; avoid repeating it here.
         data_for_prompt.pop("manual_item_text", None)
+        item_id = ""
+        if s.skill_id.startswith("manual_item:"):
+            item_id = s.skill_id.split("manual_item:", 1)[1]
+        if item_id and s.summary:
+            manual_summary_by_item[item_id] = s.summary
+
         current_results_for_llm.append({
             "skill_id": s.skill_id,
             "domain": s.domain,
@@ -412,7 +434,16 @@ def _build_decision_prompt(
 
     if last_round_results:
         user_parts.append("\n=== PREVIOUS ROUND ASSESSMENTS (for comparison) ===\n")
-        user_parts.append(json.dumps(last_round_results, indent=2))
+        # Keep previous round compact to reduce repeated long summaries.
+        compact_last_round = []
+        for r in last_round_results:
+            compact_last_round.append({
+                "skill_id": r.get("skill_id"),
+                "domain": r.get("domain"),
+                "status": r.get("status"),
+                "priority": r.get("priority"),
+            })
+        user_parts.append(json.dumps(compact_last_round, indent=2))
 
     if today_dayprint:
         user_parts.append("\n=== TODAY'S DAYPRINT ===\n")
@@ -425,8 +456,22 @@ def _build_decision_prompt(
 
     prompt_checklist = _build_prompt_checklist_payload(proactive_checklist)
     if prompt_checklist:
+        # Attach summary references once via current-round item map only.
+        manual_items_enriched = []
+        for i in (prompt_checklist.get("manual_items") or []):
+            item_id = i.get("item_id")
+            manual_items_enriched.append({
+                "item_id": item_id,
+                "text": i.get("text"),
+                "status": i.get("status"),
+                "current_round_summary_ref": manual_summary_by_item.get(item_id, ""),
+            })
         user_parts.append("\n=== PROACTIVE CHECKLIST ===\n")
-        user_parts.append(json.dumps(prompt_checklist, indent=2))
+        user_parts.append(json.dumps({
+            "manual_items": manual_items_enriched,
+            "today_dayprint": prompt_checklist.get("today_dayprint"),
+            "manual_instruction_results": prompt_checklist.get("manual_instruction_results"),
+        }, indent=2))
 
     user_parts.append("\n\nBased on these assessments and context, should I reach out to the user?\n\n"
                       "GUIDANCE FOR YOUR MESSAGE:\n"
@@ -673,6 +718,7 @@ async def run_proactive_check(user_id: str) -> dict:
         return {"nudged": False, "message": None, "reason": f"llm_error: {e}"}
 
     manual_results = proactive_checklist.get("manual_instruction_results") if proactive_checklist else []
+    force_nudge_due_to_write = any(bool(r.get("had_write_execution")) for r in (manual_results or []))
     should_nudge: bool = bool(result.get("should_nudge", False))
     message: str | None = result.get("message") or None
     message = _ensure_checklist_preserved_in_message(message, manual_results)
@@ -687,6 +733,16 @@ async def run_proactive_check(user_id: str) -> dict:
         if not message:
             message = _build_preserve_clause(must_preserve_success[0].get("summary") or "")
         reason = f"checklist_must_preserve_override:{must_preserve_success[0].get('item_id')}"
+
+    if force_nudge_due_to_write:
+        should_nudge = True
+        if not message:
+            write_result = next((r for r in manual_results if bool(r.get("had_write_execution"))), None)
+            if write_result:
+                message = _build_preserve_clause(write_result.get("summary") or "")
+            if not message:
+                message = "I completed updates from your proactive checklist and wanted to keep you posted."
+        reason = "write_execution_override"
     logger.info(
         "Proactive[%s]: decision parsed should_nudge=%s domain=%s confidence=%s",
         user_id,
@@ -714,7 +770,7 @@ async def run_proactive_check(user_id: str) -> dict:
     concern_key = _build_concern_key(selected_domain or "unknown", reason, selected_skill_data)
 
     # Check for duplicate: same-day concern OR same domain within 6 hours
-    is_duplicate = should_nudge and message and (
+    is_duplicate = (not force_nudge_due_to_write) and should_nudge and message and (
         concern_key in sent_concern_keys or
         any(h.get("domain") == selected_domain and
             datetime.fromisoformat(h.get("nudged_at", "2000-01-01")) > six_hours_ago

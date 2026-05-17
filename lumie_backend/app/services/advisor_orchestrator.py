@@ -160,6 +160,46 @@ async def _run_planner_for_chat(
     }
 
 
+async def _should_escalate_to_planner_from_non_execution(
+    *,
+    message: str,
+    response_text: str,
+    session_id: Optional[str],
+) -> bool:
+    """LLM-based check for escalating complex tasks into planner from non-execution branch."""
+    if session_id == "proactive":
+        return False
+    if _is_planner_message(message):
+        return False
+
+    system = (
+        "You are a routing guard. Decide if this request should be escalated to a multi-step planner.\n"
+        "Escalate when the goal is conditional/multi-step and the current assistant reply does not execute it.\n"
+        "Return JSON only."
+    )
+    user = (
+        f"User request:\n{message}\n\n"
+        f"Current assistant response:\n{response_text}\n\n"
+        "Return JSON: {\"escalate_to_planner\": true|false, \"reason\": \"short\"}"
+    )
+    try:
+        resp = await chat_completion(
+            model=_MODEL,
+            max_tokens=120,
+            temperature=0,
+            system=system,
+            messages=[{"role": "user", "content": user}],
+        )
+        raw = (resp.text or "").strip()
+        if raw.startswith("```"):
+            lines = raw.splitlines()
+            raw = "\n".join(lines[1:-1]) if len(lines) > 2 else raw
+        parsed = json.loads(raw) if raw else {}
+        return bool(parsed.get("escalate_to_planner", False))
+    except Exception:
+        return False
+
+
 async def _get_pending_task_create_action(user_id: str, session_id: Optional[str]) -> Optional[dict]:
     db = get_database()
     if db is None:
@@ -617,6 +657,7 @@ Message: "{message}"
 
 If the user is mentioning, asking about, or addressing SOMEONE ELSE (by name, email, or relationship), respond with ONLY their name, email, or relationship descriptor (e.g., "Eimer", "Emma", "my daughter", "my son", "Ciline", "john@example.com").
 If the user is talking about their own status, health, or matters, or if it's unclear, respond with: "self"
+If a person-like name appears only inside a quoted or referenced literal string (for example a task/template title like "Cobb's Med"), treat it as a literal label, NOT as someone else.
 
 Do NOT include quotes or explanation. Just the name/email/relationship or "self"."""
 
@@ -659,11 +700,16 @@ async def handle_chat(
     """
     # ── Step 0.5: Auto-detect target user from health-related queries ────
     # Use LLM to detect if asking about someone else's health/status
-    if not target_user_id:
+    if not target_user_id and not _is_planner_message(message):
         auto_hint = await _extract_target_person_with_llm(message)
         if auto_hint:
             resolved = await _resolve_target_user_hint(user_id, auto_hint, team_id)
-            if resolved and resolved != user_id:
+            if resolved and isinstance(resolved, str) and resolved.startswith("__AMBIGUOUS__"):
+                logger.info(
+                    "Auto-detected target hint was ambiguous; skipping auto target resolution: %s",
+                    auto_hint,
+                )
+            elif resolved and resolved != user_id:
                 target_user_id = resolved
                 logger.info(f"Auto-detected target user from message: {auto_hint} → {target_user_id}")
 
@@ -798,6 +844,16 @@ async def handle_chat(
     # ── Step 4: Process response ─────────────────────────────────────────
     if not response.tool_calls:
         fallback_reply = _sanitize_non_executed_claims(response.text or "I need one more detail before I act.")
+        if await _should_escalate_to_planner_from_non_execution(
+            message=message,
+            response_text=fallback_reply,
+            session_id=session_id,
+        ):
+            return await _run_planner_for_chat(
+                user_id=user_id,
+                session_id=session_id,
+                message=message,
+            )
         return {
             "type": "guidance",
             "reply": fallback_reply,
@@ -811,9 +867,20 @@ async def handle_chat(
     preflight_text = response.text
 
     if not tool_input or not tool_name:
+        fallback_reply = _sanitize_non_executed_claims(preflight_text or "I'm not sure how to help with that.")
+        if await _should_escalate_to_planner_from_non_execution(
+            message=message,
+            response_text=fallback_reply,
+            session_id=session_id,
+        ):
+            return await _run_planner_for_chat(
+                user_id=user_id,
+                session_id=session_id,
+                message=message,
+            )
         return {
             "type": "guidance",
-            "reply": _sanitize_non_executed_claims(preflight_text or "I'm not sure how to help with that."),
+            "reply": fallback_reply,
             "reply_class": "clarification_needed",
             "is_write_operation_task": False,
         }
@@ -913,6 +980,28 @@ async def handle_chat(
                 session_id=session_id,
                 original_request=message,
                 clarification_prompt=response_text,
+            )
+        # Strong guarantee for chat mode: write-operation tasks should not stop at
+        # non-execution guidance when planner can continue multi-step execution.
+        if (
+            is_write_operation_task
+            and session_id != "proactive"
+            and not _is_planner_message(message)
+        ):
+            return await _run_planner_for_chat(
+                user_id=user_id,
+                session_id=session_id,
+                message=message,
+            )
+        if await _should_escalate_to_planner_from_non_execution(
+            message=message,
+            response_text=response_text,
+            session_id=session_id,
+        ):
+            return await _run_planner_for_chat(
+                user_id=user_id,
+                session_id=session_id,
+                message=message,
             )
         return {
             "type": response_type,
