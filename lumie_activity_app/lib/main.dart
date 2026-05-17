@@ -1454,6 +1454,30 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
                     const Divider(height: 24),
 
+                    // ── Activity History ──────────────────────────────────────
+                    Padding(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 4,
+                      ),
+                      child: Text(
+                        'Activity History',
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                          color: AppColors.textSecondary,
+                          letterSpacing: 0.5,
+                        ),
+                      ),
+                    ),
+                    _SettingsItem(
+                      icon: Icons.fitness_center_outlined,
+                      title: 'Strength',
+                      onTap: () => Navigator.pushNamed(context, '/strength'),
+                    ),
+
+                    const Divider(height: 24),
+
                     // ── Health & Schedule ─────────────────────────────────────
                     Padding(
                       padding: const EdgeInsets.symmetric(
@@ -1480,11 +1504,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       icon: Icons.watch_outlined,
                       title: 'Ring Settings',
                       onTap: () => Navigator.pushNamed(context, '/ring/manage'),
-                    ),
-                    _SettingsItem(
-                      icon: Icons.fitness_center_outlined,
-                      title: 'Strength',
-                      onTap: () => Navigator.pushNamed(context, '/strength'),
                     ),
 
                     const Divider(height: 24),
