@@ -153,6 +153,7 @@ class LumieActivityApp extends StatelessWidget {
           '/tasks/reward-calc': (context) => const RewardCalcScreen(),
           '/ring/manage': (context) => const RingManagementScreen(),
           '/settings/activity-goal': (context) => const ActivityGoalScreen(),
+          '/activity/history': (context) => const ActivityHistoryScreen(),
           '/heart-rate': (context) => const HeartRateScreen(),
           '/workout/exercises': (context) => const ExerciseLibraryScreen(),
           '/workout/split-builder': (context) => const SplitBuilderScreen(),
@@ -1454,21 +1455,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
                     const Divider(height: 24),
 
-                    // ── Activity History ──────────────────────────────────────
-                    Padding(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 16,
-                        vertical: 4,
-                      ),
-                      child: Text(
-                        'Activity History',
-                        style: TextStyle(
-                          fontSize: 13,
-                          fontWeight: FontWeight.w600,
-                          color: AppColors.textSecondary,
-                          letterSpacing: 0.5,
-                        ),
-                      ),
+                    // ── Activity History & Strength ───────────────────────────
+                    _SettingsItem(
+                      icon: Icons.bar_chart_outlined,
+                      title: 'Activity History',
+                      onTap: () =>
+                          Navigator.pushNamed(context, '/activity/history'),
                     ),
                     _SettingsItem(
                       icon: Icons.fitness_center_outlined,

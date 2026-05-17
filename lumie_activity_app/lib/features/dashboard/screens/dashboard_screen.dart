@@ -747,6 +747,14 @@ class _DashboardScreenState extends State<DashboardScreen>
               },
             ),
             _DrawerItem(
+              icon: Icons.fitness_center_outlined,
+              label: 'Strength',
+              onTap: () {
+                Navigator.pop(context);
+                Navigator.pushNamed(context, '/strength');
+              },
+            ),
+            _DrawerItem(
               icon: Icons.bedtime_outlined,
               label: 'Sleep',
               onTap: () {
