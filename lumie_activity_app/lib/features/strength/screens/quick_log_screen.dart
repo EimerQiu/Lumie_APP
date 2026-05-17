@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import '../../../core/theme/app_colors.dart';
+import '../../../core/services/workout_prefs_service.dart';
 import '../../../core/services/workout_service.dart';
 import '../../../shared/models/workout_plan_models.dart';
 import '../../workout/providers/exercise_library_provider.dart';
@@ -20,11 +21,25 @@ class _QuickLogScreenState extends State<QuickLogScreen> {
   final _titleController = TextEditingController(text: 'My Workout');
   final List<_LoggedExercise> _exercises = [];
   bool _saving = false;
+  String _weightUnit = 'lbs'; // 'lbs' or 'kg'
+
+  @override
+  void initState() {
+    super.initState();
+    WorkoutPrefsService.getWeightUnit().then((unit) {
+      if (mounted) setState(() => _weightUnit = unit);
+    });
+  }
 
   @override
   void dispose() {
     _titleController.dispose();
     super.dispose();
+  }
+
+  void _toggleUnit(String unit) {
+    setState(() => _weightUnit = unit);
+    WorkoutPrefsService.setWeightUnit(unit);
   }
 
   void _addExercise(ExerciseDefinition def) {
@@ -121,6 +136,45 @@ class _QuickLogScreenState extends State<QuickLogScreen> {
           ),
         ),
         actions: [
+          // kg / lbs toggle
+          Container(
+            margin: const EdgeInsets.symmetric(vertical: 10),
+            decoration: BoxDecoration(
+              color: AppColors.backgroundPaper,
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: ['lbs', 'kg'].map((u) {
+                final selected = _weightUnit == u;
+                return GestureDetector(
+                  onTap: () => _toggleUnit(u),
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 150),
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 10, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: selected
+                          ? AppColors.primaryLemonDark
+                          : Colors.transparent,
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Text(
+                      u,
+                      style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                        color: selected
+                            ? Colors.white
+                            : AppColors.textSecondary,
+                      ),
+                    ),
+                  ),
+                );
+              }).toList(),
+            ),
+          ),
+          const SizedBox(width: 4),
           TextButton(
             onPressed: _saving ? null : _save,
             child: _saving
@@ -173,6 +227,7 @@ class _QuickLogScreenState extends State<QuickLogScreen> {
                     itemCount: _exercises.length,
                     itemBuilder: (context, i) => _ExerciseBlock(
                       exercise: _exercises[i],
+                      weightUnit: _weightUnit,
                       onRemove: () => _removeExercise(i),
                       onChanged: () => setState(() {}),
                     ),
@@ -228,11 +283,13 @@ class _LoggedExercise {
 
 class _ExerciseBlock extends StatelessWidget {
   final _LoggedExercise exercise;
+  final String weightUnit;
   final VoidCallback onRemove;
   final VoidCallback onChanged;
 
   const _ExerciseBlock({
     required this.exercise,
+    required this.weightUnit,
     required this.onRemove,
     required this.onChanged,
   });
@@ -308,11 +365,11 @@ class _ExerciseBlock extends StatelessWidget {
           ),
 
           // Set column headers
-          const Padding(
-            padding: EdgeInsets.fromLTRB(16, 10, 16, 4),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 10, 16, 4),
             child: Row(
               children: [
-                SizedBox(
+                const SizedBox(
                   width: 32,
                   child: Text('Set',
                       style: TextStyle(
@@ -320,7 +377,7 @@ class _ExerciseBlock extends StatelessWidget {
                           fontWeight: FontWeight.w600,
                           color: AppColors.textSecondary)),
                 ),
-                Expanded(
+                const Expanded(
                   child: Text('Reps',
                       style: TextStyle(
                           fontSize: 12,
@@ -329,13 +386,13 @@ class _ExerciseBlock extends StatelessWidget {
                 ),
                 SizedBox(
                   width: 100,
-                  child: Text('Weight (lb)',
-                      style: TextStyle(
+                  child: Text('Load ($weightUnit)',
+                      style: const TextStyle(
                           fontSize: 12,
                           fontWeight: FontWeight.w600,
                           color: AppColors.textSecondary)),
                 ),
-                SizedBox(width: 36),
+                const SizedBox(width: 36),
               ],
             ),
           ),
@@ -427,7 +484,7 @@ class _SetRow extends StatelessWidget {
             width: 100,
             child: _WeightField(
               value: set.weight,
-              hint: 'BW',
+              hint: '—',
               onChanged: (v) {
                 set.weight = v;
                 onChanged();

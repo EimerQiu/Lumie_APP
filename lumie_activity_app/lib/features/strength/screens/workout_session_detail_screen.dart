@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../../../core/services/workout_prefs_service.dart';
 import '../../../core/services/workout_service.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../shared/models/workout_plan_models.dart';
@@ -18,13 +19,15 @@ class WorkoutSessionDetailScreen extends StatefulWidget {
 
 class _WorkoutSessionDetailScreenState
     extends State<WorkoutSessionDetailScreen> {
-  // exerciseId → last session data before this one
   final Map<String, Map<String, dynamic>?> _previousBests = {};
   bool _loadingHistory = true;
+  String _weightUnit = 'lbs';
 
   @override
   void initState() {
     super.initState();
+    WorkoutPrefsService.getWeightUnit()
+        .then((u) { if (mounted) setState(() => _weightUnit = u); });
     _loadPreviousBests();
   }
 
@@ -190,6 +193,7 @@ class _WorkoutSessionDetailScreenState
                   exercise: ex,
                   previousSessionData: _previousBests[ex.exerciseId],
                   loadingHistory: _loadingHistory,
+                  weightUnit: _weightUnit,
                 ),
               ),
             ),
@@ -338,11 +342,13 @@ class _ExerciseCard extends StatelessWidget {
   final CompletedExercise exercise;
   final Map<String, dynamic>? previousSessionData;
   final bool loadingHistory;
+  final String weightUnit;
 
   const _ExerciseCard({
     required this.exercise,
     required this.previousSessionData,
     required this.loadingHistory,
+    required this.weightUnit,
   });
 
   String _equipmentLabel(String e) {
@@ -496,7 +502,7 @@ class _ExerciseCard extends StatelessWidget {
                     width: 80,
                     child: Text(
                       s.actualWeight != null
-                          ? '${s.actualWeight!.toStringAsFixed(s.actualWeight! % 1 == 0 ? 0 : 1)} lb'
+                          ? '${s.actualWeight!.toStringAsFixed(s.actualWeight! % 1 == 0 ? 0 : 1)} $weightUnit'
                           : '—',
                       style: const TextStyle(
                         fontSize: 14,
@@ -528,6 +534,7 @@ class _ExerciseCard extends StatelessWidget {
               exerciseName: exercise.exerciseName,
               currentSet: best,
               previousSet: prevBest,
+              weightUnit: weightUnit,
             ),
           ],
         ],
@@ -542,11 +549,13 @@ class _StrengthComparison extends StatelessWidget {
   final String exerciseName;
   final CompletedSet currentSet;
   final Map<String, dynamic> previousSet;
+  final String weightUnit;
 
   const _StrengthComparison({
     required this.exerciseName,
     required this.currentSet,
     required this.previousSet,
+    required this.weightUnit,
   });
 
   String _setLabel(int reps, double? weight) {
@@ -554,7 +563,7 @@ class _StrengthComparison extends StatelessWidget {
       final w = weight % 1 == 0
           ? weight.toStringAsFixed(0)
           : weight.toStringAsFixed(1);
-      return '$w lb × $reps';
+      return '$w $weightUnit × $reps';
     }
     return '$reps reps';
   }

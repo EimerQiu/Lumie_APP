@@ -1,6 +1,7 @@
 import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import '../../../core/services/workout_prefs_service.dart';
 import '../../../core/services/workout_service.dart';
 import '../../../core/theme/app_colors.dart';
 import '../providers/workout_history_provider.dart';
@@ -26,10 +27,13 @@ class _StrengthProgressScreenState extends State<StrengthProgressScreen> {
 
   bool _loadingChart = false;
   _ChartMetric _metric = _ChartMetric.weight;
+  String _weightUnit = 'lbs';
 
   @override
   void initState() {
     super.initState();
+    WorkoutPrefsService.getWeightUnit()
+        .then((u) { if (mounted) setState(() => _weightUnit = u); });
     _buildExerciseList();
   }
 
@@ -200,6 +204,7 @@ class _StrengthProgressScreenState extends State<StrengthProgressScreen> {
                                       _selected?.name ?? '',
                                   points: _currentPoints,
                                   metric: _metric,
+                                  weightUnit: _weightUnit,
                                   onMetricChanged: (m) =>
                                       setState(() => _metric = m),
                                 ),
@@ -218,12 +223,14 @@ class _ChartPanel extends StatelessWidget {
   final String exerciseName;
   final List<_DataPoint> points;
   final _ChartMetric metric;
+  final String weightUnit;
   final ValueChanged<_ChartMetric> onMetricChanged;
 
   const _ChartPanel({
     required this.exerciseName,
     required this.points,
     required this.metric,
+    required this.weightUnit,
     required this.onMetricChanged,
   });
 
@@ -241,7 +248,7 @@ class _ChartPanel extends StatelessWidget {
   String get _yLabel {
     switch (metric) {
       case _ChartMetric.weight:
-        return 'lb';
+        return weightUnit;
       case _ChartMetric.reps:
         return 'reps';
       case _ChartMetric.volume:
