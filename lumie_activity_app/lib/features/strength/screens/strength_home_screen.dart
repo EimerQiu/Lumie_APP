@@ -8,6 +8,8 @@ import '../../workout/screens/exercise_library_screen.dart';
 import '../../workout/screens/split_builder_screen.dart';
 import '../../workout/screens/template_builder_screen.dart';
 import '../providers/workout_history_provider.dart';
+import 'quick_log_screen.dart';
+import 'strength_progress_screen.dart';
 import 'workout_session_detail_screen.dart';
 
 class StrengthHomeScreen extends StatefulWidget {
@@ -117,6 +119,25 @@ class _StrengthHomeScreenState extends State<StrengthHomeScreen> {
             color: AppColors.textPrimary,
           ),
         ),
+        actions: [
+          TextButton.icon(
+            onPressed: () => Navigator.push(
+              context,
+              MaterialPageRoute(
+                  builder: (_) => const StrengthProgressScreen()),
+            ),
+            icon: const Icon(Icons.bar_chart,
+                color: AppColors.primaryLemonDark, size: 20),
+            label: const Text(
+              'Progress',
+              style: TextStyle(
+                color: AppColors.primaryLemonDark,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+          const SizedBox(width: 4),
+        ],
       ),
       body: RefreshIndicator(
         color: AppColors.primaryLemonDark,
@@ -132,62 +153,101 @@ class _StrengthHomeScreenState extends State<StrengthHomeScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // ── Start Workout CTA ──────────────────────────────────────
-              GestureDetector(
-                onTap: _showStartWorkoutSheet,
-                child: Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 24, vertical: 20),
-                  decoration: BoxDecoration(
-                    gradient: const LinearGradient(
-                      begin: Alignment.topLeft,
-                      end: Alignment.bottomRight,
-                      colors: [Color(0xFFFDE68A), Color(0xFFF59E0B)],
-                    ),
-                    borderRadius: BorderRadius.circular(20),
-                    boxShadow: AppColors.cardShadow,
-                  ),
-                  child: Row(
-                    children: [
-                      Container(
-                        padding: const EdgeInsets.all(10),
+              // ── Action buttons ─────────────────────────────────────────
+              Row(
+                children: [
+                  // Log Workout (manual quick-log)
+                  Expanded(
+                    child: GestureDetector(
+                      onTap: () async {
+                        final provider =
+                            context.read<WorkoutHistoryProvider>();
+                        await Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                              builder: (_) => const QuickLogScreen()),
+                        );
+                        if (!mounted) return;
+                        provider.loadSessions(force: true);
+                      },
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                            vertical: 18, horizontal: 16),
                         decoration: BoxDecoration(
-                          color: Colors.white.withValues(alpha: 0.4),
-                          borderRadius: BorderRadius.circular(12),
+                          color: AppColors.backgroundWhite,
+                          borderRadius: BorderRadius.circular(18),
+                          boxShadow: AppColors.cardShadow,
                         ),
-                        child: const Icon(Icons.fitness_center,
-                            color: AppColors.textOnYellow, size: 26),
-                      ),
-                      const SizedBox(width: 16),
-                      Expanded(
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: const [
+                            Icon(Icons.edit_note,
+                                color: AppColors.primaryLemonDark, size: 28),
+                            SizedBox(height: 10),
+                            Text(
+                              'Log Workout',
+                              style: TextStyle(
+                                fontSize: 15,
+                                fontWeight: FontWeight.w700,
+                                color: AppColors.textPrimary,
+                              ),
+                            ),
+                            SizedBox(height: 2),
+                            Text(
+                              'Manual entry',
+                              style: TextStyle(
+                                  fontSize: 12,
+                                  color: AppColors.textSecondary),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  // Start Workout (template-based)
+                  Expanded(
+                    child: GestureDetector(
+                      onTap: _showStartWorkoutSheet,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                            vertical: 18, horizontal: 16),
+                        decoration: BoxDecoration(
+                          gradient: const LinearGradient(
+                            begin: Alignment.topLeft,
+                            end: Alignment.bottomRight,
+                            colors: [Color(0xFFFDE68A), Color(0xFFF59E0B)],
+                          ),
+                          borderRadius: BorderRadius.circular(18),
+                          boxShadow: AppColors.cardShadow,
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: const [
+                            Icon(Icons.play_arrow_rounded,
+                                color: AppColors.textOnYellow, size: 28),
+                            SizedBox(height: 10),
                             Text(
                               'Start Workout',
                               style: TextStyle(
-                                fontSize: 20,
-                                fontWeight: FontWeight.bold,
+                                fontSize: 15,
+                                fontWeight: FontWeight.w700,
                                 color: AppColors.textOnYellow,
                               ),
                             ),
                             SizedBox(height: 2),
                             Text(
-                              'From template, build a plan, or quick-start',
+                              'From template',
                               style: TextStyle(
-                                fontSize: 13,
-                                color: AppColors.textOnYellow,
-                              ),
+                                  fontSize: 12,
+                                  color: AppColors.textOnYellow),
                             ),
                           ],
                         ),
                       ),
-                      const Icon(Icons.chevron_right,
-                          color: AppColors.textOnYellow),
-                    ],
+                    ),
                   ),
-                ),
+                ],
               ),
 
               const SizedBox(height: 28),
