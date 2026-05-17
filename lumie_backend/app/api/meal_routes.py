@@ -20,6 +20,7 @@ from ..models.meal import (
     MacroLevel,
     MacroRatio,
     MealAnalyzeResponse,
+    MealAnalyzeTextRequest,
     MealCreate,
     MealUpdate,
     MealResponse,
@@ -62,6 +63,21 @@ async def analyze_meal_images(
     return await meal_service.analyze_uploads(
         user_id, files, summary_text=summary_text,
     )
+
+
+@router.post("/analyze-text", response_model=MealAnalyzeResponse)
+async def analyze_meal_text(
+    data: MealAnalyzeTextRequest,
+    user_id: str = Depends(get_current_user_id),
+):
+    """
+    Structured analysis from typed food items — no photo required.
+
+    Runs the same LLM structuring layer as the photo path and returns a new
+    `meal_id` the client uses to confirm via `POST /meals` (with `text_only=true`).
+    Used by the "Type in Meal" and "Recent Meals" entry paths.
+    """
+    return await meal_service.analyze_text_only(user_id, data.food_items)
 
 
 @router.post("/restructure", response_model=MealRestructureResponse)

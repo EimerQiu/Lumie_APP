@@ -26,7 +26,7 @@ import '../../advisor/screens/advisor_screen.dart';
 import '../../auth/providers/auth_provider.dart';
 import '../../teams/providers/teams_provider.dart';
 import '../providers/meal_provider.dart';
-import '../utils/food_input_split.dart';
+import '../utils/food_input_split.dart' show splitFoodInput, deriveMealNameFromFoods;
 import '../widgets/drum_time_picker.dart';
 import '../widgets/macro_segmented_bar.dart';
 import '../widgets/meal_card.dart' show mealImageUrl;
@@ -56,6 +56,10 @@ class _MealDetailScreenState extends State<MealDetailScreen> {
   late MealVisibility _visibility;
   String? _selectedTeamId;
   String? _mealName;
+  // True while the user's manually-typed name should be kept. Any food-list
+  // edit clears this so the name re-derives from the new items. Tapping the
+  // name field to rename re-sets it to true.
+  bool _userHasCustomMealName = false;
   MealType? _mealType;
   DateTime? _mealTime;
   late MacroLevel _processingLevel;
@@ -90,12 +94,23 @@ class _MealDetailScreenState extends State<MealDetailScreen> {
     _visibility = m?.visibility ?? MealVisibility.private;
     _selectedTeamId = m?.teamId;
     _mealName = m?.mealName ?? m?.displayName;
+    // After a load/re-analyze the server name is the baseline; any food edit
+    // on this screen will immediately re-derive a fresh local name.
+    _userHasCustomMealName = false;
     _mealType = m?.mealType;
     _mealTime = m?.mealTime ?? m?.createdAt;
     // Slice 7C: processing_level / added_sugar with neutral baselines for
     // legacy meals that pre-date the fields.
     _processingLevel = m?.processingLevel ?? MacroLevel.moderate;
     _addedSugar = m?.addedSugar ?? MacroLevel.low;
+  }
+
+  /// Re-derive the meal name from the current food list unless the user has
+  /// manually renamed the meal since the last item edit.
+  void _autoUpdateMealName() {
+    if (_userHasCustomMealName) return;
+    final derived = deriveMealNameFromFoods(_foodItems.map((f) => f.name).toList());
+    if (derived.isNotEmpty) _mealName = derived;
   }
 
   Future<void> _load() async {
@@ -301,7 +316,10 @@ class _MealDetailScreenState extends State<MealDetailScreen> {
       ),
     );
     if (result != null && result.isNotEmpty) {
-      setState(() => _mealName = result);
+      setState(() {
+        _mealName = result;
+        _userHasCustomMealName = true;
+      });
     }
   }
 
@@ -426,6 +444,8 @@ class _MealDetailScreenState extends State<MealDetailScreen> {
         next.insert(index + i, FoodItem(name: pieces[i]));
       }
       _foodItems = next;
+      _userHasCustomMealName = false;
+      _autoUpdateMealName();
     });
   }
 
@@ -463,12 +483,18 @@ class _MealDetailScreenState extends State<MealDetailScreen> {
         ..._foodItems,
         for (final name in pieces) FoodItem(name: name),
       ];
+      _userHasCustomMealName = false;
+      _autoUpdateMealName();
     });
   }
 
   void _removeFood(int index) {
     if (!_isOwner) return;
-    setState(() => _foodItems = [..._foodItems]..removeAt(index));
+    setState(() {
+      _foodItems = [..._foodItems]..removeAt(index);
+      _userHasCustomMealName = false;
+      _autoUpdateMealName();
+    });
   }
 
   void _onPortionsChanged(List<int> weights) {

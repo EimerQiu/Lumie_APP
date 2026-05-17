@@ -410,6 +410,10 @@ class MealAnalyzeResult {
   final MacroLevel? processingLevel;
   final MacroLevel? addedSugar;
 
+  final bool isPackaged;
+  final String? detectedBrand;
+  final String? detectedProduct;
+
   const MealAnalyzeResult({
     required this.mealId,
     required this.images,
@@ -421,6 +425,9 @@ class MealAnalyzeResult {
     this.advisorInsight,
     this.processingLevel,
     this.addedSugar,
+    this.isPackaged = false,
+    this.detectedBrand,
+    this.detectedProduct,
   });
 
   factory MealAnalyzeResult.fromJson(Map<String, dynamic> json) {
@@ -438,6 +445,9 @@ class MealAnalyzeResult {
         (json['macro_ratio'] as Map<String, dynamic>?) ?? const {},
       ),
       structure: MealStructure.fromString(json['structure'] as String?),
+      isPackaged: (json['is_packaged'] as bool?) ?? false,
+      detectedBrand: json['detected_brand'] as String?,
+      detectedProduct: json['detected_product'] as String?,
       mealName: json['meal_name'] as String?,
       nutritionLevel: json['nutrition_level'] is String
           ? NutritionLevel.fromString(json['nutrition_level'] as String?)
@@ -475,6 +485,10 @@ class Meal {
   final DateTime createdAt;
   final DateTime updatedAt;
 
+  final bool isPackaged;
+  final String? detectedBrand;
+  final String? detectedProduct;
+
   const Meal({
     required this.mealId,
     required this.userId,
@@ -483,6 +497,9 @@ class Meal {
     required this.foodItems,
     required this.macroRatio,
     this.structure = MealStructure.multiItem,
+    this.isPackaged = false,
+    this.detectedBrand,
+    this.detectedProduct,
     this.note,
     required this.visibility,
     this.teamId,
@@ -524,6 +541,9 @@ class Meal {
         (json['macro_ratio'] as Map<String, dynamic>?) ?? const {},
       ),
       structure: MealStructure.fromString(json['structure'] as String?),
+      isPackaged: (json['is_packaged'] as bool?) ?? false,
+      detectedBrand: json['detected_brand'] as String?,
+      detectedProduct: json['detected_product'] as String?,
       note: json['note'] as String?,
       visibility: MealVisibility.fromString(json['visibility'] as String?),
       teamId: json['team_id'] as String?,

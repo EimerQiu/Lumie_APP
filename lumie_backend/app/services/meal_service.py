@@ -392,6 +392,9 @@ class MealService:
             structure=MealStructure(
                 parsed.get("structure") or MealStructure.MULTI_ITEM.value
             ),
+            is_packaged=parsed.get("is_packaged", False),
+            detected_brand=parsed.get("detected_brand"),
+            detected_product=parsed.get("detected_product"),
             meal_name=parsed.get("meal_name")
                 or self._derive_meal_name_from_items(parsed["food_items"]),
             nutrition_level=(
@@ -406,6 +409,64 @@ class MealService:
             advisor_insight=parsed.get("advisor_insight") or None,
             # Default to MODERATE on missing — neutral baseline that doesn't
             # bias the user's perception of their meal.
+            processing_level=MacroLevel(
+                parsed.get("processing_level") or MacroLevel.MODERATE.value
+            ),
+            added_sugar=MacroLevel(
+                parsed.get("added_sugar") or MacroLevel.LOW.value
+            ),
+        )
+
+    async def analyze_text_only(
+        self,
+        user_id: str,
+        food_items: List[FoodItem],
+    ) -> MealAnalyzeResponse:
+        """Structured analysis from typed food items — no photo required.
+
+        Runs the same LLM structuring layer as the photo path and returns a new
+        `meal_id` the client uses to confirm via `POST /meals` (with text_only=True).
+        Used by the "Type in Meal" and "Recent Meals" entry paths in the app.
+        """
+        if not food_items:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="At least one food item is required",
+            )
+        meal_id = str(uuid.uuid4())
+        # Reuse the restructure logic, which preserves user-edited names +
+        # portions + ingredients and returns a fully structured analysis dict.
+        parsed = await self.restructure_food_list(user_id=user_id, food_items=food_items)
+        food_dumps = parsed.get("food_items") or []
+        macro_dump = parsed.get("macro_ratio") or {
+            "protein": "moderate",
+            "carbs": "moderate",
+            "fat": "moderate",
+            "fiber": "low",
+        }
+        return MealAnalyzeResponse(
+            meal_id=meal_id,
+            images=[],
+            food_items=[FoodItem(**fi) for fi in food_dumps],
+            macro_ratio=MacroRatio(**macro_dump),
+            structure=MealStructure(
+                parsed.get("structure") or MealStructure.MULTI_ITEM.value
+            ),
+            is_packaged=parsed.get("is_packaged", False),
+            detected_brand=parsed.get("detected_brand"),
+            detected_product=parsed.get("detected_product"),
+            meal_name=parsed.get("meal_name")
+                or self._derive_meal_name_from_items(food_dumps),
+            nutrition_level=(
+                NutritionLevel(parsed["nutrition_level"])
+                if parsed.get("nutrition_level")
+                else self._derive_nutrition_level(
+                    macro_dump,
+                    processing_level=parsed.get("processing_level"),
+                    added_sugar=parsed.get("added_sugar"),
+                )
+            ),
+            advisor_insight=parsed.get("advisor_insight") or None,
             processing_level=MacroLevel(
                 parsed.get("processing_level") or MacroLevel.MODERATE.value
             ),
@@ -686,6 +747,24 @@ class MealService:
         sugar_raw = data.get("added_sugar") if isinstance(data, dict) else None
         added_sugar = sugar_raw if sugar_raw in valid_levels else None
 
+        is_packaged = bool(data.get("is_packaged")) if isinstance(data, dict) else False
+        detected_brand_raw = data.get("detected_brand") if isinstance(data, dict) else None
+        detected_brand = (
+            str(detected_brand_raw).strip()[:120]
+            if isinstance(detected_brand_raw, str) and detected_brand_raw.strip()
+            else None
+        )
+        detected_product_raw = data.get("detected_product") if isinstance(data, dict) else None
+        detected_product = (
+            str(detected_product_raw).strip()[:200]
+            if isinstance(detected_product_raw, str) and detected_product_raw.strip()
+            else None
+        )
+        # Defensive: clear packaged fields when the LLM says is_packaged but
+        # didn't supply a brand — avoids misleading empty brand labels in the UI.
+        if is_packaged and not detected_brand:
+            is_packaged = False
+
         return {
             "food_items": food_items,
             "macro_ratio": meal_ratio,
@@ -695,6 +774,9 @@ class MealService:
             "advisor_insight": advisor_insight,
             "processing_level": processing_level,
             "added_sugar": added_sugar,
+            "is_packaged": is_packaged,
+            "detected_brand": detected_brand,
+            "detected_product": detected_product,
         }
 
     # ============ CRUD ============
@@ -745,6 +827,9 @@ class MealService:
             food_items=[FoodItem(**fi) for fi in food_items_raw],
             macro_ratio=MacroRatio(**macro_ratio_raw),
             structure=MealStructure(structure_raw),
+            is_packaged=bool(doc.get("is_packaged", False)),
+            detected_brand=doc.get("detected_brand"),
+            detected_product=doc.get("detected_product"),
             note=doc.get("note"),
             visibility=MealVisibility(doc.get("visibility", "private")),
             team_id=doc.get("team_id"),
@@ -1047,7 +1132,7 @@ class MealService:
             team_id = data.team_id
 
         images = self._scan_meal_images(data.meal_id)
-        if not images and not data.linked_task_id:
+        if not images and not data.linked_task_id and not data.text_only:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="No images found for this meal_id. Call POST /meals/analyze first.",
@@ -1131,6 +1216,9 @@ class MealService:
             "food_items": food_items_dump,
             "macro_ratio": macro_ratio_dump,
             "structure": structure_value,
+            "is_packaged": bool(data.is_packaged) if data.is_packaged is not None else False,
+            "detected_brand": (data.detected_brand or "").strip() or None,
+            "detected_product": (data.detected_product or "").strip() or None,
             "note": data.note,
             "visibility": data.visibility.value,
             "team_id": team_id,
@@ -2053,6 +2141,9 @@ class MealService:
             "advisor_insight": advisor_insight_value,
             "processing_level": processing_level_value,
             "added_sugar": added_sugar_value,
+            "is_packaged": bool(structured.get("is_packaged", False)),
+            "detected_brand": structured.get("detected_brand"),
+            "detected_product": structured.get("detected_product"),
             "bridge_note_hash": note_hash,
             "updated_at": now,
         }
@@ -2281,6 +2372,61 @@ class MealService:
             "wrong, junk, guilty, cheat, failure, warning, avoid, restrict, "
             "or anything that could trigger food anxiety. Tone is always a "
             "supportive, knowledgeable friend.\n"
+            "\nPACKAGED FOOD DETECTION AND INGREDIENT LOOKUP:\n"
+            "If the food description mentions a packaged, branded, or labelled "
+            "product — protein bar, snack bar, energy drink, branded snack, "
+            "candy bar, cereal, protein shake, or any item with a visible "
+            "label or recognisable brand name — set `is_packaged: true`, "
+            "identify `detected_brand` (e.g. 'RX Bar') and `detected_product` "
+            "(e.g. 'Chocolate Sea Salt RX Bar'). Then recall the ACTUAL "
+            "ingredient list for that specific product from your training "
+            "knowledge and base ALL grading (macro_ratio, nutrition_level, "
+            "processing_level, added_sugar, advisor_insight) on those real "
+            "ingredients — NOT on visual appearance or generic estimates. "
+            "If the brand or product cannot be identified with confidence, "
+            "set `is_packaged: false` and fall back to standard visual "
+            "estimation — do not guess.\n"
+            "\nSWEETENER QUALITY HIERARCHY — applies to packaged item grading:\n"
+            "  Best (does NOT lower nutrition_level): allulose, monk fruit, "
+            "stevia\n"
+            "  Good (natural whole-food source): dates, honey, maple syrup in "
+            "small amounts\n"
+            "  Acceptable (note neutrally in advisor_insight): erythritol\n"
+            "  Lower (counts against score): xylitol, sorbitol, maltitol\n"
+            "  Poor (lowers score significantly): sucralose, acesulfame "
+            "potassium (Ace-K), aspartame, HFCS, large amounts of refined "
+            "sugar\n"
+            "\nPACKAGED FOOD GRADING RULES — OVERRIDE the standard grading "
+            "rules above when is_packaged is true:\n"
+            "  Nutritious: whole-food or minimally processed ingredients; "
+            "natural sweeteners (Best/Good tier) only; no sugar alcohols; "
+            "no artificial additives or preservatives. "
+            "Example: RX Bar (dates, egg whites, nuts, no added sugar) → "
+            "Nutritious.\n"
+            "  Good: mostly clean; no sugar alcohols; small natural sweetener "
+            "amounts; minimal processing. "
+            "Example: oat/nut bar with honey and a small amount of dark "
+            "chocolate → Good.\n"
+            "  Fair: some processing; erythritol or other Acceptable-tier "
+            "sugar alcohols in moderate amounts; moderate refined sugar. "
+            "Example: whey protein bar with oats and erythritol → Fair.\n"
+            "  Limited: heavy processing; sucralose, Ace-K, aspartame, or "
+            "maltitol present; high refined sugar; long additive/filler list. "
+            "Example: candy bar or highly-processed bar with artificial "
+            "sweeteners → Limited.\n"
+            "\nADVISOR INSIGHT FOR PACKAGED ITEMS — reference actual ingredient "
+            "quality, not generic observations:\n"
+            "  Clean ingredients → acknowledge specifically what makes it a "
+            "good choice (e.g. 'RX Bar uses dates and egg whites as its base "
+            "with no added sugar — a genuinely clean option for a snack').\n"
+            "  Sugar alcohols present → note the specific sweetener neutrally "
+            "(e.g. 'This bar uses erythritol — it\\'s one of the better sugar "
+            "alcohols but some people find it affects digestion in larger "
+            "amounts').\n"
+            "  Heavily processed → gentle, non-judgmental note that cleaner "
+            "options exist (e.g. 'This one has quite a few processed "
+            "ingredients — fine occasionally but there are cleaner options if "
+            "you reach for bars often').\n"
             "\nPORTION WEIGHTS — for each food item output a "
             "`portion_weight` integer (1, 2, 3, …) reflecting that item's "
             "relative share of the plate. Larger portion → larger integer. "
@@ -2319,7 +2465,9 @@ class MealService:
             "generous — never judgmental, never use forbidden words."
             f"{history_block}"
             "\nOutput strict JSON only matching this schema: "
-            '{"structure":"multi_item|single_item_with_ingredients",'
+            '{"is_packaged":false,"detected_brand":"string|null",'
+            '"detected_product":"string|null",'
+            '"structure":"multi_item|single_item_with_ingredients",'
             '"food_items":[{"name":"string","portion_weight":1,'
             '"ingredients":[{"name":"string","portion_weight":1}],'
             '"macro_ratio":{"protein":"low|moderate|high",'
@@ -2330,8 +2478,9 @@ class MealService:
             '"processing_level":"low|moderate|high","added_sugar":"low|moderate|high",'
             '"advisor_insight":"string"}. '
             "Omit `ingredients` (or set it to null) when structure is "
-            "multi_item. Never include numbers, calories, or kcal in the "
-            "output."
+            "multi_item. Set detected_brand and detected_product to null "
+            "when is_packaged is false. "
+            "Never include numbers, calories, or kcal in the output."
             f"{correction_hint}"
         )
 
@@ -2346,7 +2495,7 @@ class MealService:
                     {"role": "system", "content": system},
                     {"role": "user", "content": text},
                 ],
-                "max_tokens": 400,
+                "max_tokens": 600,
                 "temperature": 0.1,
                 "response_format": {"type": "json_object"},
             }
@@ -2406,7 +2555,7 @@ class MealService:
         response = await chat_completion(
             messages=[{"role": "user", "content": text}],
             system=system,
-            max_tokens=400,
+            max_tokens=600,
             temperature=0.1,
         )
         parsed = self._parse_analysis_json(response.text or "")

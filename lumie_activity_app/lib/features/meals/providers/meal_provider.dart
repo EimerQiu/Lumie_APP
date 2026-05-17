@@ -89,6 +89,31 @@ class MealProvider extends ChangeNotifier {
 
   // ─── Draft / analyze flow ───────────────────────────────────────────
 
+  /// Structured analysis from typed food items — no photo required.
+  ///
+  /// Calls [POST /meals/analyze-text], gets a new meal_id, and stores the
+  /// result as the current draft so [reanalyzeDraft] and [confirmDraft] work
+  /// identically to the photo path.
+  Future<MealAnalyzeResult> analyzeText({
+    required List<FoodItem> foodItems,
+  }) async {
+    _state = MealsState.loading;
+    _errorMessage = null;
+    notifyListeners();
+    try {
+      final result = await _service.analyzeText(foodItems: foodItems);
+      _draft = result;
+      _state = MealsState.loaded;
+      notifyListeners();
+      return result;
+    } catch (e) {
+      _state = MealsState.error;
+      _errorMessage = e.toString().replaceFirst('Exception: ', '');
+      notifyListeners();
+      rethrow;
+    }
+  }
+
   /// Run analysis on selected images. Persists images on the backend and
   /// returns a draft (food items + macro ratio) the user can edit before
   /// confirming via [confirmDraft].
@@ -157,6 +182,7 @@ class MealProvider extends ChangeNotifier {
     MacroLevel? processingLevel,
     MacroLevel? addedSugar,
     String? timezone,
+    bool textOnly = false,
   }) async {
     final draft = _draft;
     if (draft == null) {
@@ -178,6 +204,10 @@ class MealProvider extends ChangeNotifier {
       processingLevel: processingLevel ?? draft.processingLevel,
       addedSugar: addedSugar ?? draft.addedSugar,
       timezone: timezone,
+      textOnly: textOnly,
+      isPackaged: draft.isPackaged,
+      detectedBrand: draft.detectedBrand,
+      detectedProduct: draft.detectedProduct,
     );
     // Prepend the new meal, then dedupe by canonical identity. If a stale
     // server row for the same nutrition task is already in `_myMeals` (the

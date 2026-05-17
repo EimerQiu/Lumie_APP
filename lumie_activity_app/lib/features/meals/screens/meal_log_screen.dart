@@ -34,11 +34,37 @@ class MealLogScreen extends StatefulWidget {
   final Task? pendingCompletionTask;
   final String? initialNote;
 
+  /// When set, skip the source-picker sheet and open this source directly.
+  final ImageSource? autoPickSource;
+
+  /// True for the "Type in Meal" and "Recent Meals" entry paths. No photo is
+  /// shown; the analysis pipeline uses [prefillFoodItems] as text input.
+  final bool textOnly;
+
+  /// Pre-filled food items (from typed input or a recent meal). When provided
+  /// alongside [textOnly], the screen shows these items immediately and
+  /// kicks off a background fresh analysis for Nutrition Level and Advisor
+  /// insight.
+  final List<FoodItem>? prefillFoodItems;
+
+  /// Pre-filled meal name carried over from a recent meal. Auto-generates
+  /// from [prefillFoodItems] when null.
+  final String? prefillMealName;
+
+  /// Pre-filled meal type from a recent meal (e.g. Breakfast). Defaults to
+  /// time-of-day inference when null.
+  final MealType? prefillMealType;
+
   const MealLogScreen({
     super.key,
     this.initialImages = const [],
     this.pendingCompletionTask,
     this.initialNote,
+    this.autoPickSource,
+    this.textOnly = false,
+    this.prefillFoodItems,
+    this.prefillMealName,
+    this.prefillMealType,
   });
 
   @override
@@ -127,6 +153,31 @@ class _MealLogScreenState extends State<MealLogScreen> {
           _selectedImages = List<File>.from(widget.initialImages);
         });
         _analyze();
+      } else if (widget.textOnly) {
+        final prefill = widget.prefillFoodItems;
+        if (prefill != null && prefill.isNotEmpty) {
+          // Show pre-filled items immediately, then refresh analysis in the
+          // background so Nutrition Level + Advisor insight reflect the
+          // current 2-week history context.
+          setState(() {
+            _foodItems = List.of(prefill);
+            _analyzedFoods = List.of(prefill);
+            _mealName = widget.prefillMealName ??
+                deriveMealNameFromFoods(prefill.map((f) => f.name).toList());
+            if (widget.prefillMealType != null) {
+              _mealType = widget.prefillMealType!;
+            }
+            _hasDraft = true;
+          });
+          _analyzeText(isRefresh: true);
+        } else {
+          // No pre-fill yet — items come from the initial analyzeText call
+          // but _foodItems is empty, so this path should be unreachable in
+          // normal use (callers always pass prefillFoodItems).
+          _analyzeText(isRefresh: false);
+        }
+      } else if (widget.autoPickSource != null) {
+        _pickFromSource(widget.autoPickSource!);
       } else {
         _pickPhoto();
       }
@@ -213,6 +264,12 @@ class _MealLogScreenState extends State<MealLogScreen> {
       Navigator.of(context).pop();
       return;
     }
+    await _pickFromSource(source);
+  }
+
+  /// Open camera or gallery directly, bypassing the source-picker sheet.
+  /// Pops the screen if the user cancels without selecting.
+  Future<void> _pickFromSource(ImageSource source) async {
     final XFile? picked;
     try {
       picked = await _imagePicker.pickImage(source: source);
@@ -223,12 +280,11 @@ class _MealLogScreenState extends State<MealLogScreen> {
     }
     if (!mounted) return;
     if (picked == null) {
-      // User backed out of camera/library without selecting.
       Navigator.of(context).pop();
       return;
     }
-    // Promote out of the closure — Dart's flow analysis can't track
-    // non-null promotion of a captured local across a setState callback.
+    // Capture path before setState closure — Dart can't promote non-null
+    // through a closure boundary.
     final imagePath = picked.path;
     setState(() {
       _selectedImages = [File(imagePath)];
@@ -315,6 +371,44 @@ class _MealLogScreenState extends State<MealLogScreen> {
       });
     } finally {
       if (mounted) setState(() => _isReanalyzing = false);
+    }
+  }
+
+  /// Structured analysis using typed food items instead of a photo.
+  ///
+  /// Used by the "Type in Meal" and "Recent Meals" entry paths.
+  /// When [isRefresh] is true, the UI shows the re-analyzing indicator so
+  /// any pre-filled food items remain visible; when false the standard
+  /// analyzing overlay is shown instead.
+  Future<void> _analyzeText({required bool isRefresh}) async {
+    setState(() {
+      if (isRefresh) {
+        _isReanalyzing = true;
+      } else {
+        _isAnalyzing = true;
+      }
+      _errorMessage = null;
+    });
+    try {
+      final provider = context.read<MealProvider>();
+      final result = await provider.analyzeText(foodItems: _foodItems);
+      setState(() {
+        _applyAnalysisResult(result);
+        _originalAiFoods = List.of(result.foodItems);
+        _originalAiMacros = result.macroRatio;
+        _hasDraft = true;
+      });
+    } catch (e) {
+      setState(() {
+        _errorMessage = e.toString().replaceFirst('Exception: ', '');
+      });
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isAnalyzing = false;
+          _isReanalyzing = false;
+        });
+      }
     }
   }
 
@@ -449,6 +543,7 @@ class _MealLogScreenState extends State<MealLogScreen> {
         next.insert(index + i, FoodItem(name: pieces[i]));
       }
       _foodItems = next;
+      _mealName = deriveMealNameFromFoods(_foodItems.map((f) => f.name).toList());
     });
   }
 
@@ -485,11 +580,16 @@ class _MealLogScreenState extends State<MealLogScreen> {
         ..._foodItems,
         for (final name in pieces) FoodItem(name: name),
       ];
+      _mealName = deriveMealNameFromFoods(_foodItems.map((f) => f.name).toList());
     });
   }
 
   void _removeFood(int index) {
-    setState(() => _foodItems = [..._foodItems]..removeAt(index));
+    setState(() {
+      _foodItems = [..._foodItems]..removeAt(index);
+      final derived = deriveMealNameFromFoods(_foodItems.map((f) => f.name).toList());
+      if (derived.isNotEmpty) _mealName = derived;
+    });
   }
 
   // ─── Ingredient edits (single_item_with_ingredients) ────────────────
@@ -653,6 +753,7 @@ class _MealLogScreenState extends State<MealLogScreen> {
         advisorInsight: _advisorInsight,
         processingLevel: _processingLevel,
         addedSugar: _addedSugar,
+        textOnly: widget.textOnly,
       );
       if (widget.pendingCompletionTask != null) {
         await context.read<TasksProvider>().completeTask(
@@ -735,14 +836,17 @@ class _MealLogScreenState extends State<MealLogScreen> {
       ),
       body: SafeArea(
         bottom: false,
-        child: _selectedImages.isEmpty
+        child: (_selectedImages.isEmpty && !widget.textOnly)
             ? const _PickerLoadingState()
             : ListView(
                 // Bottom padding leaves room above the sticky action bar
                 // so the last section never sits flush against the button.
                 padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
                 children: [
-                  _buildPhotoHero(),
+                  if (_selectedImages.isNotEmpty)
+                    _buildPhotoHero()
+                  else
+                    _buildTextOnlyBadge(),
                   const SizedBox(height: 16),
                   if (_errorMessage != null) _errorBanner(_errorMessage!),
                   if (_isAnalyzing)
@@ -771,9 +875,11 @@ class _MealLogScreenState extends State<MealLogScreen> {
               ),
       ),
       // Sticky bottom action — does not move with the scrolling content.
-      // Hidden until we have a photo (the picker handles its own loading).
+      // Hidden until we have a photo or are in text-only mode.
       bottomNavigationBar:
-          _selectedImages.isEmpty ? null : _buildStickyActionBar(),
+          (_selectedImages.isNotEmpty || widget.textOnly)
+              ? _buildStickyActionBar()
+              : null,
     );
   }
 
@@ -803,6 +909,41 @@ class _MealLogScreenState extends State<MealLogScreen> {
       ),
       padding: const EdgeInsets.all(16),
       child: child,
+    );
+  }
+
+  /// Compact header shown instead of a photo in the "Type in Meal" and
+  /// "Recent Meals" entry paths so the layout matches the photo path.
+  Widget _buildTextOnlyBadge() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+      decoration: BoxDecoration(
+        color: AppColors.primaryLemonLight,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: AppColors.primaryLemon, width: 1),
+      ),
+      child: Row(
+        children: [
+          const Icon(
+            Icons.edit_note_outlined,
+            color: AppColors.primaryLemonDark,
+            size: 24,
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Text(
+              widget.prefillFoodItems != null
+                  ? 'From a recent meal'
+                  : 'Typed meal',
+              style: const TextStyle(
+                fontSize: 14,
+                fontWeight: FontWeight.w600,
+                color: AppColors.primaryLemonDark,
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -1315,10 +1456,12 @@ class _MealLogScreenState extends State<MealLogScreen> {
       label = 'Save Meal';
       loadingLabel = 'Saving…';
     } else if (!_hasDraft) {
-      // Photo picked but analysis hasn't produced a draft (typically after
-      // an analyze error). Let the user retry.
+      // Analysis hasn't produced a draft yet (initial state or after an
+      // error). Let the user retry with the appropriate path.
       label = 'Analyze Meal';
-      action = _analyze;
+      action = widget.textOnly
+          ? () => _analyzeText(isRefresh: false)
+          : _analyze;
     } else if (_hasFoodEdits()) {
       label = 'Save Changes';
       action = _saveWithReanalyze;
